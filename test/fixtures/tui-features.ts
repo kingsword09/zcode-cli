@@ -86,6 +86,7 @@ await runTui({
       result: { success: true, output: "source text" }
     });
     await emit(options, { kind: "text_delta", delta: "Feature prompt complete." });
+    await Bun.sleep(1_100);
     return {
       kind: "started_turn",
       result: { response: "Feature prompt complete.", model, thoughtLevel: effort }
