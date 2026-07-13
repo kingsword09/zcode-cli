@@ -36,6 +36,7 @@ export interface TuiOptions {
   stdout?: NodeJS.WriteStream;
   stderr?: NodeJS.WriteStream;
   recallPreviousInput?: (skip: number) => Promise<unknown>;
+  readGoal?: () => Promise<unknown>;
   sendInput?: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   submitPrompt: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   setMode?: (mode: string) => Promise<unknown>;

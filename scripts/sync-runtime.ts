@@ -74,6 +74,32 @@ export function chooseArtifact(manifest: UpdateManifest, platform: SyncOptions["
   return artifact;
 }
 
+export function patchRuntimeTuiGoalBridge(runtime: string): string {
+  const alreadyPatched = runtime.includes(".readGoal=async()=>await(await")
+    && /readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtime);
+  if (alreadyPatched) return runtime;
+
+  const assignmentPattern = /([A-Za-z_$][\w$]*)\.recallPreviousInput=async ([A-Za-z_$][\w$]*)=>await\(await ([A-Za-z_$][\w$]*)\(\)\)\.recallPreviousInputHistory\?\.\(\2\)\?\?null/u;
+  const assignment = assignmentPattern.exec(runtime);
+  if (!assignment) throw new Error("ZCode runtime is incompatible with the TUI goal bridge (readGoal assignment anchor missing).");
+
+  const [recallAssignment, bridge, , getApp] = assignment;
+  let patched = runtime.replace(
+    recallAssignment,
+    `${bridge}.readGoal=async()=>await(await ${getApp}()).readTarget?.()??null,${recallAssignment}`
+  );
+
+  const optionsPattern = /recallPreviousInput:([A-Za-z_$][\w$]*)\.recallPreviousInput,sendInput:\1\.sendInput/u;
+  const options = optionsPattern.exec(patched);
+  if (!options) throw new Error("ZCode runtime is incompatible with the TUI goal bridge (runTui options anchor missing).");
+  const [optionsAssignment, submitBridge] = options;
+  patched = patched.replace(
+    optionsAssignment,
+    `readGoal:${submitBridge}.readGoal,${optionsAssignment}`
+  );
+  return patched;
+}
+
 async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, { redirect: "follow" });
   if (!response.ok) throw new Error(`GET ${url} failed: ${response.status} ${response.statusText}`);
@@ -130,6 +156,12 @@ async function installLocalTui(nextVendor: string): Promise<void> {
   await mkdir(target, { recursive: true });
   await cp(join(source, "package.json"), join(target, "package.json"));
   await cp(join(source, "dist"), join(target, "dist"), { recursive: true });
+}
+
+async function installTuiGoalBridge(nextVendor: string): Promise<void> {
+  const runtimePath = join(nextVendor, "zcode.cjs");
+  const runtime = await readFile(runtimePath, "utf8");
+  await writeFile(runtimePath, patchRuntimeTuiGoalBridge(runtime));
 }
 
 async function findFile(directory: string, name: string): Promise<string | null> {
@@ -230,6 +262,7 @@ async function sync(options: SyncOptions): Promise<void> {
     const source = await resolveSource(options, temporaryDirectory);
     await rm(nextVendor, { recursive: true, force: true });
     await cp(source.glm, nextVendor, { recursive: true });
+    await installTuiGoalBridge(nextVendor);
     await installLocalTui(nextVendor);
     const node = process.env.ZCODE_NODE || Bun.which("node");
     if (!node) throw new Error("Node.js >=22.19 is required to validate the official ZCode runtime.");
