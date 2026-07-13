@@ -12,6 +12,15 @@ let goal = {
   timeUsedSeconds: 120
 };
 
+const assistantResponse = [
+  "Feature prompt complete.",
+  "",
+  "```mermaid",
+  "graph TD",
+  "Input[用户输入] --> Editor[编辑器面板]",
+  "```"
+].join("\n");
+
 const workflowPanel = (status = "running") => ({
   title: "/workflows",
   selectedRunId: "run_feature",
@@ -103,12 +112,12 @@ await runTui({
       toolName: "Read",
       result: { success: true, output: "source text" }
     });
-    await emit(options, { kind: "text_delta", delta: "Feature prompt complete." });
+    await emit(options, { kind: "text_delta", delta: assistantResponse });
     await Bun.sleep(1_100);
     return {
       kind: "started_turn",
       result: {
-        response: "Feature prompt complete.",
+        response: assistantResponse,
         model,
         thoughtLevel: effort,
         projection: {

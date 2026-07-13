@@ -43,7 +43,8 @@ is the compatibility host for the unmodified upstream kernel.
 - generic upstream selection dialogs for sessions, plugins and checkpoints;
 - interactive tool-permission approval dialogs;
 - clipboard image attachments through Ctrl+V or `/paste-image`;
-- bounded tool input and result cards for readable long-running turns;
+- compact tool execution views with path, command, diff, result and image previews;
+- terminal-native Mermaid previews with source fallback for unsupported or oversized diagrams;
 - active-turn steering, cancellation and error reporting;
 - `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling;
 - `--no-color` and `NO_COLOR` support.

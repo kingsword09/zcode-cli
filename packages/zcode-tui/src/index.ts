@@ -45,6 +45,7 @@ import {
   modelPicker,
   type PickerSpec
 } from "./selectors.ts";
+import { RichMarkdown } from "./rich-markdown.ts";
 import {
   contextRemainingPercent,
   mergeMetrics,
@@ -60,14 +61,14 @@ import {
 } from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
-import { toolCard, toolSucceeded } from "./tool-view.ts";
+import { ToolExecutionView, toolSucceeded } from "./tool-view.ts";
 import { Transcript } from "./transcript.ts";
 import { turnStatusText } from "./turn-status.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
 
 interface ToolViewState {
   name: string;
-  view: Markdown;
+  view: ToolExecutionView;
   input?: unknown;
   inputText: string;
 }
@@ -86,7 +87,7 @@ class ZCodeTui {
   private stopped = false;
   private activeSubmissions = 0;
   private turnAbortController?: AbortController;
-  private currentAssistant?: Markdown;
+  private currentAssistant?: RichMarkdown;
   private currentAssistantText = "";
   private readonly toolViews = new Map<string, ToolViewState>();
   private pendingAttachments: PromptImageAttachment[] = [];
@@ -484,9 +485,9 @@ class ZCodeTui {
     this.updateTurnStatus();
   }
 
-  private ensureAssistant(): Markdown {
+  private ensureAssistant(): RichMarkdown {
     if (!this.currentAssistant) {
-      this.currentAssistant = new Markdown("", 1, 0, this.theme.markdown);
+      this.currentAssistant = new RichMarkdown("", 1, this.theme);
       this.transcript.addBlock(this.currentAssistant);
     }
     return this.currentAssistant;
@@ -502,7 +503,7 @@ class ZCodeTui {
   }
 
   private addAssistantMessage(text: string): void {
-    this.transcript.addBlock(new Markdown(text, 1, 0, this.theme.markdown));
+    this.transcript.addBlock(new RichMarkdown(text, 1, this.theme));
     this.lastAssistantText = text;
     this.ui.requestRender();
   }
@@ -521,7 +522,10 @@ class ZCodeTui {
     }
     const tool: ToolViewState = {
       name: toolName ?? "tool",
-      view: new Markdown("", 1, 0, this.theme.markdown),
+      view: new ToolExecutionView(this.theme, {
+        name: toolName ?? "tool",
+        state: "preparing"
+      }),
       inputText: ""
     };
     this.toolViews.set(id, tool);
@@ -530,14 +534,14 @@ class ZCodeTui {
   }
 
   private updateToolView(tool: ToolViewState, state: string, result?: unknown, error?: unknown): void {
-    tool.view.setText(toolCard({
+    tool.view.update({
       name: tool.name,
       state,
       input: tool.input,
       inputText: tool.inputText,
       result,
       error
-    }));
+    });
   }
 
   private async attachClipboardImage(): Promise<void> {

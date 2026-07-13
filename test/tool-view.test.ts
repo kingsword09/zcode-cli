@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { toolCard, toolSucceeded } from "../packages/zcode-tui/src/tool-view.ts";
+import { createTheme } from "../packages/zcode-tui/src/theme.ts";
+import {
+  ToolExecutionView,
+  toolCard,
+  toolSucceeded
+} from "../packages/zcode-tui/src/tool-view.ts";
 
-describe("TUI tool cards", () => {
-  test("renders structured input and a concise result", () => {
+describe("TUI tool execution view", () => {
+  test("renders a scannable tool summary instead of raw input JSON", () => {
     const card = toolCard({
       name: "Read",
       state: "complete",
@@ -11,8 +16,8 @@ describe("TUI tool cards", () => {
       result: { output: "source text", success: true }
     });
 
-    expect(card).toContain("⚙ Read · complete");
-    expect(card).toContain('"file_path": "/tmp/example.ts"');
+    expect(card).toContain("✓ Read /tmp/example.ts");
+    expect(card).not.toContain("file_path");
     expect(card).toContain("source text");
     expect(toolSucceeded({ success: true })).toBe(true);
     expect(toolSucceeded({ success: false })).toBe(false);
@@ -21,7 +26,44 @@ describe("TUI tool cards", () => {
 
   test("bounds large output previews", () => {
     const card = toolCard({ name: "Bash", state: "complete", result: "x".repeat(2_000) });
-    expect(card).toContain("more characters");
-    expect(card.length).toBeLessThan(1_800);
+    expect(card).not.toContain("more characters");
+    expect(card.length).toBeLessThan(2_500);
+
+    const larger = toolCard({ name: "Bash", state: "complete", result: "x".repeat(4_000) });
+    expect(larger).toContain("more characters");
+    expect(larger.length).toBeLessThan(2_700);
+  });
+
+  test("styles mutation diffs and keeps running state compact", () => {
+    const view = new ToolExecutionView(createTheme(false), {
+      name: "ApplyPatch",
+      state: "running",
+      input: {
+        path: "src/app.ts",
+        patch: "@@ -1 +1 @@\n-old\n+new"
+      }
+    });
+    const output = view.render(80).map((line) => line.trimEnd()).join("\n");
+
+    expect(output).toContain("● ApplyPatch src/app.ts · running");
+    expect(output).toContain("@@ -1 +1 @@");
+    expect(output).toContain("-old");
+    expect(output).toContain("+new");
+  });
+
+  test("hides metadata-only success results and surfaces embedded errors", () => {
+    expect(toolCard({
+      name: "Write",
+      state: "complete",
+      input: { path: "result.txt", content: "done" },
+      result: { success: true, status: "completed" }
+    })).not.toContain('"success"');
+
+    expect(toolCard({
+      name: "Bash",
+      state: "failed",
+      input: { command: "false" },
+      result: { status: "failed", error: "Command exited with code 1" }
+    })).toContain("Error: Command exited with code 1");
   });
 });
