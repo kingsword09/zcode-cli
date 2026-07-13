@@ -26,22 +26,26 @@ const child = Bun.spawn([process.execPath, fixture], {
 
 const actions = [
   [400, "/help\r"],
-  [1_000, "/effort\r"],
-  [1_500, "\r"],
-  [2_100, "/model\r"],
-  [2_600, "beta\r"],
-  [3_300, "\x16"],
-  [3_900, "inspect\r"],
-  [5_000, "/mcp\r"],
-  [5_500, "\r"],
-  [6_300, "/workflows\r"],
-  [6_900, "\r"],
-  [7_500, "\x1b[B\r"],
-  [8_200, "\x1b"],
-  [8_800, "/exit\r"]
+  [1_000, "\x1b[Z"],
+  [1_300, "\x0c"],
+  [1_700, "\x0e"],
+  [2_400, "\t"],
+  [3_100, "/model\r"],
+  [3_600, "alpha\r"],
+  [4_200, "/effort\r"],
+  [4_700, "\x1b[B\r"],
+  [5_400, "\x16"],
+  [6_000, "inspect\r"],
+  [7_100, "/mcp\r"],
+  [7_600, "\r"],
+  [8_400, "/workflows\r"],
+  [9_000, "\r"],
+  [9_600, "\x1b[B\r"],
+  [10_300, "\x1b"],
+  [10_900, "/exit\r"]
 ] as const;
 const timers = actions.map(([delay, input]) => setTimeout(() => terminal.write(input), delay));
-const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+const timeout = setTimeout(() => child.kill("SIGKILL"), 18_000);
 
 const code = await child.exited;
 for (const timer of timers) clearTimeout(timer);
@@ -61,10 +65,9 @@ if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain
 
 for (const [label, pattern] of [
   ["long help output", /Use \/help <command> for details/i],
+  ["shortcut legend", /Shift\+Tab mode/i],
   ["model picker", /Select model/i],
-  ["model switch", /Model switched to beta\/model/i],
   ["effort picker", /Select reasoning effort/i],
-  ["effort switch", /Reasoning effort switched to low/i],
   ["image attachment", /1 image attached/i],
   ["tool card", /Read · complete/i],
   ["tool result", /source text/i],
@@ -75,6 +78,31 @@ for (const [label, pattern] of [
   ["workflow stop", /Status: cancelled/i]
 ] as const) {
   if (!pattern.test(plain)) throw new Error(`Missing ${label} in feature TUI smoke.\n${plain.slice(-6_000)}`);
+}
+
+let stateOffset = 0;
+for (const [label, pattern] of [
+  ["mode shortcut", /alpha\/model · plan · low/i],
+  ["autonomy shortcut", /alpha\/model · build · low/i],
+  ["model shortcut", /beta\/model · build · low/i],
+  ["effort shortcut", /beta\/model · build · high/i],
+  ["model picker switch", /alpha\/model · build · high/i],
+  ["effort picker switch", /alpha\/model · build · low/i]
+] as const) {
+  const match = pattern.exec(plain.slice(stateOffset));
+  if (!match) throw new Error(`Missing ordered ${label} state in feature TUI smoke.\n${plain.slice(-6_000)}`);
+  stateOffset += (match.index ?? 0) + match[0].length;
+}
+
+for (const [label, pattern] of [
+  ["mode transcript", /Mode: plan/i],
+  ["autonomy transcript", /Autonomy level:/i],
+  ["model command transcript", /[›↪]\s*\/model\s+(?:alpha|beta)\/model/i],
+  ["model response transcript", /Model switched to/i],
+  ["effort command transcript", /[›↪]\s*\/effort\s+(?:low|high)/i],
+  ["effort response transcript", /Reasoning effort switched to/i]
+] as const) {
+  if (pattern.test(plain)) throw new Error(`Unexpected ${label} in feature TUI smoke.\n${plain.slice(-6_000)}`);
 }
 
 console.log("TUI feature smoke test passed.");
