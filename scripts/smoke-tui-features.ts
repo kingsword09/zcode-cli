@@ -67,6 +67,8 @@ if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain
 for (const [label, pattern] of [
   ["long help output", /Use \/help <command> for details/i],
   ["turn timer tick", /\[1s\]/i],
+  ["context remaining", /75% context left/i],
+  ["session tokens", /18\.5K tokens/i],
   ["active goal footer", /Pursuing goal \(40K \/ 50K\)/i],
   ["paused goal footer", /Goal paused \(\/goal resume\)/i],
   ["model picker", /Select model/i],

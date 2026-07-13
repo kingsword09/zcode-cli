@@ -72,6 +72,16 @@ await runTui({
   refreshWorkflowPanel: async () => workflowPanel(),
   stopWorkflow: async () => workflowPanel("cancelled"),
   readGoal: async () => goal,
+  readSessionUsage: async () => ({
+    totalTokens: 18_500,
+    inputTokens: 14_000,
+    outputTokens: 4_000,
+    reasoningTokens: 500,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 9_000,
+    modelRequestCount: 3,
+    modelErrorCount: 0
+  }),
   sendInput: async (input, options) => {
     const prompt = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
     const attachments = Array.isArray(prompt.attachments) ? prompt.attachments : [];
@@ -97,7 +107,17 @@ await runTui({
     await Bun.sleep(1_100);
     return {
       kind: "started_turn",
-      result: { response: "Feature prompt complete.", model, thoughtLevel: effort }
+      result: {
+        response: "Feature prompt complete.",
+        model,
+        thoughtLevel: effort,
+        projection: {
+          contextUsed: 32_000,
+          contextWindow: 128_000,
+          totalTokenCount: 18_400,
+          turnCount: 4
+        }
+      }
     };
   },
   submitPrompt: async (input) => {

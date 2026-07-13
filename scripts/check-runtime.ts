@@ -16,8 +16,10 @@ if (typeof Bun.Terminal !== "function") throw new Error("This Bun build does not
 
 const runtimeSource = await Bun.file(runtime).text();
 if (!runtimeSource.includes(".readGoal=async()=>await(await")
-  || !/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtimeSource)) {
-  throw new Error("The structured TUI goal bridge is missing; run `bun run sync` again.");
+  || !runtimeSource.includes(".readSessionUsage=async()=>await(await")
+  || !/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtimeSource)
+  || !/readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtimeSource)) {
+  throw new Error("The structured TUI data bridge is missing; run `bun run sync` again.");
 }
 
 async function execute(

@@ -4,7 +4,7 @@ import {
   chooseArtifact,
   manifestUrl,
   parseArgs,
-  patchRuntimeTuiGoalBridge
+  patchRuntimeTuiBridge
 } from "../scripts/sync-runtime.ts";
 
 describe("runtime synchronization", () => {
@@ -33,18 +33,24 @@ describe("runtime synchronization", () => {
     expect(() => chooseArtifact({ files: [] }, "linux")).toThrow(/No \.deb artifact/);
   });
 
-  test("injects a structured goal reader into the official TUI adapter", () => {
+  test("injects structured goal and usage readers into the official TUI adapter", () => {
     const runtime = [
       "E.sendInput=async(A,$)=>{return Kvt(await S(),D,O1(t))},",
       "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
       "CVr(E,S,r);",
       "return c({recallPreviousInput:g.recallPreviousInput,sendInput:g.sendInput,submitPrompt:g})"
     ].join("");
-    const patched = patchRuntimeTuiGoalBridge(runtime);
+    const runtimeWithApp = runtime.replace(
+      "E.sendInput",
+      'loadSessionTranscript:a(async()=>await dUr({sessionId:e.sessionId,sessionStore:e.sessionStore}),"loadSessionTranscript"),readTodos:E.sendInput'
+    );
+    const patched = patchRuntimeTuiBridge(runtimeWithApp);
 
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
-    expect(patched).toContain("readGoal:g.readGoal,recallPreviousInput:g.recallPreviousInput");
-    expect(patchRuntimeTuiGoalBridge(patched)).toBe(patched);
-    expect(() => patchRuntimeTuiGoalBridge("incompatible runtime")).toThrow(/incompatible/);
+    expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
+    expect(patched).toContain("readGoal:g.readGoal,readSessionUsage:g.readSessionUsage");
+    expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
+    expect(patchRuntimeTuiBridge(patched)).toBe(patched);
+    expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);
   });
 });
