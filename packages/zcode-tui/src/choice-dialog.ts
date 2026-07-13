@@ -1,6 +1,7 @@
 import {
   decodeKittyPrintable,
   getKeybindings,
+  Input,
   SelectList,
   type Component,
   type Container,
@@ -9,26 +10,46 @@ import {
 } from "@earendil-works/pi-tui";
 
 import type { ZCodeTheme } from "./theme.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 
 export interface ChoiceItem extends SelectItem {
   payload?: unknown;
+  preview?: Component;
 }
 
 class ChoiceDialog implements Component {
   private filter = "";
+  private selectionPreview?: Component;
 
   constructor(
     private readonly title: string,
     private readonly prompt: string,
     private readonly help: string,
     private readonly list: SelectList,
-    private readonly theme: ZCodeTheme
+    private readonly theme: ZCodeTheme,
+    private readonly content?: Component,
+    private readonly maxContentLines = 0
   ) {}
 
+  setSelectionPreview(preview: Component | undefined): void {
+    this.selectionPreview = preview;
+  }
+
   render(width: number): string[] {
+    const content = [
+      ...(this.content?.render(width) ?? []),
+      ...(this.content && this.selectionPreview ? [""] : []),
+      ...(this.selectionPreview?.render(width) ?? [])
+    ];
+    const hidden = Math.max(0, content.length - this.maxContentLines);
+    const visibleContent = this.maxContentLines > 0 ? content.slice(0, this.maxContentLines) : [];
+    if (hidden > 0 && visibleContent.length > 0) {
+      visibleContent[visibleContent.length - 1] = this.theme.muted(`… ${hidden} preview lines hidden`);
+    }
     return [
       this.theme.bold(this.title),
       this.theme.muted(this.prompt),
+      ...(visibleContent.length > 0 ? ["", ...visibleContent] : []),
       `${this.theme.muted("Filter:")} ${this.filter || this.theme.muted("type to search")}`,
       "",
       ...this.list.render(width),
@@ -77,6 +98,7 @@ export function choose(
     prompt: string;
     help?: string;
     items: ChoiceItem[];
+    content?: Component;
     selectedIndex?: number;
     signal?: AbortSignal;
   }
@@ -86,20 +108,41 @@ export function choose(
   return new Promise((resolve) => {
     const choicesByValue = new Map<string, ChoiceItem>();
     const searchableItems = options.items.map((item, index): SelectItem => {
-      const value = `${item.label}\u0000${index}`;
-      choicesByValue.set(value, item);
-      return { value, label: item.label, description: item.description };
+      const safeItem: ChoiceItem = {
+        ...item,
+        label: sanitizeTerminalText(item.label, { preserveSgr: false }),
+        description: item.description
+          ? sanitizeTerminalText(item.description, { preserveSgr: false })
+          : undefined
+      };
+      const value = `${safeItem.label}\u0000${index}`;
+      choicesByValue.set(value, safeItem);
+      return { value, label: safeItem.label, description: safeItem.description };
     });
-    const maxVisible = Math.max(1, Math.min(8, searchableItems.length, ui.terminal.rows - 10));
+    const maxVisible = Math.max(1, Math.min(
+      8,
+      searchableItems.length,
+      Math.floor(Math.max(2, ui.terminal.rows - 8) / (options.content || options.items.some((item) => item.preview) ? 2 : 1))
+    ));
     const list = new SelectList(searchableItems, maxVisible, theme.select);
     list.setSelectedIndex(options.selectedIndex ?? 0);
+    const maxContentLines = Math.max(0, ui.terminal.rows - maxVisible - 9);
     const dialog = new ChoiceDialog(
-      options.title,
-      options.prompt,
-      options.help ?? "Type to filter · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear",
+      sanitizeTerminalText(options.title, { preserveSgr: false }),
+      sanitizeTerminalText(options.prompt, { preserveSgr: false }),
+      sanitizeTerminalText(
+        options.help ?? "Type to filter · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear",
+        { preserveSgr: false }
+      ),
       list,
-      theme
+      theme,
+      options.content,
+      maxContentLines
     );
+    const previewFor = (item: SelectItem | null): Component | undefined => {
+      return item ? choicesByValue.get(item.value)?.preview : undefined;
+    };
+    dialog.setSelectionPreview(previewFor(list.getSelectedItem()));
     let settled = false;
     const finish = (item: ChoiceItem | null) => {
       if (settled) return;
@@ -111,9 +154,77 @@ export function choose(
     };
     const onAbort = () => finish(null);
     list.onSelect = (item) => finish(choicesByValue.get(item.value) ?? null);
+    list.onSelectionChange = (item) => dialog.setSelectionPreview(previewFor(item));
     list.onCancel = () => finish(null);
     host.addChild(dialog);
     ui.setFocus(dialog);
+    ui.requestRender();
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) finish(null);
+  });
+}
+
+class TextPromptDialog implements Component {
+  constructor(
+    private readonly title: string,
+    private readonly prompt: string,
+    private readonly input: Input,
+    private readonly theme: ZCodeTheme,
+    private readonly help: string
+  ) {}
+
+  render(width: number): string[] {
+    return [
+      this.theme.bold(this.title),
+      this.theme.muted(this.prompt),
+      "",
+      ...this.input.render(width),
+      "",
+      this.theme.muted(this.help)
+    ];
+  }
+
+  invalidate(): void {
+    this.input.invalidate();
+  }
+}
+
+export function promptText(
+  ui: TUI,
+  host: Container,
+  theme: ZCodeTheme,
+  options: {
+    title: string;
+    prompt: string;
+    initialValue?: string;
+    help?: string;
+    signal?: AbortSignal;
+  }
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = new Input();
+    if (options.initialValue) input.setValue(options.initialValue);
+    const dialog = new TextPromptDialog(
+      sanitizeTerminalText(options.title, { preserveSgr: false }),
+      sanitizeTerminalText(options.prompt, { preserveSgr: false }),
+      input,
+      theme,
+      sanitizeTerminalText(options.help ?? "Enter confirm · Esc cancel", { preserveSgr: false })
+    );
+    let settled = false;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", onAbort);
+      host.removeChild(dialog);
+      ui.requestRender();
+      resolve(value);
+    };
+    const onAbort = () => finish(null);
+    input.onSubmit = (value) => finish(value);
+    input.onEscape = () => finish(null);
+    host.addChild(dialog);
+    ui.setFocus(input);
     ui.requestRender();
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted) finish(null);

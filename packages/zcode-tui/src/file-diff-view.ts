@@ -4,8 +4,10 @@ import {
   wrapTextWithAnsi,
   type Component
 } from "@earendil-works/pi-tui";
+import { diffWordsWithSpace } from "diff";
 
 import { createTheme, type ZCodeTheme } from "./theme.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 import { asString, isRecord } from "./types.ts";
 
 const maxVisibleFiles = 8;
@@ -27,12 +29,18 @@ export interface FileDiffData {
   deletions: number;
   structuredPatch: FileDiffHunk[];
   truncated?: boolean;
+  status?: "modified" | "added" | "deleted" | "renamed" | "untracked";
+  oldFilePath?: string;
+  isBinary?: boolean;
+  isLargeFile?: boolean;
+  isUntracked?: boolean;
 }
 
 export interface FileDiffViewOptions {
   toolName: string;
   state: string;
   diffs: FileDiffData[];
+  expanded?: boolean;
 }
 
 function integer(value: unknown): number | undefined {
@@ -201,6 +209,47 @@ function writeCreateDiff(input: unknown, result: unknown, state: string): FileDi
   }];
 }
 
+function previewWriteDiff(input: Record<string, unknown>): FileDiffData[] {
+  const filePath = asString(input.file_path) ?? asString(input.filePath) ?? asString(input.path);
+  const content = asString(input.content);
+  if (!filePath || content === undefined) return [];
+  const lines = content.replace(/\r/g, "").split("\n").map((line) => `+${line}`);
+  if (lines.at(-1) === "+") lines.pop();
+  if (lines.length === 0) return [];
+  return [{
+    filePath,
+    additions: lines.length,
+    deletions: 0,
+    structuredPatch: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines }]
+  }];
+}
+
+function previewEditDiff(input: Record<string, unknown>): FileDiffData[] {
+  const filePath = asString(input.file_path) ?? asString(input.filePath) ?? asString(input.path);
+  if (!filePath) return [];
+  const edits = Array.isArray(input.edits) ? input.edits.filter(isRecord) : [input];
+  const hunks: FileDiffHunk[] = [];
+  for (const edit of edits) {
+    const oldString = asString(edit.old_string) ?? asString(edit.oldString) ?? "";
+    const newString = asString(edit.new_string) ?? asString(edit.newString) ?? "";
+    if (!oldString && !newString) continue;
+    const removed = oldString.replace(/\r/g, "").split("\n").map((line) => `-${line}`);
+    const added = newString.replace(/\r/g, "").split("\n").map((line) => `+${line}`);
+    if (removed.at(-1) === "-") removed.pop();
+    if (added.at(-1) === "+") added.pop();
+    hunks.push({
+      oldStart: 1,
+      oldLines: removed.length,
+      newStart: 1,
+      newLines: added.length,
+      lines: [...removed, ...added]
+    });
+  }
+  if (hunks.length === 0) return [];
+  const changes = countChanges(hunks);
+  return [{ filePath, ...changes, structuredPatch: hunks }];
+}
+
 export function isFileMutationTool(name: string): boolean {
   const normalized = name.toLowerCase().replace(/[^a-z]/gu, "");
   return normalized === "write" || normalized === "edit" || normalized === "applypatch";
@@ -221,6 +270,18 @@ export function fileDiffsForTool(
     if (patch) return parseApplyPatch(patch);
   }
   return normalized === "write" ? writeCreateDiff(input, result, state) : [];
+}
+
+export function fileDiffsForPermission(name: string, input: unknown): FileDiffData[] {
+  if (!isRecord(input)) return [];
+  const normalized = name.toLowerCase().replace(/[^a-z]/gu, "");
+  if (normalized.includes("applypatch") || normalized === "patch") {
+    const patch = asString(input.patch_text) ?? asString(input.patchText) ?? asString(input.patch);
+    return patch ? parseApplyPatch(patch) : [];
+  }
+  if (normalized.includes("write")) return previewWriteDiff(input);
+  if (normalized.includes("edit")) return previewEditDiff(input);
+  return [];
 }
 
 function stateIcon(state: string, theme: ZCodeTheme): string {
@@ -252,6 +313,62 @@ function maximumLineNumber(diffs: FileDiffData[]): number {
   return maximum;
 }
 
+export function wordDiffLines(
+  removed: string,
+  added: string,
+  theme: ZCodeTheme,
+  highlightFragment: (value: string) => string = (value) => value
+): { removed: string; added: string } {
+  const changes = diffWordsWithSpace(
+    sanitizeTerminalText(removed, { preserveSgr: false }),
+    sanitizeTerminalText(added, { preserveSgr: false })
+  );
+  return {
+    removed: changes
+      .filter((change) => !change.added)
+      .map((change) => {
+        const highlighted = highlightFragment(change.value);
+        return change.removed ? theme.diffRemovedWord(highlighted) : highlighted;
+      })
+      .join(""),
+    added: changes
+      .filter((change) => !change.removed)
+      .map((change) => {
+        const highlighted = highlightFragment(change.value);
+        return change.added ? theme.diffAddedWord(highlighted) : highlighted;
+      })
+      .join("")
+  };
+}
+
+function changedWords(hunk: FileDiffHunk, theme: ZCodeTheme, filePath: string): Map<number, string> {
+  const output = new Map<number, string>();
+  for (let index = 0; index < hunk.lines.length;) {
+    if (!hunk.lines[index]?.startsWith("-")) {
+      index += 1;
+      continue;
+    }
+    const removedStart = index;
+    while (index < hunk.lines.length && hunk.lines[index]?.startsWith("-")) index += 1;
+    const addedStart = index;
+    while (index < hunk.lines.length && hunk.lines[index]?.startsWith("+")) index += 1;
+    const pairCount = Math.min(addedStart - removedStart, index - addedStart);
+    for (let offset = 0; offset < pairCount; offset += 1) {
+      const removedIndex = removedStart + offset;
+      const addedIndex = addedStart + offset;
+      const pair = wordDiffLines(
+        hunk.lines[removedIndex]!.slice(1),
+        hunk.lines[addedIndex]!.slice(1),
+        theme,
+        (value) => theme.codeHighlighter.highlightFileLine(value, filePath)
+      );
+      output.set(removedIndex, pair.removed);
+      output.set(addedIndex, pair.added);
+    }
+  }
+  return output;
+}
+
 export class FileDiffView implements Component {
   constructor(
     private readonly theme: ZCodeTheme,
@@ -262,7 +379,7 @@ export class FileDiffView implements Component {
 
   render(width: number): string[] {
     const output: string[] = [];
-    const diffs = this.options.diffs.slice(0, maxVisibleFiles);
+    const diffs = this.options.expanded ? this.options.diffs : this.options.diffs.slice(0, maxVisibleFiles);
     const digits = Math.max(2, String(maximumLineNumber(diffs)).length);
     let visibleHunks = 0;
     let visibleLines = 0;
@@ -274,7 +391,7 @@ export class FileDiffView implements Component {
       output.push(this.renderHeader(diff, fileIndex, width));
 
       for (const hunk of diff.structuredPatch) {
-        if (visibleHunks >= maxVisibleHunks || visibleLines >= maxVisibleLines) {
+        if (!this.options.expanded && (visibleHunks >= maxVisibleHunks || visibleLines >= maxVisibleLines)) {
           truncated = true;
           break;
         }
@@ -282,9 +399,10 @@ export class FileDiffView implements Component {
         output.push(this.renderHunkHeader(hunk, digits, width));
         let oldLine = hunk.oldStart;
         let newLine = hunk.newStart;
+        const wordChanges = changedWords(hunk, this.theme, diff.filePath);
 
-        for (const sourceLine of hunk.lines) {
-          if (visibleLines >= maxVisibleLines) {
+        for (const [lineIndex, sourceLine] of hunk.lines.entries()) {
+          if (!this.options.expanded && visibleLines >= maxVisibleLines) {
             truncated = true;
             break;
           }
@@ -295,15 +413,24 @@ export class FileDiffView implements Component {
           const content = marker === sourceLine[0] ? sourceLine.slice(1) : sourceLine;
           const oldLabel = marker === "+" || oldLine === undefined ? "" : String(oldLine);
           const newLabel = marker === "-" || newLine === undefined ? "" : String(newLine);
-          output.push(...this.renderCodeLine(marker, content, oldLabel, newLabel, digits, width));
+          const renderedContent = wordChanges.get(lineIndex)
+            ?? this.theme.codeHighlighter.highlightFileLine(content, diff.filePath);
+          output.push(...this.renderCodeLine(marker, renderedContent, oldLabel, newLabel, digits, width));
           if (marker !== "+" && oldLine !== undefined) oldLine += 1;
           if (marker !== "-" && newLine !== undefined) newLine += 1;
         }
       }
+      if (diff.structuredPatch.length === 0) {
+        const description = diff.isBinary ? "Binary file"
+          : diff.isLargeFile ? "Large file modified"
+            : diff.isUntracked ? "Untracked file · textual preview unavailable"
+              : "No textual diff available";
+        output.push(this.theme.muted(`└ ${description}`));
+      }
       if (diff.truncated) truncated = true;
     }
 
-    if (truncated) output.push(this.theme.muted("… diff truncated"));
+    if (truncated) output.push(this.theme.muted("… diff truncated · Ctrl+O to expand"));
     return output;
   }
 
@@ -311,7 +438,9 @@ export class FileDiffView implements Component {
     const label = index === 0
       ? `${stateIcon(this.options.state, this.theme)} ${this.theme.bold(this.options.toolName)}`
       : this.theme.muted("↳");
-    const stats = `${this.theme.success(`+${diff.additions}`)} ${this.theme.error(`-${diff.deletions}`)}`;
+    const stats = diff.additions || diff.deletions
+      ? `${this.theme.success(`+${diff.additions}`)} ${this.theme.error(`-${diff.deletions}`)}`
+      : this.theme.muted(diff.status ?? "no changes");
     const fixedWidth = visibleWidth(label) + visibleWidth(stats) + 2;
     const path = truncateToWidth(diff.filePath, Math.max(1, width - fixedWidth));
     return truncateToWidth(`${label} ${this.theme.bold(path)} ${stats}`, width);

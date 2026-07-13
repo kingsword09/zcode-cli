@@ -5,7 +5,8 @@ import {
   RichMarkdown,
   normalizeMermaidTerminalWidth,
   renderMermaidPreview,
-  splitMarkdownSegments
+  splitMarkdownSegments,
+  splitStreamingMarkdownSegments
 } from "../packages/zcode-tui/src/rich-markdown.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
@@ -39,6 +40,31 @@ describe("TUI rich Markdown", () => {
     expect(splitMarkdownSegments(nestedSource)).toEqual([
       { kind: "markdown", text: nestedSource }
     ]);
+  });
+
+  test("stabilizes complete Markdown blocks without splitting fenced code", () => {
+    expect(splitStreamingMarkdownSegments([
+      "First paragraph.",
+      "",
+      "```ts",
+      "const first = 1;",
+      "",
+      "const second = 2;",
+      "```",
+      "",
+      "Streaming tail"
+    ].join("\n"))).toEqual([
+      { kind: "markdown", text: "First paragraph." },
+      { kind: "markdown", text: "```ts\nconst first = 1;\n\nconst second = 2;\n```" },
+      { kind: "markdown", text: "Streaming tail" }
+    ]);
+  });
+
+  test("keeps assistant Markdown searchable while streaming", () => {
+    const component = new RichMarkdown("first", 1, createTheme(false));
+    component.setText("first\n\nsecond");
+    expect(component.getSearchText()).toBe("first\n\nsecond");
+    expect(component.render(80).join("\n")).toContain("second");
   });
 
   test("renders Mermaid flowcharts as terminal diagrams", () => {

@@ -35,27 +35,54 @@ const child = Bun.spawn(command, {
   terminal
 });
 
-const helpTimer = setTimeout(() => terminal.write("/help\r"), 800);
-const modeTimer = setTimeout(() => terminal.write("/mode plan\r"), 2_600);
-const exitTimer = setTimeout(() => terminal.write("/exit\r"), 5_000);
+function plainText(value: string): string {
+  return value
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\r/g, "");
+}
+
+async function waitFor(label: string, pattern: RegExp, start = 0, timeoutMs = 8_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (pattern.test(plainText(output.slice(start)))) return;
+    if (child.exitCode !== null) break;
+    await Bun.sleep(25);
+  }
+  throw new Error(`Timed out waiting for ${label}.\n${plainText(output).slice(-4_000)}`);
+}
+
+async function sendAndWait(input: string, label: string, pattern: RegExp): Promise<void> {
+  const start = output.length;
+  terminal.write(input);
+  await waitFor(label, pattern, start);
+}
+
 const timeout = setTimeout(() => {
   child.kill("SIGKILL");
-}, 15_000);
+}, 30_000);
+
+let interactionError: unknown;
+try {
+  await waitFor("welcome screen", /ZCode/i);
+  await sendAndWait("/help\r", "help output", /Slash commands:|Usage:/i);
+  await sendAndWait("/mode plan\r", "plan mode", /mode switched to plan|current mode: plan|default · plan/i);
+  terminal.write("/exit\r");
+} catch (error) {
+  interactionError = error;
+  child.kill("SIGKILL");
+}
 
 const code = await child.exited;
-clearTimeout(helpTimer);
-clearTimeout(modeTimer);
-clearTimeout(exitTimer);
 clearTimeout(timeout);
 if (!terminal.closed) terminal.close();
 await rm(temporaryHome, { recursive: true, force: true });
 output += decoder.decode();
 
-const plain = output
-  .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-  .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/g, "")
-  .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-  .replace(/\r/g, "");
+if (interactionError) throw interactionError;
+
+const plain = plainText(output);
 
 if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 

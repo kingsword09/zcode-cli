@@ -18,7 +18,8 @@ describe("TUI tool execution view", () => {
 
     expect(card).toContain("✓ Read /tmp/example.ts");
     expect(card).not.toContain("file_path");
-    expect(card).toContain("source text");
+    expect(card).toContain("Read 1 line");
+    expect(card).toContain("Ctrl+O to expand");
     expect(toolSucceeded({ success: true })).toBe(true);
     expect(toolSucceeded({ success: false })).toBe(false);
     expect(toolSucceeded({ status: "failed" })).toBe(false);

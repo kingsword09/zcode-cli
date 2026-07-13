@@ -76,8 +76,14 @@ export function chooseArtifact(manifest: UpdateManifest, platform: SyncOptions["
 
 export function patchRuntimeTuiBridge(runtime: string): string {
   const alreadyPatched = runtime.includes(".readGoal=async()=>await(await")
+    && runtime.includes(".readTodos=async()=>await(await")
+    && runtime.includes(".readRuntimeProjection=async()=>")
     && runtime.includes(".readSessionUsage=async()=>await(await")
+    && runtime.includes(".cancelBackgroundTask=async")
     && /readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtime)
+    && /readTodos:[A-Za-z_$][\w$]*\.readTodos/u.test(runtime)
+    && /readRuntimeProjection:[A-Za-z_$][\w$]*\.readRuntimeProjection/u.test(runtime)
+    && /cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(runtime)
     && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime);
   if (alreadyPatched) return runtime;
 
@@ -105,8 +111,17 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".readGoal=async()=>await(await")) {
     assignments.push(`${bridge}.readGoal=async()=>await(await ${getApp}()).readTarget?.()??null`);
   }
+  if (!patched.includes(".readTodos=async()=>await(await")) {
+    assignments.push(`${bridge}.readTodos=async()=>await(await ${getApp}()).readTodos?.()??[]`);
+  }
+  if (!patched.includes(".readRuntimeProjection=async()=>")) {
+    assignments.push(`${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}();return e.runtime?.getProjection?.()??null}`);
+  }
   if (!patched.includes(".readSessionUsage=async()=>await(await")) {
     assignments.push(`${bridge}.readSessionUsage=async()=>await(await ${getApp}()).readSessionUsage?.()??null`);
+  }
+  if (!patched.includes(".cancelBackgroundTask=async")) {
+    assignments.push(`${bridge}.cancelBackgroundTask=async e=>await(await ${getApp}()).cancelBackgroundTask?.(e)??null`);
   }
   if (assignments.length > 0) {
     patched = patched.replace(recallAssignment, `${assignments.join(",")},${recallAssignment}`);
@@ -120,8 +135,17 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(patched)) {
     optionFields.push(`readGoal:${submitBridge}.readGoal`);
   }
+  if (!/readTodos:[A-Za-z_$][\w$]*\.readTodos/u.test(patched)) {
+    optionFields.push(`readTodos:${submitBridge}.readTodos`);
+  }
+  if (!/readRuntimeProjection:[A-Za-z_$][\w$]*\.readRuntimeProjection/u.test(patched)) {
+    optionFields.push(`readRuntimeProjection:${submitBridge}.readRuntimeProjection`);
+  }
   if (!/readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(patched)) {
     optionFields.push(`readSessionUsage:${submitBridge}.readSessionUsage`);
+  }
+  if (!/cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(patched)) {
+    optionFields.push(`cancelBackgroundTask:${submitBridge}.cancelBackgroundTask`);
   }
   if (optionFields.length > 0) {
     patched = patched.replace(optionsAssignment, `${optionFields.join(",")},${optionsAssignment}`);

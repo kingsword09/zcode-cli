@@ -4,7 +4,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   fileDiffCard,
   fileDiffsForTool,
-  FileDiffView
+  FileDiffView,
+  wordDiffLines
 } from "../packages/zcode-tui/src/file-diff-view.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 import { toolCard } from "../packages/zcode-tui/src/tool-view.ts";
@@ -30,6 +31,12 @@ const officialDisplay = {
 };
 
 describe("TUI file diff view", () => {
+  test("marks changed words independently inside paired diff lines", () => {
+    const themed = wordDiffLines("const value = 1;", "const value = 20;", createTheme(true));
+    expect(themed.removed).toContain("\x1b[1;38;5;231;48;5;88m1");
+    expect(themed.added).toContain("\x1b[1;38;5;231;48;5;28m20");
+  });
+
   test("renders official file_diff displays with Pierre-style gutters", () => {
     const card = toolCard({
       name: "Edit",
