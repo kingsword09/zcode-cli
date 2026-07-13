@@ -74,29 +74,58 @@ export function chooseArtifact(manifest: UpdateManifest, platform: SyncOptions["
   return artifact;
 }
 
-export function patchRuntimeTuiGoalBridge(runtime: string): string {
+export function patchRuntimeTuiBridge(runtime: string): string {
   const alreadyPatched = runtime.includes(".readGoal=async()=>await(await")
-    && /readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtime);
+    && runtime.includes(".readSessionUsage=async()=>await(await")
+    && /readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtime)
+    && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime);
   if (alreadyPatched) return runtime;
 
+  let patched = runtime;
+  if (!patched.includes("readSessionUsage:")) {
+    const appPattern = /loadSessionTranscript:([A-Za-z_$][\w$]*)\(async\(\)=>await [A-Za-z_$][\w$]*\(\{sessionId:([A-Za-z_$][\w$]*)\.sessionId,sessionStore:\2\.sessionStore\}\),"loadSessionTranscript"\),readTodos:/u;
+    const app = appPattern.exec(patched);
+    if (!app) throw new Error("ZCode runtime is incompatible with the TUI bridge (session usage anchor missing).");
+    const [appAssignment, helper, context] = app;
+    patched = patched.replace(
+      appAssignment,
+      appAssignment.replace(
+        ",readTodos:",
+        `,readSessionUsage:${helper}(async()=>await ${context}.sessionStore.queryTaskUsage?.({sessionID:${context}.sessionId})??null,"readSessionUsage"),readTodos:`
+      )
+    );
+  }
+
   const assignmentPattern = /([A-Za-z_$][\w$]*)\.recallPreviousInput=async ([A-Za-z_$][\w$]*)=>await\(await ([A-Za-z_$][\w$]*)\(\)\)\.recallPreviousInputHistory\?\.\(\2\)\?\?null/u;
-  const assignment = assignmentPattern.exec(runtime);
-  if (!assignment) throw new Error("ZCode runtime is incompatible with the TUI goal bridge (readGoal assignment anchor missing).");
+  const assignment = assignmentPattern.exec(patched);
+  if (!assignment) throw new Error("ZCode runtime is incompatible with the TUI bridge (adapter assignment anchor missing).");
 
   const [recallAssignment, bridge, , getApp] = assignment;
-  let patched = runtime.replace(
-    recallAssignment,
-    `${bridge}.readGoal=async()=>await(await ${getApp}()).readTarget?.()??null,${recallAssignment}`
-  );
+  const assignments: string[] = [];
+  if (!patched.includes(".readGoal=async()=>await(await")) {
+    assignments.push(`${bridge}.readGoal=async()=>await(await ${getApp}()).readTarget?.()??null`);
+  }
+  if (!patched.includes(".readSessionUsage=async()=>await(await")) {
+    assignments.push(`${bridge}.readSessionUsage=async()=>await(await ${getApp}()).readSessionUsage?.()??null`);
+  }
+  if (assignments.length > 0) {
+    patched = patched.replace(recallAssignment, `${assignments.join(",")},${recallAssignment}`);
+  }
 
   const optionsPattern = /recallPreviousInput:([A-Za-z_$][\w$]*)\.recallPreviousInput,sendInput:\1\.sendInput/u;
   const options = optionsPattern.exec(patched);
-  if (!options) throw new Error("ZCode runtime is incompatible with the TUI goal bridge (runTui options anchor missing).");
+  if (!options) throw new Error("ZCode runtime is incompatible with the TUI bridge (runTui options anchor missing).");
   const [optionsAssignment, submitBridge] = options;
-  patched = patched.replace(
-    optionsAssignment,
-    `readGoal:${submitBridge}.readGoal,${optionsAssignment}`
-  );
+  const optionFields: string[] = [];
+  if (!/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(patched)) {
+    optionFields.push(`readGoal:${submitBridge}.readGoal`);
+  }
+  if (!/readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(patched)) {
+    optionFields.push(`readSessionUsage:${submitBridge}.readSessionUsage`);
+  }
+  if (optionFields.length > 0) {
+    patched = patched.replace(optionsAssignment, `${optionFields.join(",")},${optionsAssignment}`);
+  }
   return patched;
 }
 
@@ -158,10 +187,10 @@ async function installLocalTui(nextVendor: string): Promise<void> {
   await cp(join(source, "dist"), join(target, "dist"), { recursive: true });
 }
 
-async function installTuiGoalBridge(nextVendor: string): Promise<void> {
+async function installTuiBridge(nextVendor: string): Promise<void> {
   const runtimePath = join(nextVendor, "zcode.cjs");
   const runtime = await readFile(runtimePath, "utf8");
-  await writeFile(runtimePath, patchRuntimeTuiGoalBridge(runtime));
+  await writeFile(runtimePath, patchRuntimeTuiBridge(runtime));
 }
 
 async function findFile(directory: string, name: string): Promise<string | null> {
@@ -262,7 +291,7 @@ async function sync(options: SyncOptions): Promise<void> {
     const source = await resolveSource(options, temporaryDirectory);
     await rm(nextVendor, { recursive: true, force: true });
     await cp(source.glm, nextVendor, { recursive: true });
-    await installTuiGoalBridge(nextVendor);
+    await installTuiBridge(nextVendor);
     await installLocalTui(nextVendor);
     const node = process.env.ZCODE_NODE || Bun.which("node");
     if (!node) throw new Error("Node.js >=22.19 is required to validate the official ZCode runtime.");

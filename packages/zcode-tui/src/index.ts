@@ -28,7 +28,7 @@ import {
   restoredMessages
 } from "./events.ts";
 import { FooterBar } from "./footer-bar.ts";
-import { goalStatusText, normalizeGoal, type GoalState } from "./goal-status.ts";
+import { formatTokens, goalStatusText, normalizeGoal, type GoalState } from "./goal-status.ts";
 import {
   formatWorkflowPanel,
   isMcpPickerRequest,
@@ -46,13 +46,22 @@ import {
   type PickerSpec
 } from "./selectors.ts";
 import {
+  contextRemainingPercent,
+  mergeMetrics,
+  projectionMetrics,
+  usageMetrics,
+  type SessionMetrics
+} from "./session-status.ts";
+import {
   executionMode,
   nextAutonomyMode,
   nextPickerCommand,
   toggledWorkMode
 } from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
+import { StatusLine, type StatusLineField } from "./status-line.ts";
 import { toolCard, toolSucceeded } from "./tool-view.ts";
+import { Transcript } from "./transcript.ts";
 import { turnStatusText } from "./turn-status.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
 
@@ -66,9 +75,9 @@ interface ToolViewState {
 class ZCodeTui {
   private readonly theme: ZCodeTheme;
   private readonly ui: TUI;
-  private readonly transcript = new Container();
+  private readonly transcript = new Transcript();
   private readonly choiceHost = new Container();
-  private readonly status: Text;
+  private readonly status: StatusLine;
   private readonly turnStatus: FooterBar;
   private readonly attachmentStatus: Text;
   private readonly editor: Editor;
@@ -101,6 +110,9 @@ class ZCodeTui {
   private goal?: GoalState;
   private goalRefreshInFlight = false;
   private goalRefreshPending = false;
+  private sessionMetrics: SessionMetrics = {};
+  private usageRefreshInFlight = false;
+  private usageRefreshPending = false;
 
   constructor(private readonly options: TuiOptions) {
     this.theme = createTheme(!options.noColor && !process.env.NO_COLOR);
@@ -111,7 +123,7 @@ class ZCodeTui {
     this.modelOptions = [...(options.modelOptions ?? [])];
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.ui = new TUI(new ProcessTerminal(), true);
-    this.status = new Text("", 0, 0);
+    this.status = new StatusLine();
     this.turnStatus = new FooterBar();
     this.attachmentStatus = new Text("", 0, 0);
     this.editor = new Editor(this.ui, this.theme.editor, { paddingX: 1, autocompleteMaxVisible: 7 });
@@ -131,6 +143,7 @@ class ZCodeTui {
     this.updateMetadata();
     this.updateTurnStatus();
     if (!this.options.loginRequired) void this.refreshGoal();
+    if (!this.options.loginRequired) void this.refreshSessionUsage();
     void this.loadHistory();
     if (this.options.subscribeWorkflowEvents) {
       this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
@@ -356,6 +369,7 @@ class ZCodeTui {
         this.finishTurn();
       }
       void this.refreshGoal();
+      void this.refreshSessionUsage();
     }
   }
 
@@ -381,6 +395,7 @@ class ZCodeTui {
       this.currentAssistantText = "";
       this.toolViews.clear();
       this.workflowView = undefined;
+      this.sessionMetrics = {};
       for (const message of restoredMessages(result.restoredMessages)) {
         if (message.role === "user") this.addUserMessage(message.text, false);
         else if (message.role === "assistant") this.addAssistantMessage(message.text);
@@ -406,6 +421,7 @@ class ZCodeTui {
     if (typeof result.thoughtLevel === "string") this.thoughtLevel = result.thoughtLevel;
     if (Array.isArray(result.modelOptions)) this.modelOptions = [...result.modelOptions];
     if (Array.isArray(result.effortOptions)) this.effortOptions = [...result.effortOptions];
+    this.sessionMetrics = mergeMetrics(this.sessionMetrics, projectionMetrics(result.projection));
     this.updateMetadata();
     this.ui.requestRender();
 
@@ -471,7 +487,7 @@ class ZCodeTui {
   private ensureAssistant(): Markdown {
     if (!this.currentAssistant) {
       this.currentAssistant = new Markdown("", 1, 0, this.theme.markdown);
-      this.transcript.addChild(this.currentAssistant);
+      this.transcript.addBlock(this.currentAssistant);
     }
     return this.currentAssistant;
   }
@@ -479,20 +495,20 @@ class ZCodeTui {
   private addUserMessage(text: string, steering: boolean, attachmentCount = 0): void {
     const prefix = steering ? "↪" : "›";
     const suffix = attachmentCount > 0 ? `  [${attachmentCount} image${attachmentCount === 1 ? "" : "s"}]` : "";
-    this.transcript.addChild(
+    this.transcript.addBlock(
       new Text(`${this.theme.accent(prefix)} ${text}${this.theme.muted(suffix)}`, 1, 0, this.theme.userBackground)
     );
     this.ui.requestRender();
   }
 
   private addAssistantMessage(text: string): void {
-    this.transcript.addChild(new Markdown(text, 1, 0, this.theme.markdown));
+    this.transcript.addBlock(new Markdown(text, 1, 0, this.theme.markdown));
     this.lastAssistantText = text;
     this.ui.requestRender();
   }
 
   private addNotice(text: string, style: "warning" | "error" | "muted"): void {
-    this.transcript.addChild(new Text(this.theme[style](text), 1, 0));
+    this.transcript.addBlock(new Text(this.theme[style](text), 1, 0));
     this.ui.requestRender();
   }
 
@@ -509,7 +525,7 @@ class ZCodeTui {
       inputText: ""
     };
     this.toolViews.set(id, tool);
-    this.transcript.addChild(tool.view);
+    this.transcript.addBlock(tool.view);
     return tool;
   }
 
@@ -730,7 +746,7 @@ class ZCodeTui {
     if (this.workflowView) this.workflowView.setText(text);
     else {
       this.workflowView = new Markdown(text, 1, 0, this.theme.markdown);
-      this.transcript.addChild(this.workflowView);
+      this.transcript.addBlock(this.workflowView);
     }
     this.ui.requestRender();
   }
@@ -849,8 +865,47 @@ class ZCodeTui {
   }
 
   private updateMetadata(): void {
-    const effort = this.thoughtLevel ? ` · ${this.thoughtLevel}` : "";
-    this.status.setText(` ${this.theme.muted(`${this.model} · ${this.mode}${effort}`)}`);
+    const fields: StatusLineField[] = [
+      {
+        text: this.theme.muted(this.model),
+        priority: 100,
+        required: true
+      },
+      {
+        text: this.theme.muted(this.mode),
+        priority: 70
+      }
+    ];
+    if (this.thoughtLevel) {
+      fields.push({
+        text: this.theme.muted(this.thoughtLevel),
+        priority: 60
+      });
+    }
+
+    const remaining = contextRemainingPercent(this.sessionMetrics);
+    if (remaining !== undefined) {
+      const style = remaining <= 10
+        ? this.theme.error
+        : remaining <= 20
+          ? this.theme.warning
+          : this.theme.muted;
+      fields.push({
+        text: style(`${remaining}% context left`),
+        compactText: style(`ctx ${remaining}%`),
+        priority: 90
+      });
+    }
+    if (this.sessionMetrics.totalTokens !== undefined) {
+      const tokens = formatTokens(this.sessionMetrics.totalTokens);
+      fields.push({
+        text: this.theme.muted(`${tokens} tokens`),
+        compactText: this.theme.muted(`${tokens} tok`),
+        priority: 20
+      });
+    }
+
+    this.status.setFields(fields, this.theme.muted(" · "));
     this.ui.requestRender();
   }
 
@@ -896,6 +951,31 @@ class ZCodeTui {
       } while (this.goalRefreshPending);
     } finally {
       this.goalRefreshInFlight = false;
+    }
+  }
+
+  private async refreshSessionUsage(): Promise<void> {
+    if (!this.options.readSessionUsage) return;
+    if (this.usageRefreshInFlight) {
+      this.usageRefreshPending = true;
+      return;
+    }
+    this.usageRefreshInFlight = true;
+    try {
+      do {
+        this.usageRefreshPending = false;
+        try {
+          this.sessionMetrics = mergeMetrics(
+            this.sessionMetrics,
+            usageMetrics(await this.options.readSessionUsage())
+          );
+          this.updateMetadata();
+        } catch {
+          // Usage is supplementary and must not interrupt the active turn.
+        }
+      } while (this.usageRefreshPending);
+    } finally {
+      this.usageRefreshInFlight = false;
     }
   }
 
