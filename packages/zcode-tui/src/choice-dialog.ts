@@ -90,7 +90,7 @@ export function choose(
       choicesByValue.set(value, item);
       return { value, label: item.label, description: item.description };
     });
-    const maxVisible = Math.max(1, Math.min(8, searchableItems.length, ui.terminal.rows - 10));
+    const maxVisible = Math.max(1, Math.min(8, searchableItems.length, ui.terminal.rows - 11));
     const list = new SelectList(searchableItems, maxVisible, theme.select);
     list.setSelectedIndex(options.selectedIndex ?? 0);
     const dialog = new ChoiceDialog(

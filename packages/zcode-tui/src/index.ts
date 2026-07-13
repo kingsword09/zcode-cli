@@ -43,6 +43,12 @@ import {
   modelPicker,
   type PickerSpec
 } from "./selectors.ts";
+import {
+  executionMode,
+  nextAutonomyMode,
+  nextPickerCommand,
+  toggledWorkMode
+} from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { toolCard, toolSucceeded } from "./tool-view.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
@@ -72,6 +78,7 @@ class ZCodeTui {
   private readonly toolViews = new Map<string, ToolViewState>();
   private pendingAttachments: PromptImageAttachment[] = [];
   private mode: string;
+  private lastExecutionMode: string;
   private model: string;
   private thoughtLevel?: string;
   private modelOptions: unknown[];
@@ -82,10 +89,12 @@ class ZCodeTui {
   private workflowView?: Markdown;
   private workflowRefreshInFlight = false;
   private choiceDepth = 0;
+  private settingSwitchInFlight = false;
 
   constructor(private readonly options: TuiOptions) {
     this.theme = createTheme(!options.noColor && !process.env.NO_COLOR);
     this.mode = options.initialMode ?? "build";
+    this.lastExecutionMode = executionMode(this.mode);
     this.model = modelLabel(options.initialModel);
     this.thoughtLevel = options.initialThoughtLevel;
     this.modelOptions = [...(options.modelOptions ?? [])];
@@ -143,7 +152,10 @@ class ZCodeTui {
     this.ui.addChild(this.editor);
     this.ui.addChild(
       new Text(
-        this.theme.muted("Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+C cancel/exit · /help"),
+        this.theme.muted([
+          "Shift+Tab mode · Ctrl+N model · Ctrl+L autonomy · Tab effort",
+          "Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+C cancel/exit · /help"
+        ].join("\n")),
         1,
         0
       )
@@ -181,8 +193,22 @@ class ZCodeTui {
 
   private bindInput(): void {
     this.ui.addInputListener((data) => {
-      if (this.choiceDepth > 0 && (matchesKey(data, "ctrl+c") || matchesKey(data, "escape"))) {
-        return undefined;
+      if (this.choiceDepth > 0) return undefined;
+      if (matchesKey(data, "shift+tab")) {
+        void this.switchWorkMode();
+        return { consume: true };
+      }
+      if (matchesKey(data, "ctrl+n")) {
+        void this.switchModel();
+        return { consume: true };
+      }
+      if (matchesKey(data, "ctrl+l")) {
+        void this.switchAutonomy();
+        return { consume: true };
+      }
+      if (matchesKey(data, "tab") && !this.editor.getText()) {
+        void this.switchEffort();
+        return { consume: true };
       }
       if (matchesKey(data, "ctrl+v")) {
         void this.attachClipboardImage();
@@ -261,14 +287,16 @@ class ZCodeTui {
     if (isModelPickerRequest(input) && await this.showCommandPicker(
       "Select model",
       `Current model: ${this.model}.`,
-      modelPicker(this.modelOptions, this.model)
+      modelPicker(this.modelOptions, this.model),
+      true
     )) {
       return;
     }
     if (isEffortPickerRequest(input) && await this.showCommandPicker(
       "Select reasoning effort",
       `Current reasoning effort: ${this.thoughtLevel ?? "default"}.`,
-      effortPicker(this.effortOptions, this.thoughtLevel)
+      effortPicker(this.effortOptions, this.thoughtLevel),
+      true
     )) {
       return;
     }
@@ -340,7 +368,7 @@ class ZCodeTui {
     return true;
   }
 
-  private async handleResult(result: unknown): Promise<void> {
+  private async handleResult(result: unknown, renderResponse = true): Promise<void> {
     if (!isRecord(result)) return;
     if (result.resetSessionProjection === true) {
       this.transcript.clear();
@@ -356,7 +384,7 @@ class ZCodeTui {
     }
 
     const response = responseText(result);
-    if (response) {
+    if (renderResponse && response) {
       if (this.currentAssistant) {
         this.currentAssistantText = response;
         this.currentAssistant.setText(response);
@@ -365,7 +393,10 @@ class ZCodeTui {
         this.addAssistantMessage(response);
       }
     }
-    if (typeof result.mode === "string") this.mode = result.mode;
+    if (typeof result.mode === "string") {
+      this.mode = result.mode;
+      this.lastExecutionMode = executionMode(this.mode, this.lastExecutionMode);
+    }
     if (result.model !== undefined) this.model = modelLabel(result.model);
     if (typeof result.thoughtLevel === "string") this.thoughtLevel = result.thoughtLevel;
     if (Array.isArray(result.modelOptions)) this.modelOptions = [...result.modelOptions];
@@ -572,7 +603,12 @@ class ZCodeTui {
     if (typeof selected?.payload === "string") void this.submit(selected.payload);
   }
 
-  private async showCommandPicker(title: string, prompt: string, picker: PickerSpec): Promise<boolean> {
+  private async showCommandPicker(
+    title: string,
+    prompt: string,
+    picker: PickerSpec,
+    silent = false
+  ): Promise<boolean> {
     if (picker.items.length === 0) return false;
     const selected = await this.showChoice({
       title,
@@ -580,8 +616,85 @@ class ZCodeTui {
       items: picker.items.map((item) => ({ ...item, payload: item.command })),
       selectedIndex: picker.selectedIndex
     });
-    if (typeof selected?.payload === "string") await this.submit(selected.payload);
+    if (typeof selected?.payload === "string") {
+      if (silent) await this.applySettingCommand(selected.payload);
+      else await this.submit(selected.payload);
+    }
     return true;
+  }
+
+  private shortcutAvailable(): boolean {
+    if (this.settingSwitchInFlight) return false;
+    if (this.activeSubmissions === 0) return true;
+    this.addNotice("Wait for the active turn or press Ctrl+C before switching settings.", "warning");
+    return false;
+  }
+
+  private async switchWorkMode(): Promise<void> {
+    if (!this.shortcutAvailable()) return;
+    await this.applyModeShortcut(toggledWorkMode(this.mode, this.lastExecutionMode));
+  }
+
+  private async switchAutonomy(): Promise<void> {
+    if (!this.shortcutAvailable()) return;
+    await this.applyModeShortcut(nextAutonomyMode(this.mode, this.lastExecutionMode));
+  }
+
+  private async applyModeShortcut(nextMode: string): Promise<void> {
+    if (this.settingSwitchInFlight) return;
+    if (!this.options.setMode) {
+      this.addNotice("Mode switching is unavailable in this runtime.", "warning");
+      return;
+    }
+    this.settingSwitchInFlight = true;
+    try {
+      const result = await this.options.setMode(nextMode);
+      this.mode = isRecord(result) ? asString(result.mode) ?? nextMode : asString(result) ?? nextMode;
+      this.lastExecutionMode = executionMode(this.mode, this.lastExecutionMode);
+      this.updateStatus("ready");
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      this.settingSwitchInFlight = false;
+    }
+  }
+
+  private async switchModel(): Promise<void> {
+    if (!this.shortcutAvailable()) return;
+    const command = nextPickerCommand(modelPicker(this.modelOptions, this.model), this.model);
+    if (!command) {
+      this.addNotice("No alternate model is available.", "muted");
+      return;
+    }
+    await this.applySettingCommand(command);
+  }
+
+  private async switchEffort(): Promise<void> {
+    if (!this.shortcutAvailable()) return;
+    const command = nextPickerCommand(effortPicker(this.effortOptions, this.thoughtLevel), this.thoughtLevel);
+    if (!command) {
+      this.addNotice("No alternate reasoning effort is available.", "muted");
+      return;
+    }
+    await this.applySettingCommand(command);
+  }
+
+  private async applySettingCommand(command: string): Promise<void> {
+    if (this.settingSwitchInFlight) return;
+    this.settingSwitchInFlight = true;
+    this.updateStatus("switching…");
+    try {
+      const result = await this.options.submitPrompt(command, {
+        inputId: `input_${crypto.randomUUID()}`,
+        queryId: `query_${crypto.randomUUID()}`
+      });
+      await this.handleResult(result, false);
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      this.settingSwitchInFlight = false;
+      this.updateStatus("ready");
+    }
   }
 
   private async showMcpPicker(): Promise<boolean> {
