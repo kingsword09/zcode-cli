@@ -41,6 +41,48 @@ describe("ZCode event adapter", () => {
     });
   });
 
+  test("normalizes raw runtime tool lifecycle events", () => {
+    expect(normalizeEvent({
+      type: "tool_call_started",
+      payload: {
+        toolCallId: "call_1",
+        toolName: "Read",
+        startedAt: 1_752_400_000_000
+      }
+    })).toMatchObject({
+      type: "tool_call_started",
+      kind: "started",
+      toolCallId: "call_1",
+      toolName: "Read"
+    });
+
+    expect(normalizeEvent({
+      type: "tool_call_result",
+      payload: {
+        toolCallId: "call_1",
+        result: { success: true, content: "source text" }
+      }
+    })).toMatchObject({
+      type: "tool_call_result",
+      kind: "result",
+      toolCallId: "call_1",
+      result: { success: true, content: "source text" }
+    });
+
+    expect(normalizeEvent({
+      type: "tool_call_error",
+      payload: {
+        toolCallId: "call_2",
+        error: { message: "Command failed" }
+      }
+    })).toMatchObject({
+      type: "tool_call_error",
+      kind: "error",
+      toolCallId: "call_2",
+      error: { message: "Command failed" }
+    });
+  });
+
   test("formats model, history and restored transcript shapes", () => {
     expect(modelLabel({ providerId: "zai", modelId: "glm-5" })).toBe("zai/glm-5");
     expect(historyText({ text: "previous prompt" })).toBe("previous prompt");

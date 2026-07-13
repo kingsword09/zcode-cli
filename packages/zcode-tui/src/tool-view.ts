@@ -1,9 +1,12 @@
 import {
+  Box,
   Container,
   Image,
+  Spacer,
   Text
 } from "@earendil-works/pi-tui";
 
+import { isPlanUpdateTool, planCard, PlanUpdateView } from "./plan-view.ts";
 import { asString, isRecord } from "./types.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 
@@ -211,6 +214,17 @@ function statePresentation(state: string, theme: ZCodeTheme): { icon: string; su
   return { icon: theme.muted("○") };
 }
 
+function stateBackground(state: string, theme: ZCodeTheme): (text: string) => string {
+  const normalized = state.toLowerCase();
+  if (normalized === "failed" || normalized === "error" || normalized === "cancelled") {
+    return theme.toolErrorBackground;
+  }
+  if (normalized === "complete" || normalized === "completed" || normalized === "success") {
+    return theme.toolSuccessBackground;
+  }
+  return theme.toolPendingBackground;
+}
+
 function stylePreview(value: string, theme: ZCodeTheme): string {
   return truncate(value).split("\n").map((line) => {
     if (line.startsWith("+") && !line.startsWith("+++")) return theme.success(line);
@@ -220,8 +234,11 @@ function stylePreview(value: string, theme: ZCodeTheme): string {
   }).join("\n");
 }
 
-function toolText(options: ToolViewOptions, theme: ZCodeTheme): { header: string; body?: string; images: ToolImage[] } {
-  const input = parsedInput(options);
+function toolText(
+  options: ToolViewOptions,
+  theme: ZCodeTheme,
+  input = parsedInput(options)
+): { header: string; body?: string; images: ToolImage[] } {
   const presentation = statePresentation(options.state, theme);
   const summary = toolSummary(options.name, input);
   const header = [
@@ -249,10 +266,14 @@ function toolText(options: ToolViewOptions, theme: ZCodeTheme): { header: string
 
 export class ToolExecutionView extends Container {
   private options: ToolViewOptions;
+  private readonly card = new Box(1, 0);
+  private readonly imageHost = new Container();
 
   constructor(private readonly theme: ZCodeTheme, options: ToolViewOptions) {
     super();
     this.options = options;
+    this.addChild(this.card);
+    this.addChild(this.imageHost);
     this.rebuild();
   }
 
@@ -262,12 +283,25 @@ export class ToolExecutionView extends Container {
   }
 
   private rebuild(): void {
-    this.clear();
-    const rendered = toolText(this.options, this.theme);
-    this.addChild(new Text(rendered.header, 1, 0));
-    if (rendered.body) this.addChild(new Text(rendered.body, 2, 0));
+    this.card.clear();
+    this.imageHost.clear();
+    this.card.setBgFn(stateBackground(this.options.state, this.theme));
+    const input = parsedInput(this.options);
+    if (isPlanUpdateTool(this.options.name)) {
+      this.card.addChild(new PlanUpdateView(this.theme, {
+        state: this.options.state,
+        input,
+        result: this.options.result,
+        error: this.options.error
+      }));
+      return;
+    }
+    const rendered = toolText(this.options, this.theme, input);
+    this.card.addChild(new Text(rendered.header, 0, 0));
+    if (rendered.body) this.card.addChild(new Text(rendered.body, 1, 0));
+    if (rendered.images.length > 0) this.imageHost.addChild(new Spacer(1));
     for (const image of rendered.images) {
-      this.addChild(new Image(
+      this.imageHost.addChild(new Image(
         image.data,
         image.mimeType,
         { fallbackColor: this.theme.muted },
@@ -285,6 +319,14 @@ export function toolSucceeded(value: unknown): boolean {
 
 // Pure text helper retained for focused tests and non-interactive consumers.
 export function toolCard(options: ToolViewOptions): string {
+  if (isPlanUpdateTool(options.name)) {
+    return planCard({
+      state: options.state,
+      input: parsedInput(options),
+      result: options.result,
+      error: options.error
+    });
+  }
   const rendered = toolText(options, createTheme(false));
   return [rendered.header, rendered.body].filter(Boolean).join("\n");
 }

@@ -51,6 +51,20 @@ describe("TUI tool execution view", () => {
     expect(output).toContain("+new");
   });
 
+  test("uses a quiet full-width background that recedes after completion", () => {
+    const view = new ToolExecutionView(createTheme(true), {
+      name: "Bash",
+      state: "running",
+      input: { command: "bun test" }
+    });
+
+    expect(view.render(72).join("\n")).toContain("\x1b[48;5;236m");
+    view.update({ name: "Bash", state: "complete", input: { command: "bun test" } });
+    expect(view.render(72).join("\n")).toContain("\x1b[48;5;234m");
+    view.update({ name: "Bash", state: "failed", input: { command: "bun test" } });
+    expect(view.render(72).join("\n")).toContain("\x1b[48;5;52m");
+  });
+
   test("hides metadata-only success results and surfaces embedded errors", () => {
     expect(toolCard({
       name: "Write",

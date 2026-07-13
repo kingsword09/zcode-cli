@@ -21,6 +21,12 @@ const assistantResponse = [
   "```"
 ].join("\n");
 
+const planTodos = [
+  { content: "Map runtime events", status: "completed", priority: "high" },
+  { content: "Render plan updates", status: "completed", priority: "high" },
+  { content: "Verify the TUI", status: "in_progress", priority: "medium" }
+];
+
 const workflowPanel = (status = "running") => ({
   title: "/workflows",
   selectedRunId: "run_feature",
@@ -47,6 +53,10 @@ const workflowPanel = (status = "running") => ({
 
 async function emit(options: PromptCallOptions, event: unknown): Promise<void> {
   await options.onEvent?.({ type: "model.streaming", payload: event });
+}
+
+async function emitRuntime(options: PromptCallOptions, type: string, payload: unknown): Promise<void> {
+  await options.onEvent?.({ type, payload });
 }
 
 await runTui({
@@ -98,6 +108,35 @@ await runTui({
     if (prompt.text !== "inspect" || image?.type !== "image" || typeof image.content !== "string") {
       throw new Error("Feature smoke prompt did not include the clipboard image attachment.");
     }
+    await emit(options, { kind: "reasoning_delta", delta: "Inspecting " });
+    await emit(options, { kind: "reasoning_delta", delta: "the repository before using tools." });
+    await emit(options, { kind: "tool_input_start", toolCallId: "call_plan", toolName: "TodoWrite" });
+    await emit(options, {
+      kind: "tool_input_delta",
+      toolCallId: "call_plan",
+      delta: JSON.stringify({ todos: planTodos })
+    });
+    await emit(options, {
+      kind: "tool_call",
+      toolCallId: "call_plan",
+      toolName: "TodoWrite",
+      input: { todos: planTodos }
+    });
+    await emitRuntime(options, "tool_call_scheduled", {
+      toolCallId: "call_plan",
+      toolName: "TodoWrite",
+      input: { todos: planTodos }
+    });
+    await emitRuntime(options, "tool_call_started", {
+      toolCallId: "call_plan",
+      toolName: "TodoWrite",
+      startedAt: Date.now()
+    });
+    await emitRuntime(options, "tool_call_result", {
+      toolCallId: "call_plan",
+      result: { success: true, output: { todos: planTodos } }
+    });
+    await emit(options, { kind: "text_delta", delta: "I will inspect the repository first." });
     await emit(options, { kind: "tool_input_start", toolCallId: "call_read", toolName: "Read" });
     await emit(options, { kind: "tool_input_delta", toolCallId: "call_read", delta: '{"file_path":"demo.ts"}' });
     await emit(options, {
@@ -106,12 +145,21 @@ await runTui({
       toolName: "Read",
       input: { file_path: "demo.ts" }
     });
-    await emit(options, {
-      kind: "result",
+    await emitRuntime(options, "tool_call_scheduled", {
       toolCallId: "call_read",
       toolName: "Read",
+      input: { file_path: "demo.ts" }
+    });
+    await emitRuntime(options, "tool_call_started", {
+      toolCallId: "call_read",
+      toolName: "Read",
+      startedAt: Date.now()
+    });
+    await emitRuntime(options, "tool_call_result", {
+      toolCallId: "call_read",
       result: { success: true, output: "source text" }
     });
+    await emit(options, { kind: "reasoning_delta", delta: "Synthesizing the final response." });
     await emit(options, { kind: "text_delta", delta: assistantResponse });
     await Bun.sleep(1_100);
     return {
