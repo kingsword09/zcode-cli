@@ -6,6 +6,11 @@ import {
   Text
 } from "@earendil-works/pi-tui";
 
+import {
+  fileDiffCard,
+  fileDiffsForTool,
+  FileDiffView
+} from "./file-diff-view.ts";
 import { isPlanUpdateTool, planCard, PlanUpdateView } from "./plan-view.ts";
 import { asString, isRecord } from "./types.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
@@ -127,7 +132,7 @@ function mutationInput(name: string, input: unknown): string | undefined {
   if (!isRecord(input)) return undefined;
   const normalized = name.toLowerCase().replace(/[^a-z]/gu, "");
   if (!normalized.includes("write") && !normalized.includes("edit") && !normalized.includes("patch")) return undefined;
-  return recordString(input, ["patch", "diff", "new_string", "newString", "content"]);
+  return recordString(input, ["patch_text", "patchText", "patch", "diff", "new_string", "newString", "content"]);
 }
 
 function isKnownCompactTool(name: string): boolean {
@@ -296,6 +301,16 @@ export class ToolExecutionView extends Container {
       }));
       return;
     }
+    const diffs = fileDiffsForTool(this.options.name, input, this.options.result, this.options.state);
+    if (diffs.length > 0) {
+      this.card.setBgFn(undefined);
+      this.card.addChild(new FileDiffView(this.theme, {
+        toolName: this.options.name,
+        state: this.options.state,
+        diffs
+      }));
+      return;
+    }
     const rendered = toolText(this.options, this.theme, input);
     this.card.addChild(new Text(rendered.header, 0, 0));
     if (rendered.body) this.card.addChild(new Text(rendered.body, 1, 0));
@@ -327,6 +342,11 @@ export function toolCard(options: ToolViewOptions): string {
       error: options.error
     });
   }
-  const rendered = toolText(options, createTheme(false));
+  const input = parsedInput(options);
+  const diffs = fileDiffsForTool(options.name, input, options.result, options.state);
+  if (diffs.length > 0) {
+    return fileDiffCard({ toolName: options.name, state: options.state, diffs });
+  }
+  const rendered = toolText(options, createTheme(false), input);
   return [rendered.header, rendered.body].filter(Boolean).join("\n");
 }

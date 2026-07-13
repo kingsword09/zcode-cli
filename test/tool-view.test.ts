@@ -39,16 +39,22 @@ describe("TUI tool execution view", () => {
       name: "ApplyPatch",
       state: "running",
       input: {
-        path: "src/app.ts",
-        patch: "@@ -1 +1 @@\n-old\n+new"
+        patch_text: [
+          "*** Begin Patch",
+          "*** Update File: src/app.ts",
+          "@@ -1,1 +1,1 @@",
+          "-old",
+          "+new",
+          "*** End Patch"
+        ].join("\n")
       }
     });
     const output = view.render(80).map((line) => line.trimEnd()).join("\n");
 
-    expect(output).toContain("● ApplyPatch src/app.ts · running");
-    expect(output).toContain("@@ -1 +1 @@");
-    expect(output).toContain("-old");
-    expect(output).toContain("+new");
+    expect(output).toContain("● ApplyPatch src/app.ts +1 -1");
+    expect(output).toContain("@@ -1,1 +1,1 @@");
+    expect(output).toContain("│- old");
+    expect(output).toContain("│+ new");
   });
 
   test("uses a quiet full-width background that recedes after completion", () => {

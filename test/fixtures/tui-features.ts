@@ -159,6 +159,50 @@ await runTui({
       toolCallId: "call_read",
       result: { success: true, output: "source text" }
     });
+    await emit(options, { kind: "tool_input_start", toolCallId: "call_edit", toolName: "Edit" });
+    await emit(options, {
+      kind: "tool_call",
+      toolCallId: "call_edit",
+      toolName: "Edit",
+      input: {
+        file_path: "demo.ts",
+        old_string: "const value = 1;",
+        new_string: "const value = 2;"
+      }
+    });
+    await emitRuntime(options, "tool_call_scheduled", {
+      toolCallId: "call_edit",
+      toolName: "Edit",
+      input: {
+        file_path: "demo.ts",
+        old_string: "const value = 1;",
+        new_string: "const value = 2;"
+      }
+    });
+    await emitRuntime(options, "tool_call_started", {
+      toolCallId: "call_edit",
+      toolName: "Edit",
+      startedAt: Date.now()
+    });
+    await emitRuntime(options, "tool_call_result", {
+      toolCallId: "call_edit",
+      result: {
+        success: true,
+        display: {
+          kind: "file_diff",
+          filePath: "demo.ts",
+          additions: 1,
+          deletions: 1,
+          structuredPatch: [{
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: ["-const value = 1;", "+const value = 2;"]
+          }]
+        }
+      }
+    });
     await emit(options, { kind: "reasoning_delta", delta: "Synthesizing the final response." });
     await emit(options, { kind: "text_delta", delta: assistantResponse });
     await Bun.sleep(1_100);
