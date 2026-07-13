@@ -61,6 +61,9 @@ if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 
 if (code !== 0) throw new Error(`TUI smoke test exited with ${code}.\n${plain.slice(-4_000)}`);
 if (!plain.includes("ZCode")) throw new Error(`TUI welcome screen was not rendered.\n${plain.slice(-4_000)}`);
+if (!/custom provider/i.test(plain)) {
+  throw new Error(`The custom-provider configuration hint was not rendered.\n${plain.slice(-4_000)}`);
+}
 if (!/Slash commands:|Usage:/i.test(plain)) {
   throw new Error(`The /help command did not render.\n${plain.slice(-4_000)}`);
 }

@@ -52,6 +52,118 @@ is the compatibility host for the unmodified upstream kernel.
 Set `ZCODE_NODE=/absolute/path/to/node` when the desired Node.js executable is
 not available on `PATH`.
 
+## Model access and configuration
+
+ZCode reads the user configuration from `~/.zcode/cli/config.json`. Choose one
+of these model-access paths:
+
+- Z.AI OAuth: run `zcode login`;
+- direct API key with a custom provider: use the
+  [`config.example.json`](./config.example.json) template and do not log in.
+
+### Custom provider without login
+
+From this source checkout, install the full template as the user config:
+
+```bash
+mkdir -p ~/.zcode/cli
+cp config.example.json ~/.zcode/cli/config.json
+chmod 600 ~/.zcode/cli/config.json
+```
+
+Then edit four values in `~/.zcode/cli/config.json`:
+
+1. `provider.zai.kind`: use `anthropic`, `openai-compatible`, or `openai`;
+2. `provider.zai.options.baseURL`: use the provider's API root;
+3. `provider.zai.options.apiKey`: insert the direct API key;
+4. replace `replace-with-model-id` in both `provider.zai.models` and `model`.
+
+The provider map key is deliberately `zai`. The upstream CLI 0.15.x TUI
+considers a direct API key configured only when it is stored under provider ID
+`zai` or `bigmodel`. An arbitrary provider ID is valid model configuration,
+but as the only provider it still triggers the upstream login gate. The
+display name, API format, endpoint, headers and models remain fully custom.
+
+For an Anthropic-compatible endpoint:
+
+```json
+{
+  "kind": "anthropic",
+  "options": {
+    "baseURL": "https://example.com/api/anthropic",
+    "apiKey": "YOUR_API_KEY",
+    "apiKeyRequired": true
+  }
+}
+```
+
+Use the API root, not a final `/messages` path. For an OpenAI-compatible
+endpoint, set `kind` to `openai-compatible` and normally use a root ending in
+`/v1`, not `/chat/completions`. For the official OpenAI API, use `openai`;
+`baseURL` can be omitted.
+
+The object keys form the runtime model reference:
+
+```text
+provider.<provider-id>.models.<model-id>
+                    -> <provider-id>/<model-id>
+```
+
+Set both roles to keep all work on the custom provider:
+
+```json
+{
+  "model": {
+    "main": "zai/your-model-id",
+    "lite": "zai/your-model-id"
+  }
+}
+```
+
+`main` is the normal conversation model. `lite` is used for lightweight and
+subagent work. Model IDs are case-sensitive and must match the endpoint.
+
+The no-login TUI path currently requires a non-empty `options.apiKey` in the
+local config; an environment-only API key does not satisfy the upstream login
+gate. Never commit the populated file, and keep its mode at `600`.
+
+### Use the custom provider
+
+After saving the config, no login command is required. Start the client:
+
+```bash
+bun bin/zcode.ts
+```
+
+Or, after `bun link` or an npm installation:
+
+```bash
+zcode
+```
+
+Use these commands inside the TUI:
+
+```text
+/model                         # show the active and available models
+/model zai/your-model-id       # switch to the custom provider explicitly
+/new                           # start a new session with the configured default
+```
+
+The status line should show `zai/your-model-id`. Setting both `model.main` and
+`model.lite` in the config makes the custom provider the default for normal,
+lightweight and subagent work. A resumed session may retain its previous model,
+so use `/new` after changing the default.
+
+Headless prompts use the same provider configuration:
+
+```bash
+zcode --prompt "Explain this repository"
+```
+
+`ZCODE_MODEL`, `zcode.json`, or `.zcode/config.json` can override the
+user-level default. Running `/model` does not call the provider, so it is a safe
+configuration check before the first prompt.
+
 ## Local development
 
 Install dependencies and extract the already installed macOS application:
@@ -80,12 +192,15 @@ Start the client directly:
 bun bin/zcode.ts
 ```
 
-If login is required:
+For the OAuth path:
 
 ```bash
 bun bin/zcode.ts login
 bun bin/zcode.ts
 ```
+
+For the direct API-key path, follow
+[Custom provider without login](#custom-provider-without-login) instead.
 
 Install a local `zcode` command:
 
