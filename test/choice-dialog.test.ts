@@ -18,7 +18,7 @@ describe("TUI choice dialog", () => {
       0
     );
     const host = new Container();
-    const status = new Text("ready · model · build · max", 0, 0);
+    const status = new Text("model · build · max", 0, 0);
     const focusState: { current: Component | null } = { current: null };
     const ui = {
       terminal: { rows: 24 },
@@ -45,7 +45,7 @@ describe("TUI choice dialog", () => {
     const lines = root.render(80);
     const helpIndex = lines.findIndex((line) => line.includes("help line 40"));
     const dialogIndex = lines.findIndex((line) => line.includes("Select reasoning effort"));
-    const statusIndex = lines.findIndex((line) => line.includes("ready · model"));
+    const statusIndex = lines.findIndex((line) => line.includes("model · build"));
 
     expect(helpIndex).toBeGreaterThanOrEqual(0);
     expect(dialogIndex).toBeGreaterThan(helpIndex);

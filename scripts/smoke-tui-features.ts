@@ -36,13 +36,13 @@ const actions = [
   [4_700, "\x1b[B\r"],
   [5_400, "\x16"],
   [6_000, "inspect\r"],
-  [7_100, "/mcp\r"],
-  [7_600, "\r"],
-  [8_400, "/workflows\r"],
-  [9_000, "\r"],
-  [9_600, "\x1b[B\r"],
-  [10_300, "\x1b"],
-  [10_900, "/exit\r"]
+  [7_400, "/mcp\r"],
+  [7_900, "\r"],
+  [8_700, "/workflows\r"],
+  [9_300, "\r"],
+  [9_900, "\x1b[B\r"],
+  [10_600, "\x1b"],
+  [11_200, "/exit\r"]
 ] as const;
 const timers = actions.map(([delay, input]) => setTimeout(() => terminal.write(input), delay));
 const timeout = setTimeout(() => child.kill("SIGKILL"), 18_000);
@@ -65,7 +65,7 @@ if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain
 
 for (const [label, pattern] of [
   ["long help output", /Use \/help <command> for details/i],
-  ["shortcut legend", /Shift\+Tab mode/i],
+  ["turn timer tick", /\[1s\]/i],
   ["model picker", /Select model/i],
   ["effort picker", /Select reasoning effort/i],
   ["image attachment", /1 image attached/i],
@@ -78,6 +78,10 @@ for (const [label, pattern] of [
   ["workflow stop", /Status: cancelled/i]
 ] as const) {
   if (!pattern.test(plain)) throw new Error(`Missing ${label} in feature TUI smoke.\n${plain.slice(-6_000)}`);
+}
+
+if (/Shift\+Tab mode · Ctrl\+N model/i.test(plain)) {
+  throw new Error(`Unexpected shortcut legend below the editor.\n${plain.slice(-6_000)}`);
 }
 
 let stateOffset = 0;

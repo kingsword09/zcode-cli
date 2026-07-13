@@ -51,6 +51,7 @@ import {
 } from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { toolCard, toolSucceeded } from "./tool-view.ts";
+import { turnStatusText } from "./turn-status.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
 
 interface ToolViewState {
@@ -66,6 +67,7 @@ class ZCodeTui {
   private readonly transcript = new Container();
   private readonly choiceHost = new Container();
   private readonly status: Text;
+  private readonly turnStatus: Text;
   private readonly attachmentStatus: Text;
   private readonly editor: Editor;
   private readonly done: Promise<void>;
@@ -90,6 +92,10 @@ class ZCodeTui {
   private workflowRefreshInFlight = false;
   private choiceDepth = 0;
   private settingSwitchInFlight = false;
+  private activity?: string;
+  private turnStartedAt?: number;
+  private turnElapsedMilliseconds = 0;
+  private turnTimer?: ReturnType<typeof setInterval>;
 
   constructor(private readonly options: TuiOptions) {
     this.theme = createTheme(!options.noColor && !process.env.NO_COLOR);
@@ -101,6 +107,7 @@ class ZCodeTui {
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.ui = new TUI(new ProcessTerminal(), true);
     this.status = new Text("", 0, 0);
+    this.turnStatus = new Text("", 0, 0);
     this.attachmentStatus = new Text("", 0, 0);
     this.editor = new Editor(this.ui, this.theme.editor, { paddingX: 1, autocompleteMaxVisible: 7 });
     this.done = new Promise((resolve) => {
@@ -116,12 +123,12 @@ class ZCodeTui {
     }
     this.ui.start();
     this.ui.setFocus(this.editor);
-    this.updateStatus("ready");
+    this.updateMetadata();
+    this.updateTurnStatus();
     void this.loadHistory();
     if (this.options.subscribeWorkflowEvents) {
       this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
         this.debugEvent("workflow", event);
-        this.updateStatus("workflow update");
         void this.refreshWorkflowFromEvent();
       }) ?? undefined;
     }
@@ -150,16 +157,7 @@ class ZCodeTui {
     this.ui.addChild(this.status);
     this.ui.addChild(this.attachmentStatus);
     this.ui.addChild(this.editor);
-    this.ui.addChild(
-      new Text(
-        this.theme.muted([
-          "Shift+Tab mode · Ctrl+N model · Ctrl+L autonomy · Tab effort",
-          "Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+C cancel/exit · /help"
-        ].join("\n")),
-        1,
-        0
-      )
-    );
+    this.ui.addChild(this.turnStatus);
 
     const commands = this.autocompleteCommands();
     this.editor.setAutocompleteProvider(
@@ -217,7 +215,7 @@ class ZCodeTui {
       if (matchesKey(data, "ctrl+c")) {
         if (this.turnAbortController) {
           this.turnAbortController.abort();
-          this.updateStatus("cancelling…");
+          this.updateActivity("cancelling…");
         } else if (this.editor.getText()) {
           this.editor.setText("");
         } else {
@@ -231,7 +229,7 @@ class ZCodeTui {
       }
       if (matchesKey(data, "escape") && this.turnAbortController) {
         this.turnAbortController.abort();
-        this.updateStatus("cancelling…");
+        this.updateActivity("cancelling…");
         return { consume: true };
       }
       return undefined;
@@ -309,7 +307,7 @@ class ZCodeTui {
     const abortController = new AbortController();
     if (!steering) this.turnAbortController = abortController;
     this.activeSubmissions += 1;
-    this.updateStatus(steering ? "steering…" : "working…");
+    this.updateActivity(steering ? "steering…" : "working…");
 
     const callOptions: PromptCallOptions = {
       abortSignal: abortController.signal,
@@ -349,7 +347,7 @@ class ZCodeTui {
       if (this.turnAbortController === abortController) this.turnAbortController = undefined;
       if (this.activeSubmissions === 0) {
         this.currentAssistant = undefined;
-        this.updateStatus("ready");
+        this.finishTurn();
       }
     }
   }
@@ -401,7 +399,7 @@ class ZCodeTui {
     if (typeof result.thoughtLevel === "string") this.thoughtLevel = result.thoughtLevel;
     if (Array.isArray(result.modelOptions)) this.modelOptions = [...result.modelOptions];
     if (Array.isArray(result.effortOptions)) this.effortOptions = [...result.effortOptions];
-    this.updateStatus("ready");
+    this.updateMetadata();
     this.ui.requestRender();
 
     if (isRecord(result.workflowPanel)) await this.showWorkflowPanel(result.workflowPanel);
@@ -418,11 +416,11 @@ class ZCodeTui {
       assistant.setText(this.currentAssistantText);
       this.lastAssistantText = this.currentAssistantText;
     } else if (event.kind === "reasoning_delta") {
-      this.updateStatus("thinking…");
+      this.updateActivity("thinking…");
     } else if (event.kind === "tool_input_start") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName);
       this.updateToolView(tool, "preparing");
-      this.updateStatus(`preparing ${tool.name}…`);
+      this.updateActivity(`preparing ${tool.name}…`);
     } else if (event.kind === "tool_input_delta" && event.delta) {
       const tool = this.ensureToolView(event.toolCallId, event.toolName);
       tool.inputText += event.delta;
@@ -434,7 +432,7 @@ class ZCodeTui {
       const tool = this.ensureToolView(event.toolCallId, event.toolName);
       if (event.input !== undefined) tool.input = event.input;
       this.updateToolView(tool, event.kind === "scheduled" ? "scheduled" : "running");
-      this.updateStatus(`running ${tool.name}…`);
+      this.updateActivity(`running ${tool.name}…`);
     } else if (event.kind === "progress") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName);
       this.updateToolView(tool, "running", event.result);
@@ -456,6 +454,11 @@ class ZCodeTui {
     this.currentAssistant = undefined;
     this.currentAssistantText = "";
     this.toolViews.clear();
+    this.turnStartedAt = Date.now();
+    this.turnElapsedMilliseconds = 0;
+    if (this.turnTimer) clearInterval(this.turnTimer);
+    this.turnTimer = setInterval(() => this.updateTurnStatus(), 1_000);
+    this.updateTurnStatus();
   }
 
   private ensureAssistant(): Markdown {
@@ -523,7 +526,7 @@ class ZCodeTui {
       this.addNotice("Wait for the active turn before attaching an image.", "warning");
       return;
     }
-    this.updateStatus("reading clipboard…");
+    this.updateActivity("reading clipboard…");
     try {
       const attachment = clipboardImageAttachment(await this.options.readClipboardImage());
       if (!attachment) {
@@ -536,7 +539,7 @@ class ZCodeTui {
     } catch (error) {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
     } finally {
-      this.updateStatus("ready");
+      this.updateActivity(undefined);
     }
   }
 
@@ -651,7 +654,7 @@ class ZCodeTui {
       const result = await this.options.setMode(nextMode);
       this.mode = isRecord(result) ? asString(result.mode) ?? nextMode : asString(result) ?? nextMode;
       this.lastExecutionMode = executionMode(this.mode, this.lastExecutionMode);
-      this.updateStatus("ready");
+      this.updateMetadata();
     } catch (error) {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
     } finally {
@@ -682,7 +685,6 @@ class ZCodeTui {
   private async applySettingCommand(command: string): Promise<void> {
     if (this.settingSwitchInFlight) return;
     this.settingSwitchInFlight = true;
-    this.updateStatus("switching…");
     try {
       const result = await this.options.submitPrompt(command, {
         inputId: `input_${crypto.randomUUID()}`,
@@ -693,7 +695,6 @@ class ZCodeTui {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
     } finally {
       this.settingSwitchInFlight = false;
-      this.updateStatus("ready");
     }
   }
 
@@ -793,7 +794,6 @@ class ZCodeTui {
       // The next workflow event can retry the projection refresh.
     } finally {
       this.workflowRefreshInFlight = false;
-      this.updateStatus(this.activeSubmissions > 0 ? "working…" : "ready");
     }
   }
 
@@ -841,12 +841,37 @@ class ZCodeTui {
     for (const input of history.reverse()) this.editor.addToHistory(input);
   }
 
-  private updateStatus(activity: string): void {
+  private updateMetadata(): void {
     const effort = this.thoughtLevel ? ` · ${this.thoughtLevel}` : "";
-    this.status.setText(
-      ` ${this.theme.accent(activity)}  ${this.theme.muted(`${this.model} · ${this.mode}${effort}`)}`
-    );
+    this.status.setText(` ${this.theme.muted(`${this.model} · ${this.mode}${effort}`)}`);
     this.ui.requestRender();
+  }
+
+  private updateActivity(activity: string | undefined): void {
+    this.activity = activity;
+    this.updateTurnStatus();
+  }
+
+  private updateTurnStatus(): void {
+    if (this.turnStartedAt !== undefined) {
+      this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
+    }
+    const text = turnStatusText(this.activity, this.turnElapsedMilliseconds);
+    this.turnStatus.setText(` ${this.activity ? this.theme.accent(text) : this.theme.muted(text)}`);
+    this.ui.requestRender();
+  }
+
+  private finishTurn(): void {
+    if (this.turnStartedAt !== undefined) {
+      this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
+      this.turnStartedAt = undefined;
+    }
+    if (this.turnTimer) {
+      clearInterval(this.turnTimer);
+      this.turnTimer = undefined;
+    }
+    this.activity = undefined;
+    this.updateTurnStatus();
   }
 
   private debugEvent(channel: string, value: unknown): void {
@@ -863,6 +888,7 @@ class ZCodeTui {
     if (this.stopped) return;
     this.stopped = true;
     this.turnAbortController?.abort();
+    if (this.turnTimer) clearInterval(this.turnTimer);
     this.unsubscribeWorkflow?.();
     this.ui.stop();
     this.resolveDone();
