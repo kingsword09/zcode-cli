@@ -74,8 +74,15 @@ for (const [label, pattern] of [
   ["model picker", /Select model/i],
   ["effort picker", /Select reasoning effort/i],
   ["image attachment", /1 image attached/i],
+  ["completed thinking card", /◇ Thought/i],
+  ["reasoning content", /Inspecting the repository before using tools\./i],
+  ["updated plan", /● Updated Plan/i],
+  ["plan summary", /2 completed · 1 in progress · 0 pending/i],
+  ["active plan item", /□ Verify the TUI/i],
+  ["pre-tool assistant commentary", /I will inspect the repository first\./i],
   ["tool execution", /✓ Read demo\.ts/i],
   ["tool result", /source text/i],
+  ["final assistant response", /Feature prompt complete\./i],
   ["Mermaid diagram", /◇ Mermaid · flowchart/i],
   ["CJK Mermaid nodes", /用户输入[\s\S]*编辑器面板/i],
   ["MCP picker", /MCP servers/i],
@@ -89,6 +96,10 @@ for (const [label, pattern] of [
 
 if (/Shift\+Tab mode · Ctrl\+N model/i.test(plain)) {
   throw new Error(`Unexpected shortcut legend below the editor.\n${plain.slice(-6_000)}`);
+}
+
+if (/\b(?:ready|switching)\b/i.test(plain)) {
+  throw new Error(`Unexpected transient state log in feature TUI smoke.\n${plain.slice(-6_000)}`);
 }
 
 let stateOffset = 0;

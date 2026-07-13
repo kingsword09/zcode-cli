@@ -18,6 +18,10 @@ export interface ZCodeTheme {
   muted: (text: string) => string;
   bold: (text: string) => string;
   userBackground: (text: string) => string;
+  thinkingBackground: (text: string) => string;
+  toolPendingBackground: (text: string) => string;
+  toolSuccessBackground: (text: string) => string;
+  toolErrorBackground: (text: string) => string;
   editor: EditorTheme;
   markdown: MarkdownTheme;
   select: SelectListTheme;
@@ -36,6 +40,10 @@ export function createTheme(enabled: boolean): ZCodeTheme {
   const code = ansi("38;5;117", enabled);
   const quote = ansi("38;5;109", enabled);
   const userBackground = ansi("48;5;236", enabled);
+  const thinkingBackground = ansi("48;5;235", enabled);
+  const toolPendingBackground = ansi("48;5;236", enabled);
+  const toolSuccessBackground = ansi("48;5;234", enabled);
+  const toolErrorBackground = ansi("48;5;52", enabled);
 
   const select: SelectListTheme = {
     selectedPrefix: accent,
@@ -53,6 +61,10 @@ export function createTheme(enabled: boolean): ZCodeTheme {
     muted,
     bold,
     userBackground,
+    thinkingBackground,
+    toolPendingBackground,
+    toolSuccessBackground,
+    toolErrorBackground,
     select,
     editor: {
       borderColor: accent,

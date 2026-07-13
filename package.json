@@ -1,6 +1,6 @@
 {
   "name": "zcode-app-cli",
-  "version": "3.3.4",
+  "version": "3.3.5",
   "description": "Unofficial Bun and pi-tui terminal client for the ZCode agent runtime",
   "type": "module",
   "bin": {

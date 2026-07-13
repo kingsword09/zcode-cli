@@ -17,6 +17,17 @@ function nestedRecord(record: UnknownRecord, key: string): UnknownRecord | undef
   return isRecord(value) ? value : undefined;
 }
 
+function runtimeToolKind(type: string | undefined): string | undefined {
+  switch (type) {
+    case "tool_call_scheduled": return "scheduled";
+    case "tool_call_started": return "started";
+    case "tool_call_progress": return "progress";
+    case "tool_call_result": return "result";
+    case "tool_call_error": return "error";
+    default: return undefined;
+  }
+}
+
 export function normalizeEvent(value: unknown): StreamEvent | null {
   if (!isRecord(value)) return null;
   const params = nestedRecord(value, "params");
@@ -24,10 +35,11 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
   const event = payload && (nestedRecord(payload, "event") ?? nestedRecord(payload, "streamEvent"));
   const body = event ?? payload ?? value;
   const toolCall = nestedRecord(body, "toolCall");
+  const type = asString(value.type) ?? (params && asString(params.type));
 
   return {
-    type: asString(value.type) ?? (params && asString(params.type)),
-    kind: asString(body.kind),
+    type,
+    kind: asString(body.kind) ?? runtimeToolKind(type),
     delta: asString(body.delta),
     toolName: asString(body.toolName) ?? (toolCall && (asString(toolCall.name) ?? asString(toolCall.toolName))),
     toolCallId: asString(body.toolCallId) ?? (toolCall && (asString(toolCall.id) ?? asString(toolCall.toolCallId))),

@@ -19,6 +19,7 @@ import {
   promptInput,
   type PromptImageAttachment
 } from "./attachments.ts";
+import { AssistantStream } from "./assistant-stream.ts";
 import { choose, type ChoiceItem } from "./choice-dialog.ts";
 import {
   historyText,
@@ -61,6 +62,7 @@ import {
 } from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
+import { ThinkingView } from "./thinking-view.ts";
 import { ToolExecutionView, toolSucceeded } from "./tool-view.ts";
 import { Transcript } from "./transcript.ts";
 import { turnStatusText } from "./turn-status.ts";
@@ -73,6 +75,18 @@ interface ToolViewState {
   inputText: string;
 }
 
+const toolLifecycleEventKinds = new Set([
+  "tool_input_start",
+  "tool_input_delta",
+  "tool_input_end",
+  "tool_call",
+  "scheduled",
+  "started",
+  "progress",
+  "result",
+  "error"
+]);
+
 class ZCodeTui {
   private readonly theme: ZCodeTheme;
   private readonly ui: TUI;
@@ -82,13 +96,13 @@ class ZCodeTui {
   private readonly turnStatus: FooterBar;
   private readonly attachmentStatus: Text;
   private readonly editor: Editor;
+  private readonly assistantStream: AssistantStream;
   private readonly done: Promise<void>;
   private resolveDone!: () => void;
   private stopped = false;
   private activeSubmissions = 0;
   private turnAbortController?: AbortController;
-  private currentAssistant?: RichMarkdown;
-  private currentAssistantText = "";
+  private currentThinking?: ThinkingView;
   private readonly toolViews = new Map<string, ToolViewState>();
   private pendingAttachments: PromptImageAttachment[] = [];
   private mode: string;
@@ -128,6 +142,7 @@ class ZCodeTui {
     this.turnStatus = new FooterBar();
     this.attachmentStatus = new Text("", 0, 0);
     this.editor = new Editor(this.ui, this.theme.editor, { paddingX: 1, autocompleteMaxVisible: 7 });
+    this.assistantStream = new AssistantStream(this.theme, (component) => this.transcript.addBlock(component));
     this.done = new Promise((resolve) => {
       this.resolveDone = resolve;
     });
@@ -267,8 +282,8 @@ class ZCodeTui {
     }
     if (input === "/clear") {
       this.transcript.clear();
-      this.currentAssistant = undefined;
-      this.currentAssistantText = "";
+      this.assistantStream.beginTurn();
+      this.currentThinking = undefined;
       this.toolViews.clear();
       this.workflowView = undefined;
       this.ui.requestRender(true);
@@ -366,7 +381,6 @@ class ZCodeTui {
       this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
       if (this.turnAbortController === abortController) this.turnAbortController = undefined;
       if (this.activeSubmissions === 0) {
-        this.currentAssistant = undefined;
         this.finishTurn();
       }
       void this.refreshGoal();
@@ -392,8 +406,8 @@ class ZCodeTui {
     if (!isRecord(result)) return;
     if (result.resetSessionProjection === true) {
       this.transcript.clear();
-      this.currentAssistant = undefined;
-      this.currentAssistantText = "";
+      this.assistantStream.beginTurn();
+      this.currentThinking = undefined;
       this.toolViews.clear();
       this.workflowView = undefined;
       this.sessionMetrics = {};
@@ -406,13 +420,8 @@ class ZCodeTui {
 
     const response = responseText(result);
     if (renderResponse && response) {
-      if (this.currentAssistant) {
-        this.currentAssistantText = response;
-        this.currentAssistant.setText(response);
-        this.lastAssistantText = response;
-      } else {
-        this.addAssistantMessage(response);
-      }
+      this.completeThinking();
+      this.lastAssistantText = this.assistantStream.reconcile(response);
     }
     if (typeof result.mode === "string") {
       this.mode = result.mode;
@@ -434,13 +443,17 @@ class ZCodeTui {
     this.debugEvent("session", value);
     const event = normalizeEvent(value);
     if (!event) return;
+    if (event.kind && toolLifecycleEventKinds.has(event.kind)) {
+      this.completeThinking();
+      this.assistantStream.breakSegment();
+    }
     if (event.kind === "text_delta" && event.delta) {
-      const assistant = this.ensureAssistant();
-      this.currentAssistantText += event.delta;
-      assistant.setText(this.currentAssistantText);
-      this.lastAssistantText = this.currentAssistantText;
+      this.completeThinking();
+      this.lastAssistantText = this.assistantStream.append(event.delta);
     } else if (event.kind === "reasoning_delta") {
+      this.assistantStream.breakSegment();
       this.updateActivity("thinking…");
+      if (event.delta && (this.currentThinking || event.delta.trim())) this.appendThinking(event.delta);
     } else if (event.kind === "tool_input_start") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName);
       this.updateToolView(tool, "preparing");
@@ -475,8 +488,8 @@ class ZCodeTui {
   }
 
   private beginTurn(): void {
-    this.currentAssistant = undefined;
-    this.currentAssistantText = "";
+    this.completeThinking();
+    this.assistantStream.beginTurn();
     this.toolViews.clear();
     this.turnStartedAt = Date.now();
     this.turnElapsedMilliseconds = 0;
@@ -485,12 +498,18 @@ class ZCodeTui {
     this.updateTurnStatus();
   }
 
-  private ensureAssistant(): RichMarkdown {
-    if (!this.currentAssistant) {
-      this.currentAssistant = new RichMarkdown("", 1, this.theme);
-      this.transcript.addBlock(this.currentAssistant);
+  private appendThinking(delta: string): void {
+    if (!this.currentThinking) {
+      this.currentThinking = new ThinkingView(this.theme);
+      this.transcript.addBlock(this.currentThinking);
     }
-    return this.currentAssistant;
+    this.currentThinking.append(delta);
+  }
+
+  private completeThinking(): void {
+    if (!this.currentThinking) return;
+    this.currentThinking.complete();
+    this.currentThinking = undefined;
   }
 
   private addUserMessage(text: string, steering: boolean, attachmentCount = 0): void {
@@ -984,6 +1003,8 @@ class ZCodeTui {
   }
 
   private finishTurn(): void {
+    this.completeThinking();
+    this.assistantStream.breakSegment();
     if (this.turnStartedAt !== undefined) {
       this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
       this.turnStartedAt = undefined;
