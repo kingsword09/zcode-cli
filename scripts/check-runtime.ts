@@ -14,6 +14,12 @@ if (!existsSync(tui)) throw new Error("The local @zcode/tui adapter is missing; 
 if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode runtime.");
 if (typeof Bun.Terminal !== "function") throw new Error("This Bun build does not provide Bun.Terminal.");
 
+const runtimeSource = await Bun.file(runtime).text();
+if (!runtimeSource.includes(".readGoal=async()=>await(await")
+  || !/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtimeSource)) {
+  throw new Error("The structured TUI goal bridge is missing; run `bun run sync` again.");
+}
+
 async function execute(
   command: string,
   args: string[],

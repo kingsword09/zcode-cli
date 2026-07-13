@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { chooseArtifact, manifestUrl, parseArgs } from "../scripts/sync-runtime.ts";
+import {
+  chooseArtifact,
+  manifestUrl,
+  parseArgs,
+  patchRuntimeTuiGoalBridge
+} from "../scripts/sync-runtime.ts";
 
 describe("runtime synchronization", () => {
   test("parseArgs uses the CI-safe Linux default", () => {
@@ -26,5 +31,20 @@ describe("runtime synchronization", () => {
     };
     expect(chooseArtifact(manifest, "linux").url).toBe("ZCode.deb");
     expect(() => chooseArtifact({ files: [] }, "linux")).toThrow(/No \.deb artifact/);
+  });
+
+  test("injects a structured goal reader into the official TUI adapter", () => {
+    const runtime = [
+      "E.sendInput=async(A,$)=>{return Kvt(await S(),D,O1(t))},",
+      "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
+      "CVr(E,S,r);",
+      "return c({recallPreviousInput:g.recallPreviousInput,sendInput:g.sendInput,submitPrompt:g})"
+    ].join("");
+    const patched = patchRuntimeTuiGoalBridge(runtime);
+
+    expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
+    expect(patched).toContain("readGoal:g.readGoal,recallPreviousInput:g.recallPreviousInput");
+    expect(patchRuntimeTuiGoalBridge(patched)).toBe(patched);
+    expect(() => patchRuntimeTuiGoalBridge("incompatible runtime")).toThrow(/incompatible/);
   });
 });

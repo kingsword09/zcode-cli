@@ -27,6 +27,8 @@ import {
   responseText,
   restoredMessages
 } from "./events.ts";
+import { FooterBar } from "./footer-bar.ts";
+import { goalStatusText, normalizeGoal, type GoalState } from "./goal-status.ts";
 import {
   formatWorkflowPanel,
   isMcpPickerRequest,
@@ -67,7 +69,7 @@ class ZCodeTui {
   private readonly transcript = new Container();
   private readonly choiceHost = new Container();
   private readonly status: Text;
-  private readonly turnStatus: Text;
+  private readonly turnStatus: FooterBar;
   private readonly attachmentStatus: Text;
   private readonly editor: Editor;
   private readonly done: Promise<void>;
@@ -96,6 +98,9 @@ class ZCodeTui {
   private turnStartedAt?: number;
   private turnElapsedMilliseconds = 0;
   private turnTimer?: ReturnType<typeof setInterval>;
+  private goal?: GoalState;
+  private goalRefreshInFlight = false;
+  private goalRefreshPending = false;
 
   constructor(private readonly options: TuiOptions) {
     this.theme = createTheme(!options.noColor && !process.env.NO_COLOR);
@@ -107,7 +112,7 @@ class ZCodeTui {
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.ui = new TUI(new ProcessTerminal(), true);
     this.status = new Text("", 0, 0);
-    this.turnStatus = new Text("", 0, 0);
+    this.turnStatus = new FooterBar();
     this.attachmentStatus = new Text("", 0, 0);
     this.editor = new Editor(this.ui, this.theme.editor, { paddingX: 1, autocompleteMaxVisible: 7 });
     this.done = new Promise((resolve) => {
@@ -125,6 +130,7 @@ class ZCodeTui {
     this.ui.setFocus(this.editor);
     this.updateMetadata();
     this.updateTurnStatus();
+    if (!this.options.loginRequired) void this.refreshGoal();
     void this.loadHistory();
     if (this.options.subscribeWorkflowEvents) {
       this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
@@ -349,6 +355,7 @@ class ZCodeTui {
         this.currentAssistant = undefined;
         this.finishTurn();
       }
+      void this.refreshGoal();
     }
   }
 
@@ -857,8 +864,39 @@ class ZCodeTui {
       this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
     }
     const text = turnStatusText(this.activity, this.turnElapsedMilliseconds);
-    this.turnStatus.setText(` ${this.activity ? this.theme.accent(text) : this.theme.muted(text)}`);
+    const left = this.activity ? this.theme.accent(text) : this.theme.muted(text);
+    const goalText = goalStatusText(this.goal);
+    const right = goalText && this.goal
+      ? this.goal.status === "complete"
+        ? this.theme.success(goalText)
+        : this.goal.status === "paused" || this.goal.status === "budget_limited"
+          ? this.theme.warning(goalText)
+          : this.theme.accent(goalText)
+      : undefined;
+    this.turnStatus.setContent(left, right);
     this.ui.requestRender();
+  }
+
+  private async refreshGoal(): Promise<void> {
+    if (!this.options.readGoal) return;
+    if (this.goalRefreshInFlight) {
+      this.goalRefreshPending = true;
+      return;
+    }
+    this.goalRefreshInFlight = true;
+    try {
+      do {
+        this.goalRefreshPending = false;
+        try {
+          this.goal = normalizeGoal(await this.options.readGoal());
+          this.updateTurnStatus();
+        } catch {
+          // Goal status is supplementary and must not interrupt the active turn.
+        }
+      } while (this.goalRefreshPending);
+    } finally {
+      this.goalRefreshInFlight = false;
+    }
   }
 
   private finishTurn(): void {

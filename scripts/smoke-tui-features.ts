@@ -42,7 +42,8 @@ const actions = [
   [9_300, "\r"],
   [9_900, "\x1b[B\r"],
   [10_600, "\x1b"],
-  [11_200, "/exit\r"]
+  [11_200, "/goal pause\r"],
+  [11_800, "/exit\r"]
 ] as const;
 const timers = actions.map(([delay, input]) => setTimeout(() => terminal.write(input), delay));
 const timeout = setTimeout(() => child.kill("SIGKILL"), 18_000);
@@ -66,6 +67,8 @@ if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain
 for (const [label, pattern] of [
   ["long help output", /Use \/help <command> for details/i],
   ["turn timer tick", /\[1s\]/i],
+  ["active goal footer", /Pursuing goal \(40K \/ 50K\)/i],
+  ["paused goal footer", /Goal paused \(\/goal resume\)/i],
   ["model picker", /Select model/i],
   ["effort picker", /Select reasoning effort/i],
   ["image attachment", /1 image attached/i],

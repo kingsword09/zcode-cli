@@ -38,6 +38,7 @@ is the compatibility host for the unmodified upstream kernel.
 - `/mode`, `/model`, `/resume`, `/plugins` and other upstream slash commands;
 - searchable model and reasoning-effort selectors, plus MCP and workflow panels;
 - status-bar-only Shift+Tab mode, Ctrl+N model, Ctrl+L autonomy and empty-prompt Tab effort cycling;
+- structured session-goal status in the right side of the turn footer;
 - generic upstream selection dialogs for sessions, plugins and checkpoints;
 - interactive tool-permission approval dialogs;
 - clipboard image attachments through Ctrl+V or `/paste-image`;

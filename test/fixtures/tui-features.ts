@@ -5,6 +5,12 @@ import type { PromptCallOptions } from "../../packages/zcode-tui/src/types.ts";
 
 let model = "alpha/model";
 let effort = "low";
+let goal = {
+  status: "active",
+  tokenBudget: 50_000,
+  tokensUsed: 40_000,
+  timeUsedSeconds: 120
+};
 
 const workflowPanel = (status = "running") => ({
   title: "/workflows",
@@ -52,7 +58,8 @@ await runTui({
     { name: "model", description: "Select model" },
     { name: "effort", description: "Select effort" },
     { name: "mcp", description: "Manage MCP" },
-    { name: "workflows", description: "Manage workflows" }
+    { name: "workflows", description: "Manage workflows" },
+    { name: "goal", description: "Manage the session goal" }
   ],
   readClipboardImage: async () => ({
     dataUrl: "data:image/png;base64,aGVsbG8=",
@@ -64,6 +71,7 @@ await runTui({
   }),
   refreshWorkflowPanel: async () => workflowPanel(),
   stopWorkflow: async () => workflowPanel("cancelled"),
+  readGoal: async () => goal,
   sendInput: async (input, options) => {
     const prompt = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
     const attachments = Array.isArray(prompt.attachments) ? prompt.attachments : [];
@@ -121,6 +129,10 @@ await runTui({
     }
     if (input === "/mcp connect docs") return { response: "MCP connected: docs." };
     if (input === "/workflows") return { response: "", workflowPanel: workflowPanel() };
+    if (input === "/goal pause") {
+      goal = { ...goal, status: "paused" };
+      return { response: "Goal paused.", model, thoughtLevel: effort };
+    }
     return { response: `Handled ${input}.`, model, thoughtLevel: effort };
   },
   setMode: async (nextMode) => ({ mode: nextMode })
