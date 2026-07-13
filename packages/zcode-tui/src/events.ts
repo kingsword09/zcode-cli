@@ -6,7 +6,8 @@ export interface StreamEvent {
   delta?: string;
   toolName?: string;
   toolCallId?: string;
-  result?: UnknownRecord;
+  input?: unknown;
+  result?: unknown;
   error?: unknown;
   raw: UnknownRecord;
 }
@@ -22,15 +23,16 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
   const payload = nestedRecord(value, "payload") ?? (params && nestedRecord(params, "payload"));
   const event = payload && (nestedRecord(payload, "event") ?? nestedRecord(payload, "streamEvent"));
   const body = event ?? payload ?? value;
-  const result = nestedRecord(body, "result");
+  const toolCall = nestedRecord(body, "toolCall");
 
   return {
     type: asString(value.type) ?? (params && asString(params.type)),
     kind: asString(body.kind),
     delta: asString(body.delta),
-    toolName: asString(body.toolName),
-    toolCallId: asString(body.toolCallId),
-    result,
+    toolName: asString(body.toolName) ?? (toolCall && (asString(toolCall.name) ?? asString(toolCall.toolName))),
+    toolCallId: asString(body.toolCallId) ?? (toolCall && (asString(toolCall.id) ?? asString(toolCall.toolCallId))),
+    input: body.input ?? toolCall?.input,
+    result: body.result ?? body.output,
     error: body.error,
     raw: value
   };

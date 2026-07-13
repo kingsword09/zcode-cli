@@ -40,6 +40,10 @@ export interface TuiOptions {
   submitPrompt: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   setMode?: (mode: string) => Promise<unknown>;
   writeClipboardText?: (text: string) => Promise<void>;
+  readClipboardImage?: (options?: { abortSignal?: AbortSignal }) => Promise<unknown>;
+  listMcpServers?: () => Promise<unknown>;
+  refreshWorkflowPanel?: (options: { runId?: string }) => Promise<unknown>;
+  stopWorkflow?: (options: { runId: string }) => Promise<unknown>;
   subscribeWorkflowEvents?: (listener: (event: unknown) => void) => (() => void) | void;
 }
 

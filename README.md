@@ -36,8 +36,11 @@ is the compatibility host for the unmodified upstream kernel.
 - slash-command and workspace-path completion;
 - persisted prompt history through ZCode's history API;
 - `/mode`, `/model`, `/resume`, `/plugins` and other upstream slash commands;
-- generic upstream selection dialogs;
+- searchable model and reasoning-effort selectors, plus MCP and workflow panels;
+- generic upstream selection dialogs for sessions, plugins and checkpoints;
 - interactive tool-permission approval dialogs;
+- clipboard image attachments through Ctrl+V or `/paste-image`;
+- bounded tool input and result cards for readable long-running turns;
 - active-turn steering, cancellation and error reporting;
 - `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling;
 - `--no-color` and `NO_COLOR` support.
@@ -182,9 +185,10 @@ bun run check
 bun run check:tui
 ```
 
-`check:tui` creates a real PTY, opens the full TUI, executes `/help`, switches
-to plan mode, and exits. It uses a temporary home directory and does not require
-an API call.
+`check:tui` runs two real-PTY scenarios. The official runtime scenario executes
+`/help`, switches to plan mode, and exits. The offline feature scenario exercises
+model and effort selectors, image attachments, tool cards, MCP actions and the
+workflow panel. Both use temporary home directories and do not make API calls.
 
 Start the client directly:
 

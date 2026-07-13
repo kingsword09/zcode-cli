@@ -13,6 +13,12 @@ import {
   type SlashCommand
 } from "@earendil-works/pi-tui";
 
+import {
+  attachmentSummary,
+  clipboardImageAttachment,
+  promptInput,
+  type PromptImageAttachment
+} from "./attachments.ts";
 import { choose, type ChoiceItem } from "./choice-dialog.ts";
 import {
   historyText,
@@ -21,14 +27,40 @@ import {
   responseText,
   restoredMessages
 } from "./events.ts";
+import {
+  formatWorkflowPanel,
+  isMcpPickerRequest,
+  isTerminalWorkflowStatus,
+  mcpPicker,
+  workflowRunPicker,
+  workflowSelectedRunId,
+  workflowStatus
+} from "./panels.ts";
+import {
+  effortPicker,
+  isEffortPickerRequest,
+  isModelPickerRequest,
+  modelPicker,
+  type PickerSpec
+} from "./selectors.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
+import { toolCard, toolSucceeded } from "./tool-view.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
+
+interface ToolViewState {
+  name: string;
+  view: Markdown;
+  input?: unknown;
+  inputText: string;
+}
 
 class ZCodeTui {
   private readonly theme: ZCodeTheme;
   private readonly ui: TUI;
   private readonly transcript = new Container();
+  private readonly choiceHost = new Container();
   private readonly status: Text;
+  private readonly attachmentStatus: Text;
   private readonly editor: Editor;
   private readonly done: Promise<void>;
   private resolveDone!: () => void;
@@ -37,20 +69,30 @@ class ZCodeTui {
   private turnAbortController?: AbortController;
   private currentAssistant?: Markdown;
   private currentAssistantText = "";
-  private readonly toolIds = new Set<string>();
+  private readonly toolViews = new Map<string, ToolViewState>();
+  private pendingAttachments: PromptImageAttachment[] = [];
   private mode: string;
   private model: string;
   private thoughtLevel?: string;
+  private modelOptions: unknown[];
+  private effortOptions: unknown[];
   private lastAssistantText = "";
   private unsubscribeWorkflow?: () => void;
+  private workflowPanel?: Record<string, unknown>;
+  private workflowView?: Markdown;
+  private workflowRefreshInFlight = false;
+  private choiceDepth = 0;
 
   constructor(private readonly options: TuiOptions) {
     this.theme = createTheme(!options.noColor && !process.env.NO_COLOR);
     this.mode = options.initialMode ?? "build";
     this.model = modelLabel(options.initialModel);
     this.thoughtLevel = options.initialThoughtLevel;
+    this.modelOptions = [...(options.modelOptions ?? [])];
+    this.effortOptions = [...(options.effortOptions ?? [])];
     this.ui = new TUI(new ProcessTerminal(), true);
     this.status = new Text("", 0, 0);
+    this.attachmentStatus = new Text("", 0, 0);
     this.editor = new Editor(this.ui, this.theme.editor, { paddingX: 1, autocompleteMaxVisible: 7 });
     this.done = new Promise((resolve) => {
       this.resolveDone = resolve;
@@ -71,6 +113,7 @@ class ZCodeTui {
       this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
         this.debugEvent("workflow", event);
         this.updateStatus("workflow update");
+        void this.refreshWorkflowFromEvent();
       }) ?? undefined;
     }
     await this.done;
@@ -94,10 +137,16 @@ class ZCodeTui {
     }
     this.ui.addChild(new Spacer(1));
     this.ui.addChild(this.transcript);
+    this.ui.addChild(this.choiceHost);
     this.ui.addChild(this.status);
+    this.ui.addChild(this.attachmentStatus);
     this.ui.addChild(this.editor);
     this.ui.addChild(
-      new Text(this.theme.muted("Enter send · Shift+Enter newline · Ctrl+C cancel/exit · /help commands"), 1, 0)
+      new Text(
+        this.theme.muted("Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+C cancel/exit · /help"),
+        1,
+        0
+      )
     );
 
     const commands = this.autocompleteCommands();
@@ -121,6 +170,8 @@ class ZCodeTui {
     for (const command of [
       { name: "clear", description: "Clear the visible transcript" },
       { name: "copy", description: "Copy the latest assistant response" },
+      { name: "paste-image", description: "Attach an image from the system clipboard" },
+      { name: "attachments", description: "Show or clear pending attachments", argumentHint: "[clear]" },
       { name: "exit", description: "Exit ZCode" }
     ]) {
       if (!commands.some((item) => item.name === command.name)) commands.push(command);
@@ -130,6 +181,13 @@ class ZCodeTui {
 
   private bindInput(): void {
     this.ui.addInputListener((data) => {
+      if (this.choiceDepth > 0 && (matchesKey(data, "ctrl+c") || matchesKey(data, "escape"))) {
+        return undefined;
+      }
+      if (matchesKey(data, "ctrl+v")) {
+        void this.attachClipboardImage();
+        return { consume: true };
+      }
       if (matchesKey(data, "ctrl+c")) {
         if (this.turnAbortController) {
           this.turnAbortController.abort();
@@ -165,6 +223,10 @@ class ZCodeTui {
     }
     if (input === "/clear") {
       this.transcript.clear();
+      this.currentAssistant = undefined;
+      this.currentAssistantText = "";
+      this.toolViews.clear();
+      this.workflowView = undefined;
       this.ui.requestRender(true);
       return;
     }
@@ -172,13 +234,48 @@ class ZCodeTui {
       await this.copyLastResponse();
       return;
     }
+    if (input === "/paste-image") {
+      await this.attachClipboardImage();
+      return;
+    }
+    if (input === "/attachments" || input === "/attachments list") {
+      this.addNotice(
+        this.pendingAttachments.length > 0 ? attachmentSummary(this.pendingAttachments) : "No pending attachments.",
+        "muted"
+      );
+      return;
+    }
+    if (input === "/attachments clear") {
+      this.pendingAttachments = [];
+      this.updateAttachmentStatus();
+      this.addNotice("Pending attachments cleared.", "muted");
+      return;
+    }
     if (input.startsWith("/") && this.activeSubmissions > 0) {
       this.addNotice("Wait for the active turn or press Ctrl+C before running a slash command.", "warning");
       return;
     }
+    if (isMcpPickerRequest(input) && await this.showMcpPicker()) {
+      return;
+    }
+    if (isModelPickerRequest(input) && await this.showCommandPicker(
+      "Select model",
+      `Current model: ${this.model}.`,
+      modelPicker(this.modelOptions, this.model)
+    )) {
+      return;
+    }
+    if (isEffortPickerRequest(input) && await this.showCommandPicker(
+      "Select reasoning effort",
+      `Current reasoning effort: ${this.thoughtLevel ?? "default"}.`,
+      effortPicker(this.effortOptions, this.thoughtLevel)
+    )) {
+      return;
+    }
 
     const steering = this.activeSubmissions > 0;
-    this.addUserMessage(input, steering);
+    const attachments = !steering && !input.startsWith("/") ? [...this.pendingAttachments] : [];
+    this.addUserMessage(input, steering, attachments.length);
     if (!steering) this.beginTurn();
 
     const abortController = new AbortController();
@@ -194,13 +291,18 @@ class ZCodeTui {
       requestPermission: (request, context) => this.requestPermission(request, context)
     };
 
+    let accepted = false;
     try {
       if (input.startsWith("/") || !this.options.sendInput) {
-        const result = await this.options.submitPrompt(input, callOptions);
+        const result = await this.options.submitPrompt(
+          input.startsWith("/") ? input : promptInput(input, attachments),
+          callOptions
+        );
         await this.handleResult(result);
+        accepted = true;
       } else {
-        const outcome = await this.options.sendInput(input, callOptions);
-        await this.handleSendOutcome(outcome);
+        const outcome = await this.options.sendInput(promptInput(input, attachments), callOptions);
+        accepted = await this.handleSendOutcome(outcome);
       }
     } catch (error) {
       if (abortController.signal.aborted) {
@@ -210,6 +312,11 @@ class ZCodeTui {
         this.addNotice(message, "error");
       }
     } finally {
+      if (accepted && attachments.length > 0) {
+        const sent = new Set(attachments);
+        this.pendingAttachments = this.pendingAttachments.filter((attachment) => !sent.has(attachment));
+        this.updateAttachmentStatus();
+      }
       this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
       if (this.turnAbortController === abortController) this.turnAbortController = undefined;
       if (this.activeSubmissions === 0) {
@@ -219,8 +326,8 @@ class ZCodeTui {
     }
   }
 
-  private async handleSendOutcome(outcome: unknown): Promise<void> {
-    if (!isRecord(outcome)) return;
+  private async handleSendOutcome(outcome: unknown): Promise<boolean> {
+    if (!isRecord(outcome)) return true;
     const kind = asString(outcome.kind);
     if (kind === "started_turn") {
       await this.handleResult(outcome.result);
@@ -228,7 +335,9 @@ class ZCodeTui {
       this.addNotice("Input queued for the active turn.", "muted");
     } else if (kind === "rejected") {
       this.addNotice(`Input rejected: ${asString(outcome.reason) ?? "unknown reason"}.`, "warning");
+      return false;
     }
+    return true;
   }
 
   private async handleResult(result: unknown): Promise<void> {
@@ -237,6 +346,8 @@ class ZCodeTui {
       this.transcript.clear();
       this.currentAssistant = undefined;
       this.currentAssistantText = "";
+      this.toolViews.clear();
+      this.workflowView = undefined;
       for (const message of restoredMessages(result.restoredMessages)) {
         if (message.role === "user") this.addUserMessage(message.text, false);
         else if (message.role === "assistant") this.addAssistantMessage(message.text);
@@ -257,10 +368,13 @@ class ZCodeTui {
     if (typeof result.mode === "string") this.mode = result.mode;
     if (result.model !== undefined) this.model = modelLabel(result.model);
     if (typeof result.thoughtLevel === "string") this.thoughtLevel = result.thoughtLevel;
+    if (Array.isArray(result.modelOptions)) this.modelOptions = [...result.modelOptions];
+    if (Array.isArray(result.effortOptions)) this.effortOptions = [...result.effortOptions];
     this.updateStatus("ready");
     this.ui.requestRender();
 
-    if (isRecord(result.selection)) void this.showSelection(result.selection);
+    if (isRecord(result.workflowPanel)) await this.showWorkflowPanel(result.workflowPanel);
+    if (isRecord(result.selection)) await this.showSelection(result.selection);
   }
 
   private onEvent(value: unknown): void {
@@ -274,20 +388,33 @@ class ZCodeTui {
       this.lastAssistantText = this.currentAssistantText;
     } else if (event.kind === "reasoning_delta") {
       this.updateStatus("thinking…");
-    } else if (event.kind === "tool_input_start" || event.kind === "tool_call") {
-      const id = event.toolCallId ?? `${event.toolName ?? "tool"}-${this.toolIds.size}`;
-      if (!this.toolIds.has(id)) {
-        this.toolIds.add(id);
-        this.transcript.addChild(
-          new Text(this.theme.muted(`  ⚙ ${event.toolName ?? "tool"}`), 1, 0)
-        );
-      }
-      this.updateStatus(`running ${event.toolName ?? "tool"}…`);
+    } else if (event.kind === "tool_input_start") {
+      const tool = this.ensureToolView(event.toolCallId, event.toolName);
+      this.updateToolView(tool, "preparing");
+      this.updateStatus(`preparing ${tool.name}…`);
+    } else if (event.kind === "tool_input_delta" && event.delta) {
+      const tool = this.ensureToolView(event.toolCallId, event.toolName);
+      tool.inputText += event.delta;
+      this.updateToolView(tool, "preparing");
+    } else if (event.kind === "tool_input_end") {
+      const tool = this.ensureToolView(event.toolCallId, event.toolName);
+      this.updateToolView(tool, "prepared");
+    } else if (event.kind === "tool_call" || event.kind === "scheduled" || event.kind === "started") {
+      const tool = this.ensureToolView(event.toolCallId, event.toolName);
+      if (event.input !== undefined) tool.input = event.input;
+      this.updateToolView(tool, event.kind === "scheduled" ? "scheduled" : "running");
+      this.updateStatus(`running ${tool.name}…`);
+    } else if (event.kind === "progress") {
+      const tool = this.ensureToolView(event.toolCallId, event.toolName);
+      this.updateToolView(tool, "running", event.result);
     } else if (event.kind === "result") {
-      const success = event.result?.success !== false;
-      this.transcript.addChild(
-        new Text(success ? this.theme.success("  ✓ tool complete") : this.theme.error("  ✗ tool failed"), 1, 0)
-      );
+      const tool = this.ensureToolView(event.toolCallId, event.toolName);
+      this.updateToolView(tool, toolSucceeded(event.result) ? "complete" : "failed", event.result);
+    } else if (event.kind === "error" && (event.toolCallId || event.toolName)) {
+      const tool = this.ensureToolView(event.toolCallId, event.toolName);
+      this.updateToolView(tool, "failed", event.result, event.error);
+    } else if (event.kind === "error") {
+      this.addNotice(event.error instanceof Error ? event.error.message : asString(event.error) ?? "Model stream failed.", "error");
     } else if (event.type === "turn.failed") {
       this.addNotice("Turn failed.", "error");
     }
@@ -297,7 +424,7 @@ class ZCodeTui {
   private beginTurn(): void {
     this.currentAssistant = undefined;
     this.currentAssistantText = "";
-    this.toolIds.clear();
+    this.toolViews.clear();
   }
 
   private ensureAssistant(): Markdown {
@@ -308,10 +435,11 @@ class ZCodeTui {
     return this.currentAssistant;
   }
 
-  private addUserMessage(text: string, steering: boolean): void {
+  private addUserMessage(text: string, steering: boolean, attachmentCount = 0): void {
     const prefix = steering ? "↪" : "›";
+    const suffix = attachmentCount > 0 ? `  [${attachmentCount} image${attachmentCount === 1 ? "" : "s"}]` : "";
     this.transcript.addChild(
-      new Text(`${this.theme.accent(prefix)} ${text}`, 1, 0, this.theme.userBackground)
+      new Text(`${this.theme.accent(prefix)} ${text}${this.theme.muted(suffix)}`, 1, 0, this.theme.userBackground)
     );
     this.ui.requestRender();
   }
@@ -324,6 +452,66 @@ class ZCodeTui {
 
   private addNotice(text: string, style: "warning" | "error" | "muted"): void {
     this.transcript.addChild(new Text(this.theme[style](text), 1, 0));
+    this.ui.requestRender();
+  }
+
+  private ensureToolView(toolCallId?: string, toolName?: string): ToolViewState {
+    const id = toolCallId ?? `${toolName ?? "tool"}-${this.toolViews.size}`;
+    const existing = this.toolViews.get(id);
+    if (existing) {
+      if (toolName) existing.name = toolName;
+      return existing;
+    }
+    const tool: ToolViewState = {
+      name: toolName ?? "tool",
+      view: new Markdown("", 1, 0, this.theme.markdown),
+      inputText: ""
+    };
+    this.toolViews.set(id, tool);
+    this.transcript.addChild(tool.view);
+    return tool;
+  }
+
+  private updateToolView(tool: ToolViewState, state: string, result?: unknown, error?: unknown): void {
+    tool.view.setText(toolCard({
+      name: tool.name,
+      state,
+      input: tool.input,
+      inputText: tool.inputText,
+      result,
+      error
+    }));
+  }
+
+  private async attachClipboardImage(): Promise<void> {
+    if (!this.options.readClipboardImage) {
+      this.addNotice("Clipboard image support is unavailable in this runtime.", "warning");
+      return;
+    }
+    if (this.activeSubmissions > 0) {
+      this.addNotice("Wait for the active turn before attaching an image.", "warning");
+      return;
+    }
+    this.updateStatus("reading clipboard…");
+    try {
+      const attachment = clipboardImageAttachment(await this.options.readClipboardImage());
+      if (!attachment) {
+        this.addNotice("No supported image found in the clipboard.", "warning");
+        return;
+      }
+      this.pendingAttachments.push(attachment);
+      this.updateAttachmentStatus();
+      this.addNotice(`${attachmentSummary([attachment])}.`, "muted");
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      this.updateStatus("ready");
+    }
+  }
+
+  private updateAttachmentStatus(): void {
+    const summary = attachmentSummary(this.pendingAttachments);
+    this.attachmentStatus.setText(summary ? ` ${this.theme.warning(summary)} · /attachments clear` : "");
     this.ui.requestRender();
   }
 
@@ -352,7 +540,7 @@ class ZCodeTui {
         { value: "deny", label: "Deny", payload: { decision: "deny", reason: "Denied interactively" } }
       );
     }
-    const selected = await choose(this.ui, this.theme, {
+    const selected = await this.showChoice({
       title: `Permission · ${toolName}`,
       prompt: asString(request.reason) ?? `${toolName} requests permission to continue.`,
       items,
@@ -374,7 +562,7 @@ class ZCodeTui {
         payload: command
       }];
     });
-    const selected = await choose(this.ui, this.theme, {
+    const selected = await this.showChoice({
       title: asString(selection.title) ?? "Choose",
       prompt: asString(selection.prompt) ?? "Select an item.",
       help: asString(selection.help),
@@ -382,6 +570,129 @@ class ZCodeTui {
       selectedIndex: typeof selection.selectedIndex === "number" ? selection.selectedIndex : 0
     });
     if (typeof selected?.payload === "string") void this.submit(selected.payload);
+  }
+
+  private async showCommandPicker(title: string, prompt: string, picker: PickerSpec): Promise<boolean> {
+    if (picker.items.length === 0) return false;
+    const selected = await this.showChoice({
+      title,
+      prompt,
+      items: picker.items.map((item) => ({ ...item, payload: item.command })),
+      selectedIndex: picker.selectedIndex
+    });
+    if (typeof selected?.payload === "string") await this.submit(selected.payload);
+    return true;
+  }
+
+  private async showMcpPicker(): Promise<boolean> {
+    if (!this.options.listMcpServers) return false;
+    try {
+      const picker = mcpPicker(await this.options.listMcpServers());
+      if (picker.items.length === 0) {
+        this.addNotice("No MCP servers configured.", "muted");
+        return true;
+      }
+      return await this.showCommandPicker(
+        "MCP servers",
+        "Enter connects a disconnected server or disconnects a connected server.",
+        picker
+      );
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+      return true;
+    }
+  }
+
+  private renderWorkflowPanel(value: Record<string, unknown>): void {
+    this.workflowPanel = value;
+    const text = formatWorkflowPanel(value);
+    if (this.workflowView) this.workflowView.setText(text);
+    else {
+      this.workflowView = new Markdown(text, 1, 0, this.theme.markdown);
+      this.transcript.addChild(this.workflowView);
+    }
+    this.ui.requestRender();
+  }
+
+  private async showWorkflowPanel(value: Record<string, unknown>): Promise<void> {
+    this.renderWorkflowPanel(value);
+    const picker = workflowRunPicker(value);
+    if (picker.items.length === 0) return;
+    const selected = await this.showChoice({
+      title: "Workflow runs",
+      prompt: "Select a run to inspect or manage.",
+      items: picker.items.map((item) => ({ ...item, payload: item.command })),
+      selectedIndex: picker.selectedIndex
+    });
+    if (typeof selected?.payload !== "string") return;
+    await this.manageWorkflow(selected.payload);
+  }
+
+  private async manageWorkflow(runId: string): Promise<void> {
+    let panel = this.workflowPanel;
+    if (this.options.refreshWorkflowPanel) {
+      const refreshed = await this.options.refreshWorkflowPanel({ runId });
+      if (isRecord(refreshed)) panel = refreshed;
+    }
+    if (!panel) return;
+    this.renderWorkflowPanel(panel);
+
+    while (true) {
+      const status = workflowStatus(panel, runId);
+      const items: ChoiceItem[] = [];
+      if (this.options.refreshWorkflowPanel) {
+        items.push({ value: "refresh", label: "Refresh", description: "Reload workflow state" });
+      }
+      if (this.options.stopWorkflow && !isTerminalWorkflowStatus(status)) {
+        items.push({ value: "stop", label: "Stop workflow", description: `Current status: ${status ?? "unknown"}` });
+      }
+      items.push({ value: "close", label: "Close", description: "Return to the prompt" });
+      const action = await this.showChoice({
+        title: `Workflow · ${runId}`,
+        prompt: `Status: ${status ?? "unknown"}.`,
+        items
+      });
+      if (!action || action.value === "close") return;
+      try {
+        const next = action.value === "stop"
+          ? await this.options.stopWorkflow?.({ runId })
+          : await this.options.refreshWorkflowPanel?.({ runId });
+        if (isRecord(next)) {
+          panel = next;
+          this.renderWorkflowPanel(panel);
+        }
+      } catch (error) {
+        this.addNotice(error instanceof Error ? error.message : String(error), "error");
+        return;
+      }
+    }
+  }
+
+  private async refreshWorkflowFromEvent(): Promise<void> {
+    if (this.workflowRefreshInFlight || !this.workflowPanel || !this.options.refreshWorkflowPanel) return;
+    const runId = workflowSelectedRunId(this.workflowPanel);
+    if (!runId) return;
+    this.workflowRefreshInFlight = true;
+    try {
+      const refreshed = await this.options.refreshWorkflowPanel({ runId });
+      if (isRecord(refreshed)) this.renderWorkflowPanel(refreshed);
+    } catch {
+      // The next workflow event can retry the projection refresh.
+    } finally {
+      this.workflowRefreshInFlight = false;
+      this.updateStatus(this.activeSubmissions > 0 ? "working…" : "ready");
+    }
+  }
+
+  private async showChoice(options: Parameters<typeof choose>[3]): Promise<ChoiceItem | null> {
+    this.choiceDepth += 1;
+    try {
+      return await choose(this.ui, this.choiceHost, this.theme, options);
+    } finally {
+      this.choiceDepth = Math.max(0, this.choiceDepth - 1);
+      this.ui.setFocus(this.editor);
+      this.ui.requestRender();
+    }
   }
 
   private async copyLastResponse(): Promise<void> {
