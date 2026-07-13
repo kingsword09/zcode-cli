@@ -22,6 +22,9 @@ export interface ZCodeTheme {
   toolPendingBackground: (text: string) => string;
   toolSuccessBackground: (text: string) => string;
   toolErrorBackground: (text: string) => string;
+  diffAddedLine: (text: string) => string;
+  diffRemovedLine: (text: string) => string;
+  diffHunkLine: (text: string) => string;
   editor: EditorTheme;
   markdown: MarkdownTheme;
   select: SelectListTheme;
@@ -44,6 +47,9 @@ export function createTheme(enabled: boolean): ZCodeTheme {
   const toolPendingBackground = ansi("48;5;236", enabled);
   const toolSuccessBackground = ansi("48;5;234", enabled);
   const toolErrorBackground = ansi("48;5;52", enabled);
+  const diffAddedLine = ansi("38;5;120;48;5;22", enabled);
+  const diffRemovedLine = ansi("38;5;210;48;5;52", enabled);
+  const diffHunkLine = ansi("38;5;117;48;5;24", enabled);
 
   const select: SelectListTheme = {
     selectedPrefix: accent,
@@ -65,6 +71,9 @@ export function createTheme(enabled: boolean): ZCodeTheme {
     toolPendingBackground,
     toolSuccessBackground,
     toolErrorBackground,
+    diffAddedLine,
+    diffRemovedLine,
+    diffHunkLine,
     select,
     editor: {
       borderColor: accent,
