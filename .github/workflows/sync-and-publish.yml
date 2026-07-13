@@ -1,0 +1,67 @@
+name: Sync and publish ZCode CLI
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 2 * * *"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: zcode-cli-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+
+      - name: Install extraction tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate source
+        run: |
+          bun run typecheck
+          bun test
+
+      - name: Sync official runtime
+        run: bun run sync -- --platform linux --arch x64
+
+      - name: Validate extracted CLI
+        run: |
+          bun run check
+          bun run check:tui
+
+      - name: Check whether this App version is already published
+        id: release
+        shell: bash
+        run: |
+          PACKAGE_NAME=$(bun -e "console.log((await Bun.file('package.json').json()).name)")
+          PACKAGE_VERSION=$(bun -e "console.log((await Bun.file('package.json').json()).version)")
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.release.outputs.publish == 'true'
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

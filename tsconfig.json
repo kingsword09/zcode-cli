@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2023",
+    "types": ["bun"]
+  },
+  "include": ["bin/**/*.ts", "src/**/*.ts", "packages/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
+}

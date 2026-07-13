@@ -1,0 +1,14 @@
+{
+  "name": "@zcode/tui",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "^0.80.6"
+  },
+  "license": "MIT",
+  "private": true
+}
