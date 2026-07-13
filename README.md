@@ -255,11 +255,3 @@ Before enabling publication:
 
 The workflow skips publication when the extracted App version already exists
 on npm.
-
-## Design principles
-
-- KISS: Bun handles PTY orchestration and pi-tui handles terminal rendering.
-- YAGNI: no replacement agent, model client or second TUI framework.
-- DRY: the same local `@zcode/tui` build is used by local extraction and CI.
-- SOLID: extraction, launching, event adaptation and terminal presentation are
-  separate modules.
