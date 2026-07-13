@@ -83,7 +83,14 @@ class ZCodeTui {
     this.ui.addChild(new Text(title, 1, 0));
     this.ui.addChild(new Text(this.theme.muted(`${workspace}${branch}`), 1, 0));
     if (this.options.loginRequired) {
-      this.ui.addChild(new Text(this.theme.warning("Login required. Run /login before sending a prompt."), 1, 0));
+      this.ui.addChild(new Text(this.theme.warning("Model access is not configured."), 1, 0));
+      this.ui.addChild(
+        new Text(
+          this.theme.warning("Run /login, or configure a custom provider in ~/.zcode/cli/config.json."),
+          1,
+          0
+        )
+      );
     }
     this.ui.addChild(new Spacer(1));
     this.ui.addChild(this.transcript);

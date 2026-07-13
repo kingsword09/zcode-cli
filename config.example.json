@@ -1,0 +1,104 @@
+{
+  "provider": {
+    "zai": {
+      "kind": "anthropic",
+      "name": "Custom Anthropic-compatible Provider",
+      "options": {
+        "apiKey": "REPLACE_WITH_YOUR_API_KEY",
+        "apiKeyRequired": true,
+        "baseURL": "https://example.com/api/anthropic"
+      },
+      "headers": {},
+      "models": {
+        "replace-with-model-id": {
+          "name": "Replace with model name"
+        }
+      }
+    }
+  },
+  "model": {
+    "main": "zai/replace-with-model-id",
+    "lite": "zai/replace-with-model-id"
+  },
+  "modelCatalog": {
+    "overrides": {}
+  },
+  "modelStream": {
+    "idleTimeoutMs": 600000
+  },
+  "permission": {
+    "mode": "build",
+    "allowedTools": [],
+    "disallowedTools": [],
+    "autoApproveHighRisk": false,
+    "allowMediumRiskInAuto": false
+  },
+  "storage": {
+    "dir": "~/.zcode",
+    "sessionDbPath": "~/.zcode/cli/db/db.sqlite"
+  },
+  "network": {
+    "timeout": 180000
+  },
+  "features": {
+    "compact": true,
+    "rewind": true,
+    "subagent": true,
+    "memory": true,
+    "skill": true,
+    "mcp": true
+  },
+  "memory": {
+    "use": true,
+    "write": true,
+    "autoConsolidate": true,
+    "summaryMaxBytes": 8192
+  },
+  "mcp": {
+    "servers": {}
+  },
+  "plugins": {
+    "enabled": true,
+    "dirs": [],
+    "enabledPlugins": {},
+    "options": {},
+    "suppressedBuiltins": []
+  },
+  "skills": {
+    "enabled": true,
+    "includeInstructions": true,
+    "metadataBudget": 20000,
+    "roots": []
+  },
+  "skill": {},
+  "command": {},
+  "logging": {
+    "level": "info",
+    "format": "text"
+  },
+  "ui": {
+    "locale": "auto",
+    "theme": "auto"
+  },
+  "toolConcurrency": {
+    "maxConcurrency": 10
+  },
+  "modelAnomalyGuard": {
+    "repeatedToolCallWarningThreshold": 3,
+    "maxBudgetWarningsPerTurn": 3
+  },
+  "hooks": {
+    "enabled": false,
+    "timeoutMs": 60000,
+    "maxOutputBytes": 32768,
+    "events": {
+      "SessionStart": [],
+      "UserPromptSubmit": [],
+      "PreToolUse": [],
+      "PermissionRequest": [],
+      "PostToolUse": [],
+      "PostToolUseFailure": [],
+      "Stop": []
+    }
+  }
+}
