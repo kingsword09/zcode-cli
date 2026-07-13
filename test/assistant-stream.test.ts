@@ -58,4 +58,21 @@ describe("TUI assistant stream", () => {
     const final = lines.findIndex((line) => line.includes("Authoritative final response"));
     expect(final).toBeGreaterThan(tool);
   });
+
+  test("reconciles identified protocol parts without duplicate blocks", () => {
+    const transcript = new Transcript();
+    const stream = new AssistantStream(
+      createTheme(false),
+      (component, options) => transcript.addBlock(component, options)
+    );
+
+    stream.beginTurn();
+    stream.append("Hel", "part_1", "message_1");
+    stream.upsert("Hello", "part_1", "message_1");
+    stream.append("!", "part_1", "message_1");
+
+    expect(transcript.blockCount).toBe(1);
+    expect(renderedLines(transcript).join("\n").match(/Hello!/g)).toHaveLength(1);
+    stream.removePart("part_1");
+  });
 });

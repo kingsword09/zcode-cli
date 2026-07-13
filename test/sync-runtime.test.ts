@@ -47,8 +47,15 @@ describe("runtime synchronization", () => {
     const patched = patchRuntimeTuiBridge(runtimeWithApp);
 
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
+    expect(patched).toContain("E.readTodos=async()=>await(await S()).readTodos?.()??[]");
+    expect(patched).toContain("E.readRuntimeProjection=async()=>{let e=await S();return e.runtime?.getProjection?.()??null}");
     expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
-    expect(patched).toContain("readGoal:g.readGoal,readSessionUsage:g.readSessionUsage");
+    expect(patched).toContain("E.cancelBackgroundTask=async e=>await(await S()).cancelBackgroundTask?.(e)??null");
+    expect(patched).toContain("readGoal:g.readGoal");
+    expect(patched).toContain("readTodos:g.readTodos");
+    expect(patched).toContain("readRuntimeProjection:g.readRuntimeProjection");
+    expect(patched).toContain("readSessionUsage:g.readSessionUsage");
+    expect(patched).toContain("cancelBackgroundTask:g.cancelBackgroundTask");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);

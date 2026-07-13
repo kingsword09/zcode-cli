@@ -32,4 +32,62 @@ describe("TUI transcript", () => {
   test("does not reserve a bottom margin for an empty transcript", () => {
     expect(new Transcript().render(80)).toEqual([]);
   });
+
+  test("upserts protocol blocks in place and removes complete messages", () => {
+    const transcript = new Transcript();
+    transcript.addBlock(new Text("old", 0, 0), { id: "part_1", messageId: "message_1" });
+    transcript.addBlock(new Text("second", 0, 0), { id: "part_2", messageId: "message_1" });
+    transcript.addBlock(new Text("other", 0, 0), { id: "part_3", messageId: "message_2" });
+    transcript.addBlock(new Text("updated", 0, 0), { id: "part_1", messageId: "message_1" });
+
+    expect(transcript.blockCount).toBe(3);
+    expect(transcript.render(80).join("\n")).not.toContain("old");
+    expect(transcript.render(80).join("\n")).toContain("updated");
+    expect(transcript.removeMessage("message_1")).toBe(2);
+    expect(transcript.blockCount).toBe(1);
+    expect(transcript.render(80).join("\n")).toContain("other");
+  });
+
+  test("navigates individual blocks and expands only the focused component", () => {
+    const transcript = new Transcript((text) => `[${text}]`);
+    transcript.addBlock(new Text("first", 0, 0), { kind: "user", searchText: "first prompt" });
+    transcript.addBlock(new Text("second", 0, 0), { kind: "assistant", searchText: "second response" });
+
+    expect(transcript.selectLatest()).toEqual({ current: 2, total: 2, kind: "assistant" });
+    expect(transcript.selectedText()).toBe("second response");
+    expect(transcript.render(80).join("\n")).toContain("› second");
+    expect(transcript.moveCursor(-1)).toEqual({ current: 1, total: 2, kind: "user" });
+  });
+
+  test("highlights search matches and exposes n/N-compatible cursor state", () => {
+    const transcript = new Transcript((text) => `<${text}>`);
+    transcript.addBlock(new Text("Alpha result", 0, 0), { searchText: "Alpha result" });
+    transcript.addBlock(new Text("Other", 0, 0), { searchText: "Other" });
+    transcript.addBlock(new Text("alpha again", 0, 0), { searchText: "alpha again" });
+
+    expect(transcript.searchFor("alpha")).toEqual({ query: "alpha", current: 1, total: 2 });
+    expect(transcript.render(80).join("\n")).toContain("<Alpha>");
+    expect(transcript.nextSearchMatch(1)).toEqual({ query: "alpha", current: 2, total: 2 });
+    expect(transcript.selectedText()).toBe("alpha again");
+  });
+
+  test("pages oversized selected blocks without rendering every line", () => {
+    const transcript = new Transcript();
+    transcript.setNavigationViewportRows(4);
+    transcript.addBlock(new Text(Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"), 0, 0), {
+      kind: "assistant",
+      searchText: "long response"
+    });
+    transcript.selectLatest();
+
+    const first = transcript.render(80).join("\n");
+    expect(first).toContain("Page 1/3");
+    expect(first).toContain("line 1");
+    expect(first).not.toContain("line 10");
+    expect(transcript.movePage(1, 80)).toEqual({ current: 2, total: 3 });
+    const second = transcript.render(80).join("\n");
+    expect(second).toContain("Page 2/3");
+    expect(second).toContain("line 5");
+    expect(second).not.toContain("line 1\n");
+  });
 });

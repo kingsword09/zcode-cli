@@ -21,7 +21,12 @@ describe("TUI thinking view", () => {
     const complete = view.render(52).map((line) => line.trimEnd()).join("\n");
     expect(complete).toContain("◇ Thought");
     expect(complete).not.toContain("· active");
-    expect(complete.match(/Inspecting the repository\./g)).toHaveLength(1);
+    expect(complete).toContain("Ctrl+O to expand");
+    expect(complete).not.toContain("Inspecting the repository.");
+
+    view.setExpanded(true);
+    const expanded = view.render(52).map((line) => line.trimEnd()).join("\n");
+    expect(expanded.match(/Inspecting the repository\./g)).toHaveLength(1);
   });
 
   test("wraps Markdown and CJK reasoning within narrow terminals", () => {

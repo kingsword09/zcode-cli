@@ -19,6 +19,7 @@ export interface PlanUpdateOptions {
   input?: unknown;
   result?: unknown;
   error?: unknown;
+  expanded?: boolean;
 }
 
 function todosFrom(value: unknown): PlanTodo[] {
@@ -48,8 +49,11 @@ function errorMessage(value: unknown): string | undefined {
 
 function planHeader(state: string, theme: ZCodeTheme): string {
   const normalized = state.toLowerCase();
-  if (["failed", "error", "cancelled"].includes(normalized)) {
+  if (["failed", "error"].includes(normalized)) {
     return `${theme.error("✗")} ${theme.bold("Plan update failed")}`;
+  }
+  if (["cancelled", "rejected", "interrupted"].includes(normalized)) {
+    return `${theme.warning("■")} ${theme.bold("Plan update stopped")} ${theme.muted(`· ${normalized}`)}`;
   }
   if (["complete", "completed", "success"].includes(normalized)) {
     return `${theme.muted("●")} ${theme.bold("Updated Plan")}`;
@@ -58,7 +62,13 @@ function planHeader(state: string, theme: ZCodeTheme): string {
   return `${theme.accent("●")} ${theme.bold("Updating Plan")} ${theme.muted(`· ${phase}`)}`;
 }
 
-function planBody(todos: PlanTodo[], state: string, error: unknown, theme: ZCodeTheme): string | undefined {
+function planBody(
+  todos: PlanTodo[],
+  state: string,
+  error: unknown,
+  theme: ZCodeTheme,
+  expanded = false
+): string | undefined {
   const lines: string[] = [];
   if (todos.length > 0) {
     const completed = todos.filter((todo) => todo.status === "completed").length;
@@ -66,7 +76,8 @@ function planBody(todos: PlanTodo[], state: string, error: unknown, theme: ZCode
     const pending = todos.length - completed - active;
     lines.push(theme.muted(`└ ${completed} completed · ${active} in progress · ${pending} pending`));
 
-    for (const todo of todos.slice(0, maxVisibleTodos)) {
+    const visibleTodos = expanded ? todos : todos.slice(0, maxVisibleTodos);
+    for (const todo of visibleTodos) {
       if (todo.status === "completed") {
         lines.push(`${theme.success("✓")} ${theme.muted(todo.content)}`);
       } else if (todo.status === "in_progress") {
@@ -76,11 +87,11 @@ function planBody(todos: PlanTodo[], state: string, error: unknown, theme: ZCode
       }
     }
     if (todos.length > maxVisibleTodos) {
-      lines.push(theme.muted(`… ${todos.length - maxVisibleTodos} more items`));
+      if (!expanded) lines.push(theme.muted(`… ${todos.length - maxVisibleTodos} more items · Ctrl+O to expand`));
     }
   }
 
-  if (["failed", "error", "cancelled"].includes(state.toLowerCase())) {
+  if (["failed", "error", "cancelled", "rejected", "interrupted"].includes(state.toLowerCase())) {
     const message = errorMessage(error);
     if (message) lines.push(theme.error(message));
   }
@@ -92,8 +103,14 @@ function planText(options: PlanUpdateOptions, theme: ZCodeTheme): { header: stri
   const todos = resultTodos.length > 0 ? resultTodos : todosFrom(options.input);
   return {
     header: planHeader(options.state, theme),
-    body: planBody(todos, options.state, options.error, theme)
+    body: planBody(todos, options.state, options.error, theme, options.expanded)
   };
+}
+
+export function planHasHiddenItems(input: unknown, result: unknown): boolean {
+  const resultTodos = todosFrom(result);
+  const todos = resultTodos.length > 0 ? resultTodos : todosFrom(input);
+  return todos.length > maxVisibleTodos;
 }
 
 export function isPlanUpdateTool(name: string): boolean {

@@ -11,9 +11,19 @@ import {
   fileDiffsForTool,
   FileDiffView
 } from "./file-diff-view.ts";
-import { isPlanUpdateTool, planCard, PlanUpdateView } from "./plan-view.ts";
+import { isPlanUpdateTool, planCard, planHasHiddenItems, PlanUpdateView } from "./plan-view.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 import { asString, isRecord } from "./types.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
+import {
+  canonicalToolName,
+  isKnownTool,
+  oneLine,
+  recordString,
+  specializedToolRender,
+  toolSummary,
+  type ToolProgressData
+} from "./tool-renderers.ts";
 
 const maxPreviewCharacters = 2_400;
 const maxPreviewLines = 16;
@@ -25,6 +35,7 @@ export interface ToolViewOptions {
   inputText?: string;
   result?: unknown;
   error?: unknown;
+  progress?: ToolProgressData;
 }
 
 interface ToolImage {
@@ -32,15 +43,22 @@ interface ToolImage {
   mimeType: string;
 }
 
-function truncate(value: string): string {
+function truncate(value: string, expanded: boolean): { text: string; truncated: boolean } {
   const normalized = value.replace(/\r/g, "");
+  if (expanded) return { text: normalized, truncated: false };
   const lines = normalized.split("\n");
   if (lines.length > maxPreviewLines) {
     const visible = lines.slice(0, maxPreviewLines).join("\n");
-    return `${visible}\n… ${lines.length - maxPreviewLines} more lines`;
+    return {
+      text: `${visible}\n… ${lines.length - maxPreviewLines} more lines · Ctrl+O to expand`,
+      truncated: true
+    };
   }
-  if (normalized.length <= maxPreviewCharacters) return normalized;
-  return `${normalized.slice(0, maxPreviewCharacters)}\n… ${normalized.length - maxPreviewCharacters} more characters`;
+  if (normalized.length <= maxPreviewCharacters) return { text: normalized, truncated: false };
+  return {
+    text: `${normalized.slice(0, maxPreviewCharacters)}\n… ${normalized.length - maxPreviewCharacters} more characters · Ctrl+O to expand`,
+    truncated: true
+  };
 }
 
 function jsonReplacer(key: string, value: unknown): unknown {
@@ -53,7 +71,7 @@ function jsonReplacer(key: string, value: unknown): unknown {
 }
 
 function stringify(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return sanitizeTerminalText(value);
   if (value === undefined || value === null) return undefined;
   try {
     return JSON.stringify(value, jsonReplacer, 2);
@@ -73,74 +91,15 @@ function parsedInput(options: ToolViewOptions): unknown {
   }
 }
 
-function recordString(record: Record<string, unknown> | undefined, keys: string[]): string | undefined {
-  if (!record) return undefined;
-  for (const key of keys) {
-    const value = asString(record[key]);
-    if (value?.trim()) return value.trim();
-  }
-  return undefined;
-}
-
-function oneLine(value: string, limit = 100): string {
-  const compact = value.replace(/\s+/gu, " ").trim();
-  return compact.length <= limit ? compact : `${compact.slice(0, Math.max(1, limit - 1))}…`;
-}
-
-function quoted(value: string): string {
-  return value.includes(" ") ? JSON.stringify(value) : value;
-}
-
-function toolSummary(name: string, input: unknown): string | undefined {
-  const record = isRecord(input) ? input : undefined;
-  const normalized = name.toLowerCase().replace(/[^a-z]/gu, "");
-  const path = recordString(record, ["file_path", "filePath", "path"]);
-
-  if (normalized.includes("bash") || normalized.includes("shell") || normalized === "exec") {
-    const command = recordString(record, ["command", "cmd", "script"]);
-    return command ? oneLine(command) : undefined;
-  }
-  if (normalized.includes("grep") || normalized.includes("searchtext")) {
-    const pattern = recordString(record, ["pattern", "query", "regex"]);
-    return [pattern && quoted(oneLine(pattern, 60)), path && `in ${path}`].filter(Boolean).join(" ") || undefined;
-  }
-  if (normalized.includes("glob") || normalized.includes("find")) {
-    const pattern = recordString(record, ["pattern", "glob", "query"]);
-    return [pattern && quoted(oneLine(pattern, 60)), path && `in ${path}`].filter(Boolean).join(" ") || undefined;
-  }
-  if (normalized.includes("webfetch") || normalized === "fetch") {
-    return recordString(record, ["url", "uri"]);
-  }
-  if (normalized.includes("websearch")) {
-    return recordString(record, ["query", "q"]);
-  }
-  if (normalized.includes("skill")) {
-    return recordString(record, ["skill", "name"]);
-  }
-  if (normalized.includes("sendmessage")) {
-    const recipient = recordString(record, ["recipient", "target", "to"]);
-    return recipient ? `to ${recipient}` : undefined;
-  }
-  if (normalized === "agent" || normalized.includes("task")) {
-    return recordString(record, ["description", "task", "prompt", "subagent_type"]);
-  }
-  if (path) return path;
-  return recordString(record, ["name", "id", "target"]);
-}
-
 function mutationInput(name: string, input: unknown): string | undefined {
   if (!isRecord(input)) return undefined;
-  const normalized = name.toLowerCase().replace(/[^a-z]/gu, "");
-  if (!normalized.includes("write") && !normalized.includes("edit") && !normalized.includes("patch")) return undefined;
+  const canonical = canonicalToolName(name);
+  if (canonical !== "Write" && canonical !== "Edit" && canonical !== "ApplyPatch") return undefined;
   return recordString(input, ["patch_text", "patchText", "patch", "diff", "new_string", "newString", "content"]);
 }
 
 function isKnownCompactTool(name: string): boolean {
-  const normalized = name.toLowerCase().replace(/[^a-z]/gu, "");
-  return [
-    "read", "write", "edit", "patch", "bash", "shell", "exec", "grep", "glob", "find",
-    "webfetch", "websearch", "skill", "task", "agent", "sendmessage"
-  ].some((part) => normalized.includes(part));
+  return isKnownTool(name);
 }
 
 function imageValue(value: unknown): ToolImage | undefined {
@@ -163,7 +122,7 @@ function resultContent(value: unknown): { text?: string; images: ToolImage[] } {
   const text: string[] = [];
   const append = (item: unknown): void => {
     if (typeof item === "string") {
-      text.push(item);
+      text.push(sanitizeTerminalText(item));
       return;
     }
     if (!isRecord(item)) return;
@@ -203,8 +162,9 @@ function resultContent(value: unknown): { text?: string; images: ToolImage[] } {
 }
 
 function errorText(value: unknown): string | undefined {
-  if (value instanceof Error) return value.message;
-  return asString(value) ?? stringify(value);
+  if (value instanceof Error) return sanitizeTerminalText(value.message, { preserveSgr: false });
+  const direct = asString(value);
+  return direct ? sanitizeTerminalText(direct, { preserveSgr: false }) : stringify(value);
 }
 
 function statePresentation(state: string, theme: ZCodeTheme): { icon: string; suffix?: string } {
@@ -212,9 +172,16 @@ function statePresentation(state: string, theme: ZCodeTheme): { icon: string; su
   if (normalized === "complete" || normalized === "completed" || normalized === "success") {
     return { icon: theme.success("✓") };
   }
-  if (normalized === "failed" || normalized === "error" || normalized === "cancelled") {
+  if (normalized === "failed" || normalized === "error") {
     return { icon: theme.error("✗"), suffix: "failed" };
   }
+  if (normalized === "cancelled") return { icon: theme.warning("■"), suffix: "cancelled" };
+  if (normalized === "rejected") return { icon: theme.warning("■"), suffix: "rejected" };
+  if (normalized === "interrupted") return { icon: theme.warning("■"), suffix: "interrupted" };
+  if (normalized === "scheduled" || normalized === "queued") return { icon: theme.muted("○"), suffix: "queued" };
+  if (normalized === "waiting_permission") return { icon: theme.warning("◆"), suffix: "waiting for permission" };
+  if (normalized === "preparing") return { icon: theme.muted("○"), suffix: "preparing" };
+  if (normalized === "prepared") return { icon: theme.muted("○"), suffix: "prepared" };
   if (normalized === "running") return { icon: theme.accent("●"), suffix: "running" };
   return { icon: theme.muted("○") };
 }
@@ -230,47 +197,88 @@ function stateBackground(state: string, theme: ZCodeTheme): (text: string) => st
   return theme.toolPendingBackground;
 }
 
-function stylePreview(value: string, theme: ZCodeTheme): string {
-  return truncate(value).split("\n").map((line) => {
-    if (line.startsWith("+") && !line.startsWith("+++")) return theme.success(line);
-    if (line.startsWith("-") && !line.startsWith("---")) return theme.error(line);
-    if (line.startsWith("@@")) return theme.accent(line);
-    return theme.muted(line);
-  }).join("\n");
+function stylePreview(value: string, theme: ZCodeTheme, expanded: boolean): { text: string; truncated: boolean } {
+  const preview = truncate(sanitizeTerminalText(value), expanded);
+  return {
+    truncated: preview.truncated,
+    text: preview.text.split("\n").map((line) => {
+      if (line.startsWith("+") && !line.startsWith("+++")) return theme.success(line);
+      if (line.startsWith("-") && !line.startsWith("---")) return theme.error(line);
+      if (line.startsWith("@@")) return theme.accent(line);
+      return theme.muted(line);
+    }).join("\n")
+  };
 }
 
 function toolText(
   options: ToolViewOptions,
   theme: ZCodeTheme,
-  input = parsedInput(options)
-): { header: string; body?: string; images: ToolImage[] } {
+  input = parsedInput(options),
+  expanded = false
+): { header: string; body?: string; images: ToolImage[]; truncated: boolean } {
   const presentation = statePresentation(options.state, theme);
-  const summary = toolSummary(options.name, input);
+  const specialized = specializedToolRender({
+    name: options.name,
+    state: options.state,
+    input,
+    result: options.result,
+    progress: options.progress,
+    expanded,
+    theme
+  });
+  const summary = specialized?.summary ?? toolSummary(options.name, input);
   const header = [
     presentation.icon,
-    theme.bold(options.name),
+    theme.bold(specialized?.displayName ?? options.name),
     summary && theme.muted(oneLine(summary)),
     presentation.suffix && theme.muted(`· ${presentation.suffix}`)
   ].filter(Boolean).join(" ");
 
   const sections: string[] = [];
+  let truncated = false;
   const mutation = mutationInput(options.name, input);
-  if (mutation) sections.push(stylePreview(mutation, theme));
+  if (mutation) {
+    const preview = stylePreview(mutation, theme, expanded);
+    sections.push(preview.text);
+    truncated ||= preview.truncated;
+  }
   else if (input !== undefined && !isKnownCompactTool(options.name)) {
     const generic = stringify(input);
-    if (generic) sections.push(stylePreview(generic, theme));
+    if (generic) {
+      const preview = stylePreview(generic, theme, expanded);
+      sections.push(preview.text);
+      truncated ||= preview.truncated;
+    }
   }
 
   const result = resultContent(options.result);
-  if (result.text) sections.push(stylePreview(result.text, theme));
+  if (specialized?.body) {
+    const preview = truncate(specialized.body, expanded);
+    const expansionHint = specialized.hiddenContent && !preview.truncated
+      ? theme.muted("Ctrl+O to expand")
+      : undefined;
+    sections.push([preview.text, expansionHint].filter(Boolean).join("\n"));
+    truncated ||= preview.truncated || specialized.hiddenContent === true;
+  }
+  if (result.text && !specialized?.consumesResult) {
+    const preview = stylePreview(result.text, theme, expanded);
+    sections.push(preview.text);
+    truncated ||= preview.truncated;
+  }
   const embeddedError = isRecord(options.result) ? options.result.error : undefined;
   const error = errorText(options.error ?? embeddedError);
-  if (error) sections.push(theme.error(`Error: ${truncate(error)}`));
-  return { header, body: sections.filter(Boolean).join("\n"), images: result.images };
+  if (error) {
+    const preview = truncate(error, expanded);
+    sections.push(theme.error(`Error: ${preview.text}`));
+    truncated ||= preview.truncated;
+  }
+  return { header, body: sections.filter(Boolean).join("\n"), images: result.images, truncated };
 }
 
 export class ToolExecutionView extends Container {
   private options: ToolViewOptions;
+  private expanded = false;
+  private hiddenContent = false;
   private readonly card = new Box(1, 0);
   private readonly imageHost = new Container();
 
@@ -287,9 +295,47 @@ export class ToolExecutionView extends Container {
     this.rebuild();
   }
 
+  setExpanded(expanded: boolean): void {
+    if (this.expanded === expanded) return;
+    this.expanded = expanded;
+    this.rebuild();
+  }
+
+  isExpanded(): boolean {
+    return this.expanded;
+  }
+
+  hasHiddenContent(): boolean {
+    return this.hiddenContent;
+  }
+
+  getSearchText(): string {
+    return [this.options.name, stringify(parsedInput(this.options)), stringify(this.options.result), errorText(this.options.error)]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  getState(): string {
+    return this.options.state;
+  }
+
+  getName(): string {
+    return this.options.name;
+  }
+
+  getSummary(): string | undefined {
+    return toolSummary(this.options.name, parsedInput(this.options));
+  }
+
+  isTerminal(): boolean {
+    return ["complete", "completed", "success", "failed", "error", "cancelled", "rejected", "interrupted"]
+      .includes(this.options.state.toLowerCase());
+  }
+
   private rebuild(): void {
     this.card.clear();
     this.imageHost.clear();
+    this.hiddenContent = false;
     this.card.setBgFn(stateBackground(this.options.state, this.theme));
     const input = parsedInput(this.options);
     if (isPlanUpdateTool(this.options.name)) {
@@ -297,8 +343,10 @@ export class ToolExecutionView extends Container {
         state: this.options.state,
         input,
         result: this.options.result,
-        error: this.options.error
+        error: this.options.error,
+        expanded: this.expanded
       }));
+      this.hiddenContent = !this.expanded && planHasHiddenItems(input, this.options.result);
       return;
     }
     const diffs = fileDiffsForTool(this.options.name, input, this.options.result, this.options.state);
@@ -307,11 +355,16 @@ export class ToolExecutionView extends Container {
       this.card.addChild(new FileDiffView(this.theme, {
         toolName: this.options.name,
         state: this.options.state,
-        diffs
+        diffs,
+        expanded: this.expanded
       }));
+      this.hiddenContent = !this.expanded && diffs.some((diff) => diff.truncated
+        || diff.structuredPatch.length > 8
+        || diff.structuredPatch.reduce((total, hunk) => total + hunk.lines.length, 0) > 160);
       return;
     }
-    const rendered = toolText(this.options, this.theme, input);
+    const rendered = toolText(this.options, this.theme, input, this.expanded);
+    this.hiddenContent = rendered.truncated;
     this.card.addChild(new Text(rendered.header, 0, 0));
     if (rendered.body) this.card.addChild(new Text(rendered.body, 1, 0));
     if (rendered.images.length > 0) this.imageHost.addChild(new Spacer(1));

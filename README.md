@@ -43,11 +43,40 @@ is the compatibility host for the unmodified upstream kernel.
 - generic upstream selection dialogs for sessions, plugins and checkpoints;
 - interactive tool-permission approval dialogs;
 - clipboard image attachments through Ctrl+V or `/paste-image`;
-- compact tool execution views with path, command, diff, result and image previews;
+- compact tool execution views with path, command, progress, result and image previews;
+- parent/child Agent tool trees with resumable subagent metadata and expandable Prompt/Response details;
+- syntax-highlighted Markdown code blocks with stable streaming-block rendering;
+- Pierre-style inline diffs with line numbers, syntax highlighting, word-level changes and CJK wrapping;
+- `/diff` browser for current Git changes and per-turn file changes, including paged details and binary/untracked states;
 - terminal-native Mermaid previews with source fallback for unsupported or oversized diagrams;
+- `/context` prompt-composition, cache and context-usage details;
+- `/status` session, runtime, goal, MCP and workspace details;
+- searchable transcript navigation with per-block expansion, selected-block copying and `n`/`N` match traversal;
+- persistent active-tool, background-task and open-plan activity between the transcript and editor;
 - active-turn steering, cancellation and error reporting;
 - `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling;
 - `--no-color` and `NO_COLOR` support.
+
+### TUI inspection and navigation
+
+```text
+/diff                         browse current and per-turn file changes
+/context                      inspect context usage and source composition
+/status                       inspect detailed runtime and session status
+/tasks                        inspect or stop background tasks
+/search <text>                search retained transcript blocks
+/search next|prev|clear       navigate or close transcript search
+/transcript latest            select the latest transcript block
+/transcript next|prev|close   navigate or leave transcript selection
+/copy                         copy the selected block, or the latest response
+```
+
+While the editor is empty, `Alt+Up` and `Alt+Down` navigate selected transcript
+blocks. `Ctrl+O` expands only the selected/search-matched block; without a
+selection it toggles all expandable content. During transcript search, `n` and
+`N` move to the next and previous match. `PageUp` and `PageDown` page through
+an oversized selected block without rendering the entire message at once.
+`Esc` leaves search or transcript navigation.
 
 ## Requirements
 
@@ -191,8 +220,11 @@ bun run check:tui
 
 `check:tui` runs two real-PTY scenarios. The official runtime scenario executes
 `/help`, switches to plan mode, and exits. The offline feature scenario exercises
-model and effort selectors, image attachments, tool cards, MCP actions and the
-workflow panel. Both use temporary home directories and do not make API calls.
+model and effort selectors, image attachments, nested Agent tools, Markdown,
+Mermaid, inline and browsable diffs, transcript navigation, context/status
+details, MCP actions, background tasks and the workflow panel. Both scenarios
+advance from observed terminal output instead of fixed timers, use temporary
+home directories and do not make API calls.
 
 Start the client directly:
 

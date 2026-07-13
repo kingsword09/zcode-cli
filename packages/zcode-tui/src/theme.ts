@@ -4,10 +4,14 @@ import type {
   SelectListTheme
 } from "@earendil-works/pi-tui";
 
+import { CodeHighlighter } from "./code-highlighter.ts";
+
 const RESET = "\x1b[0m";
 
 function ansi(code: string, enabled: boolean): (text: string) => string {
-  return enabled ? (text) => `\x1b[${code}m${text}${RESET}` : (text) => text;
+  if (!enabled) return (text) => text;
+  const open = `\x1b[${code}m`;
+  return (text) => `${open}${text.replaceAll(RESET, `${RESET}${open}`)}${RESET}`;
 }
 
 export interface ZCodeTheme {
@@ -25,12 +29,17 @@ export interface ZCodeTheme {
   diffAddedLine: (text: string) => string;
   diffRemovedLine: (text: string) => string;
   diffHunkLine: (text: string) => string;
+  diffAddedWord: (text: string) => string;
+  diffRemovedWord: (text: string) => string;
+  searchMatch: (text: string) => string;
+  codeHighlighter: CodeHighlighter;
   editor: EditorTheme;
   markdown: MarkdownTheme;
   select: SelectListTheme;
 }
 
 export function createTheme(enabled: boolean): ZCodeTheme {
+  const codeHighlighter = new CodeHighlighter(enabled);
   const accent = ansi("38;5;75", enabled);
   const success = ansi("38;5;78", enabled);
   const warning = ansi("38;5;221", enabled);
@@ -50,6 +59,9 @@ export function createTheme(enabled: boolean): ZCodeTheme {
   const diffAddedLine = ansi("38;5;120;48;5;22", enabled);
   const diffRemovedLine = ansi("38;5;210;48;5;52", enabled);
   const diffHunkLine = ansi("38;5;117;48;5;24", enabled);
+  const diffAddedWord = ansi("1;38;5;231;48;5;28", enabled);
+  const diffRemovedWord = ansi("1;38;5;231;48;5;88", enabled);
+  const searchMatch = enabled ? (text: string) => `\x1b[7m${text}\x1b[27m` : (text: string) => text;
 
   const select: SelectListTheme = {
     selectedPrefix: accent,
@@ -74,6 +86,10 @@ export function createTheme(enabled: boolean): ZCodeTheme {
     diffAddedLine,
     diffRemovedLine,
     diffHunkLine,
+    diffAddedWord,
+    diffRemovedWord,
+    searchMatch,
+    codeHighlighter,
     select,
     editor: {
       borderColor: accent,
@@ -93,7 +109,8 @@ export function createTheme(enabled: boolean): ZCodeTheme {
       bold,
       italic,
       strikethrough,
-      underline
+      underline,
+      highlightCode: (source, language) => codeHighlighter.highlight(source, language)
     }
   };
 }

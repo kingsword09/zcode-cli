@@ -7,10 +7,16 @@ import {
 } from "@earendil-works/pi-tui";
 
 import type { ZCodeTheme } from "./theme.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 
 export type MarkdownSegment =
   | { kind: "markdown"; text: string }
   | { kind: "mermaid"; source: string };
+
+interface RenderedMarkdownSegment {
+  segment: MarkdownSegment;
+  component: Component;
+}
 
 const maxMermaidSourceCharacters = 20_000;
 const terminalWidthPlaceholder = "\u200b";
@@ -80,6 +86,42 @@ export function splitMarkdownSegments(text: string): MarkdownSegment[] {
   const markdown = lines.slice(markdownStart).join("\n").trim();
   if (markdown) segments.push({ kind: "markdown", text: markdown });
   return segments;
+}
+
+function splitMarkdownBlocks(text: string): string[] {
+  const lines = text.split("\n");
+  const blocks: string[] = [];
+  let start = 0;
+  let fence: ReturnType<typeof openingFence>;
+
+  const append = (end: number): void => {
+    const block = lines.slice(start, end).join("\n").trim();
+    if (block) blocks.push(block);
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (fence) {
+      if (closesFence(line, fence.marker, fence.length)) fence = undefined;
+      continue;
+    }
+    const nextFence = openingFence(line);
+    if (nextFence) {
+      fence = nextFence;
+      continue;
+    }
+    if (line.trim() !== "") continue;
+    append(index);
+    start = index + 1;
+  }
+  append(lines.length);
+  return blocks;
+}
+
+export function splitStreamingMarkdownSegments(text: string): MarkdownSegment[] {
+  return splitMarkdownSegments(text).flatMap((segment): MarkdownSegment[] => segment.kind === "mermaid"
+    ? [segment]
+    : splitMarkdownBlocks(segment.text).map((block) => ({ kind: "markdown", text: block })));
 }
 
 function diagramType(source: string): string {
@@ -176,16 +218,20 @@ export class RichMarkdown implements Component {
   private cachedText?: string;
   private cachedWidth?: number;
   private cachedLines?: string[];
+  private renderedSegments: RenderedMarkdownSegment[] = [];
 
   constructor(
     private text: string,
     private readonly paddingX: number,
     private readonly theme: ZCodeTheme
-  ) {}
+  ) {
+    this.text = sanitizeTerminalText(text, { preserveSgr: false });
+  }
 
   setText(text: string): void {
-    if (text === this.text) return;
-    this.text = text;
+    const sanitized = sanitizeTerminalText(text, { preserveSgr: false });
+    if (sanitized === this.text) return;
+    this.text = sanitized;
     this.invalidate();
   }
 
@@ -193,6 +239,11 @@ export class RichMarkdown implements Component {
     this.cachedText = undefined;
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
+    for (const rendered of this.renderedSegments) rendered.component.invalidate();
+  }
+
+  getSearchText(): string {
+    return this.text;
   }
 
   render(width: number): string[] {
@@ -200,11 +251,25 @@ export class RichMarkdown implements Component {
       return this.cachedLines;
     }
 
+    const segments = splitStreamingMarkdownSegments(this.text);
+    this.renderedSegments = segments.map((segment, index): RenderedMarkdownSegment => {
+      const previous = this.renderedSegments[index];
+      if (previous && sameSegment(previous.segment, segment)) return previous;
+      if (previous?.segment.kind === "markdown" && segment.kind === "markdown"
+        && index === segments.length - 1 && previous.component instanceof Markdown) {
+        previous.component.setText(segment.text);
+        return { segment, component: previous.component };
+      }
+      return {
+        segment,
+        component: segment.kind === "mermaid"
+          ? new MermaidBlock(segment.source, this.paddingX, this.theme)
+          : new Markdown(segment.text, this.paddingX, 0, this.theme.markdown)
+      };
+    });
+
     const lines: string[] = [];
-    for (const segment of splitMarkdownSegments(this.text)) {
-      const component: Component = segment.kind === "mermaid"
-        ? new MermaidBlock(segment.source, this.paddingX, this.theme)
-        : new Markdown(segment.text, this.paddingX, 0, this.theme.markdown);
+    for (const { component } of this.renderedSegments) {
       const rendered = component.render(width);
       if (rendered.length === 0) continue;
       if (lines.length > 0 && lines.at(-1)?.trim() !== "") lines.push("");
@@ -216,4 +281,11 @@ export class RichMarkdown implements Component {
     this.cachedLines = lines;
     return lines;
   }
+}
+
+function sameSegment(left: MarkdownSegment, right: MarkdownSegment): boolean {
+  if (left.kind !== right.kind) return false;
+  return left.kind === "markdown"
+    ? left.text === (right as Extract<MarkdownSegment, { kind: "markdown" }>).text
+    : left.source === (right as Extract<MarkdownSegment, { kind: "mermaid" }>).source;
 }
