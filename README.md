@@ -26,6 +26,14 @@ Using `@latest` is intentional because the App-aligned release format uses a
 SemVer prerelease segment such as `3.3.5-2`. The tag always points to the
 newest validated App-plus-build release.
 
+Interactive startup checks the npm `latest` tag at most once every 20 hours.
+A cached newer version is shown as a non-blocking update card with the exact
+install command and release-notes link. Missing or stale cache data is refreshed
+in the background for the next launch, so registry latency or failure never
+delays the editor. Set `ZCODE_DISABLE_UPDATE_CHECK=1` or
+`NO_UPDATE_NOTIFIER=1` to disable the check; CI environments skip it
+automatically.
+
 A normal installation requires only Node.js. `zigpty` ships small prebuilt
 native bindings for each supported platform, with no compiler or postinstall
 step required.
