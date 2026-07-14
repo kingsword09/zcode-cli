@@ -24,6 +24,7 @@ const child = Bun.spawn([process.execPath, fixture], {
     ...process.env,
     CI: "1",
     HOME: temporaryHome,
+    USERPROFILE: temporaryHome,
     TERM: "xterm-256color",
     ZCODE_APP_CLI_BUN: process.execPath,
     ZCODE_APP_CLI_ENTRY: fixture

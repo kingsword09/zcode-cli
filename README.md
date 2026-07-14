@@ -102,8 +102,18 @@ not available on `PATH`.
 
 ## Model access and configuration
 
-ZCode reads the user configuration from `~/.zcode/cli/config.json`. Choose one
-of these model-access paths:
+On first launch, ZCode recursively creates the configuration directory and a
+credential-free `config.json` when it is missing. Existing files are never
+replaced. The location is `~/.zcode/cli/config.json` on macOS and Linux, and
+`%USERPROFILE%\.zcode\cli\config.json` on Windows. Newly created directories
+and files use private permissions on POSIX; Windows keeps the current user's
+inherited ACLs.
+
+The generated file contains the complete non-secret configuration shape plus
+valid Z.AI model metadata, but deliberately omits `apiKey` until one is
+configured. This lets the official runtime and TUI start cleanly without
+pretending that model access is already configured. Choose one of these
+model-access paths before sending a prompt:
 
 - Z.AI OAuth on macOS: run `zcode login` when no provider is configured, or
   `zcode login --oauth` to force reauthorization;
@@ -150,20 +160,22 @@ localhost-callback implementation inside the runtime.
 
 ### Custom provider without login
 
-From this source checkout, install the full template as the user config:
+Start `zcode` once to generate the full user configuration automatically. From
+a source checkout, `config.example.json` contains the same initial structure
+for reference. Then edit the generated file:
 
 ```bash
-mkdir -p ~/.zcode/cli
-cp config.example.json ~/.zcode/cli/config.json
-chmod 600 ~/.zcode/cli/config.json
+zcode
 ```
 
-Then edit four values in `~/.zcode/cli/config.json`:
+Edit these four areas in `~/.zcode/cli/config.json` (or the Windows path shown
+above):
 
 1. `provider.zai.kind`: use `anthropic`, `openai-compatible`, or `openai`;
 2. `provider.zai.options.baseURL`: use the provider's API root;
 3. `provider.zai.options.apiKey`: insert the direct API key;
-4. replace `replace-with-model-id` in both `provider.zai.models` and `model`.
+4. replace the entries in `provider.zai.models`, then point both `model.main`
+   and `model.lite` at the desired model IDs.
 
 The provider map key is deliberately `zai`. The upstream CLI 0.15.x TUI
 considers a direct API key configured only when it is stored under provider ID
