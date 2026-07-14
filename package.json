@@ -1,6 +1,6 @@
 {
   "name": "zcode-app-cli",
-  "version": "3.3.5",
+  "version": "3.3.5-1",
   "description": "Unofficial Bun and pi-tui terminal client for the ZCode agent runtime",
   "type": "module",
   "bin": {
@@ -11,6 +11,7 @@
     "src",
     "vendor",
     "config.example.json",
+    "zcode-runtime.lock.json",
     "README.md",
     "LICENSE"
   ],
@@ -23,6 +24,7 @@
     "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "version:build": "bun scripts/bump-build.ts",
     "prepack": "bun run check"
   },
   "engines": {

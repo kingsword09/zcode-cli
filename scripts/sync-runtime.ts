@@ -8,6 +8,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
+import { syncedReleaseVersion } from "./release-version.ts";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cdnRoot = "https://cdn-zcode.z.ai/zcode/electron/releases";
 
@@ -31,7 +33,17 @@ interface UpdateManifest {
 interface RuntimeSource {
   appVersion: string;
   glm: string;
+  lock?: RuntimeLock;
   source: string;
+}
+
+export interface RuntimeLock {
+  schemaVersion: 1;
+  appVersion: string;
+  platform: SyncOptions["platform"];
+  arch: string;
+  url: string;
+  sha512: string;
 }
 
 export function parseArgs(argv: string[]): SyncOptions {
@@ -472,6 +484,14 @@ async function resolveSource(options: SyncOptions, temporaryDirectory: string): 
   return {
     appVersion: String(manifest.version),
     glm: dirname(runtime),
+    lock: {
+      schemaVersion: 1,
+      appVersion: String(manifest.version),
+      platform: options.platform,
+      arch: options.arch,
+      url: artifactUrl,
+      sha512: artifact.sha512
+    },
     source: artifactUrl
   };
 }
@@ -492,6 +512,7 @@ async function sync(options: SyncOptions): Promise<void> {
       appVersion: source.appVersion,
       cliVersion,
       extractedAt: new Date().toISOString(),
+      ...(source.lock ? { sha512: source.lock.sha512 } : {}),
       source: source.source,
       tui: {
         implementation: "@zcode/tui",
@@ -501,11 +522,15 @@ async function sync(options: SyncOptions): Promise<void> {
 
     const packagePath = join(root, "package.json");
     const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as Record<string, unknown>;
-    packageJson.version = source.appVersion;
+    const packageVersion = syncedReleaseVersion(source.appVersion, String(packageJson.version ?? ""));
+    packageJson.version = packageVersion;
     await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    if (source.lock) {
+      await writeFile(join(root, "zcode-runtime.lock.json"), `${JSON.stringify(source.lock, null, 2)}\n`);
+    }
     await rm(join(root, "vendor"), { recursive: true, force: true });
     await rename(nextVendor, join(root, "vendor"));
-    console.log(`Prepared ${String(packageJson.name)}@${source.appVersion} with ${cliVersion}.`);
+    console.log(`Prepared ${String(packageJson.name)}@${packageVersion} with ${cliVersion}.`);
   } finally {
     await rm(nextVendor, { recursive: true, force: true });
     await rm(temporaryDirectory, { recursive: true, force: true });

@@ -1,0 +1,199 @@
+name: Publish ZCode CLI release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to npm and create the matching GitHub release
+        required: true
+        default: true
+        type: boolean
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: zcode-cli-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.merged == true &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          github.event.pull_request.head.ref == 'release/zcode-cli' ||
+          github.event.pull_request.head.ref == 'release/zcode-upstream'
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Prepare npm Trusted Publishing
+        run: |
+          npm install --global npm@latest
+          node --version
+          npm --version
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+
+      - name: Install extraction tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Capture committed release
+        id: expected
+        run: |
+          git ls-files --error-unmatch zcode-runtime.lock.json >/dev/null
+          PACKAGE_NAME=$(bun -e "console.log((await Bun.file('package.json').json()).name)")
+          PACKAGE_VERSION=$(bun -e "console.log((await Bun.file('package.json').json()).version)")
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate source
+        run: |
+          bun run typecheck
+          bun test
+
+      - name: Rebuild official runtime
+        run: bun run sync -- --platform linux --arch x64
+
+      - name: Verify release did not drift
+        env:
+          EXPECTED_VERSION: ${{ steps.expected.outputs.package_version }}
+        run: |
+          ACTUAL_VERSION=$(bun -e "console.log((await Bun.file('package.json').json()).version)")
+          if [[ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]]; then
+            echo "The upstream App changed after the release PR was prepared: expected ${EXPECTED_VERSION}, resolved ${ACTUAL_VERSION}." >&2
+            echo "Run Prepare ZCode CLI release again before publishing." >&2
+            exit 1
+          fi
+          git diff --exit-code -- package.json zcode-runtime.lock.json
+
+      - name: Validate extracted CLI
+        run: |
+          bun run check
+          bun run check:tui
+
+      - name: Inspect release state
+        id: release
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ steps.expected.outputs.commit }}
+          PACKAGE_NAME: ${{ steps.expected.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.expected.outputs.package_version }}
+          PUBLISH_REQUESTED: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${PACKAGE_VERSION}"
+          PUBLISHED=false
+          git fetch --tags --force origin
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            PUBLISHED=true
+          else
+            LATEST_VERSION=$(npm view "${PACKAGE_NAME}@latest" version 2>/dev/null || true)
+            if [[ -n "$LATEST_VERSION" ]]; then
+              IS_NEWER=$(PACKAGE_VERSION="$PACKAGE_VERSION" LATEST_VERSION="$LATEST_VERSION" bun -e '
+                import { compareReleaseVersions } from "./scripts/release-version.ts";
+                console.log(compareReleaseVersions(process.env.PACKAGE_VERSION, process.env.LATEST_VERSION) > 0);
+              ')
+              if [[ "$IS_NEWER" != "true" ]]; then
+                echo "Refusing to move latest from ${LATEST_VERSION} to ${PACKAGE_VERSION}." >&2
+                exit 1
+              fi
+            fi
+          fi
+
+          TAG_COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || true)
+          if [[ -n "$TAG_COMMIT" && "$TAG_COMMIT" != "$EXPECTED_COMMIT" ]]; then
+            echo "${TAG} already points to ${TAG_COMMIT}, not ${EXPECTED_COMMIT}." >&2
+            exit 1
+          fi
+
+          if [[ "$PUBLISHED" == "true" ]]; then
+            PUBLISHED_COMMIT=$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" gitHead 2>/dev/null || true)
+            if [[ -z "$PUBLISHED_COMMIT" ]]; then
+              echo "Cannot verify ${PACKAGE_NAME}@${PACKAGE_VERSION}: the existing npm release has no gitHead." >&2
+              exit 1
+            fi
+            if [[ "$PUBLISHED_COMMIT" != "$EXPECTED_COMMIT" ]]; then
+              echo "The existing npm release records ${PUBLISHED_COMMIT}, not ${EXPECTED_COMMIT}." >&2
+              exit 1
+            fi
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            RELEASE_EXISTS=true
+          else
+            RELEASE_EXISTS=false
+          fi
+
+          echo "enabled=$PUBLISH_REQUESTED" >> "$GITHUB_OUTPUT"
+          echo "publish=$([[ "$PUBLISHED" == "true" ]] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+          echo "create_tag=$([[ -n "$TAG_COMMIT" ]] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+          echo "create_release=$([[ "$RELEASE_EXISTS" == "true" ]] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm with Trusted Publishing
+        if: steps.release.outputs.enabled == 'true' && steps.release.outputs.publish == 'true'
+        run: npm publish --access public --tag latest
+
+      - name: Create immutable Git tag
+        if: steps.release.outputs.enabled == 'true' && steps.release.outputs.create_tag == 'true'
+        env:
+          PACKAGE_NAME: ${{ steps.expected.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.expected.outputs.package_version }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a "$TAG" -m "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        if: steps.release.outputs.enabled == 'true' && steps.release.outputs.create_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ steps.expected.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.expected.outputs.package_version }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: gh release create "$TAG" --verify-tag --generate-notes --title "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+      - name: Summarize release
+        if: always()
+        env:
+          ENABLED: ${{ steps.release.outputs.enabled }}
+          PACKAGE_NAME: ${{ steps.expected.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.expected.outputs.package_version }}
+          PUBLISH: ${{ steps.release.outputs.publish }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          echo "Release: ${PACKAGE_NAME}@${PACKAGE_VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Mutations enabled: ${ENABLED:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          echo "npm publication required: ${PUBLISH:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Git tag: ${TAG:-unknown}" >> "$GITHUB_STEP_SUMMARY"

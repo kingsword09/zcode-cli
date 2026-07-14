@@ -8,8 +8,45 @@ import {
   patchRuntimeTuiBridge,
   patchRuntimeZaiDesktopOAuth
 } from "../scripts/sync-runtime.ts";
+import {
+  compareReleaseVersions,
+  nextBuildVersion,
+  parseReleaseVersion,
+  syncedReleaseVersion
+} from "../scripts/release-version.ts";
 
 describe("runtime synchronization", () => {
+  test("pins the exact remote runtime used by release workflows", async () => {
+    const packageJson = await Bun.file(new URL("../package.json", import.meta.url)).json();
+    const lock = await Bun.file(new URL("../zcode-runtime.lock.json", import.meta.url)).json();
+    const release = parseReleaseVersion(String(packageJson.version));
+
+    expect(lock).toMatchObject({
+      schemaVersion: 1,
+      appVersion: release?.appVersion,
+      platform: "linux",
+      arch: "x64"
+    });
+    expect(lock.url).toMatch(/^https:\/\/cdn-zcode\.z\.ai\/.+\.deb$/u);
+    expect(Buffer.from(String(lock.sha512), "base64")).toHaveLength(64);
+    expect(packageJson.files).toContain("zcode-runtime.lock.json");
+  });
+
+  test("keeps the CLI build revision while aligning the App version", () => {
+    expect(parseReleaseVersion("3.3.5-12")).toEqual({ appVersion: "3.3.5", build: 12 });
+    expect(parseReleaseVersion("3.3.5+build.12")).toBeUndefined();
+    expect(parseReleaseVersion("3.3.5-build.12")).toBeUndefined();
+    expect(syncedReleaseVersion("3.3.5", "3.3.5-12")).toBe("3.3.5-12");
+    expect(syncedReleaseVersion("3.4.0", "3.3.5-12")).toBe("3.4.0-12");
+    expect(syncedReleaseVersion("3.4.0", "3.3.5")).toBe("3.4.0-1");
+    expect(nextBuildVersion("3.4.0-12")).toBe("3.4.0-13");
+    expect(compareReleaseVersions("3.3.5-13", "3.3.5-12")).toBe(1);
+    expect(compareReleaseVersions("3.4.0-1", "3.3.5-99")).toBe(1);
+    expect(compareReleaseVersions("3.3.5-12", "3.4.0-1")).toBe(-1);
+    expect(compareReleaseVersions("3.3.5-12", "3.3.5-12")).toBe(0);
+    expect(() => syncedReleaseVersion("3.4", "3.3.5-12")).toThrow(/Unsupported/);
+  });
+
   test("parseArgs uses the CI-safe Linux default", () => {
     expect(parseArgs([])).toEqual({ platform: "linux", arch: "x64" });
     expect(parseArgs(["--platform", "win32", "--arch", "arm64"])).toEqual({

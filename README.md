@@ -11,6 +11,20 @@ This project is not affiliated with or endorsed by Z.ai. ZCode and its bundled
 runtime remain subject to their upstream terms. Confirm that you are allowed to
 redistribute the extracted runtime before publishing the npm package.
 
+## Install and update
+
+Install or update the CLI through the `latest` dist-tag:
+
+```bash
+bun add -g zcode-app-cli@latest
+# or
+npm install -g zcode-app-cli@latest
+```
+
+Using `@latest` is intentional because the App-aligned release format uses a
+SemVer prerelease segment such as `3.3.5-2`. The tag always points to the
+newest validated App-plus-build release.
+
 ## Architecture
 
 ```text
@@ -458,22 +472,114 @@ The synchronization command:
 5. builds and injects the local `@zcode/tui` adapter;
 6. validates the official CLI version;
 7. records provenance in `vendor/extraction.json`;
-8. updates the npm package version to the ZCode App version.
+8. records the remote artifact URL and SHA-512 in
+   `zcode-runtime.lock.json`;
+9. aligns the npm version prefix with the ZCode App version while preserving
+   the independently incremented CLI build revision.
 
 ## Automated npm publishing
 
-`.github/workflows/sync-and-publish.yml` runs every day at 02:23 UTC and can
-also be started manually. It uses Bun for installation, building, tests,
-TypeScript 7 checking, extraction and PTY validation. npm is used only for the
-final provenance-enabled registry publication.
+Package versions use `<app-version>-<build>`, for example `3.3.5-2`. The prefix
+tracks the upstream ZCode App. The globally increasing build revision tracks
+fixes and features in this project. Do not use `3.3.5+build.2`: SemVer ignores
+`+build` metadata when comparing upgrades.
+
+Increment the project revision before publishing a local fix or feature:
+
+```bash
+bun run version:build
+```
+
+The release workflows normally perform that increment for you. The command is
+also available for local inspection and exceptional manual preparation.
+
+### Release flow
+
+Publishing is split into two workflows so the committed version, npm package,
+Git tag and GitHub Release all describe the same release:
+
+1. `.github/workflows/prepare-release.yml` extracts and validates the current
+   official runtime, then opens or updates a Release PR containing the exact
+   `package.json` version and `zcode-runtime.lock.json` build input;
+2. a maintainer reviews and merges that PR;
+3. `.github/workflows/publish.yml` checks out its merge commit, repeats the
+   extraction and validation, publishes through npm Trusted Publishing, then
+   creates `v<version>` and the corresponding GitHub Release.
+
+The generated `vendor/` directory remains ignored by Git and is rebuilt in both
+workflows. Its updater URL and SHA-512 are committed in
+`zcode-runtime.lock.json`. The publish workflow refuses to continue if either
+the App version or artifact changes between PR preparation and merge. Run the
+preparation workflow again to refresh the PR.
+
+The preparation workflow runs every day at 02:23 UTC in `upstream` mode. It
+creates a PR when the ZCode App version or the pinned installer changes. A
+same-version upstream repack increments the global build so npm still receives
+an immutable new version. From the Actions page, run **Prepare ZCode CLI
+release** with one of these modes:
+
+- `cli` increments the global build and also aligns with the latest App;
+- `upstream` checks for an App update without incrementing the build.
+
+The modes use `release/zcode-cli` and `release/zcode-upstream` respectively. If
+both PRs are open, merge one and rerun the other preparation mode so its version
+is recalculated from the new `main` branch.
+
+Merging either Release PR publishes automatically. **Publish ZCode CLI
+release** can also be started manually for recovery. Its `publish` checkbox can
+be disabled to run all validation and consistency checks without changing npm,
+Git tags or GitHub Releases. Publication, tag creation and GitHub Release
+creation are independently idempotent, so a partially completed run can be
+retried safely.
+
+### Initial npm setup
+
+If the package does not exist on npm yet, bootstrap it once from the exact
+committed `main` revision. First prepare and validate the runtime locally:
+
+```bash
+bun install --frozen-lockfile
+bun run sync -- --platform linux --arch x64
+bun run typecheck
+bun test
+git diff --exit-code -- package.json zcode-runtime.lock.json
+```
+
+If the final command reports a version change, do not publish from that working
+tree. Run **Prepare ZCode CLI release** in `upstream` mode, merge its PR, update
+the local checkout and validate again. Once the committed version matches:
+
+```bash
+npm login
+npm publish --access public --tag latest --provenance=false
+```
+
+Synchronization preserves the build when the upstream App version changes. For
+example, syncing `3.3.5-12` against ZCode App `3.4.0` produces `3.4.0-12`.
 
 Before enabling publication:
 
 1. confirm that `zcode-app-cli` is the npm package name you control;
 2. confirm redistribution rights for the extracted ZCode runtime;
-3. add an npm automation token as the `NPM_TOKEN` GitHub Actions secret, or
-   configure npm trusted publishing;
-4. run the workflow manually once.
+3. under the GitHub repository's **Settings** → **Actions** → **General**,
+   enable **Allow GitHub Actions to create and approve pull requests**;
+4. open the package on npmjs.com and select **Settings** →
+   **Trusted Publisher** → **GitHub Actions**;
+5. enter the GitHub organization or user, repository, and workflow filename
+   `publish.yml`; leave the environment name empty because this
+   workflow does not use a GitHub Environment, and select `npm publish` under
+   **Allowed actions**;
+6. save the publisher, prepare a `cli` release, and merge its Release PR to
+   verify an OIDC publication.
 
-The workflow skips publication when the extracted App version already exists
-on npm.
+The publisher runs on a GitHub-hosted runner with Node 24, grants
+`id-token: write`, and updates npm to the current release. It never reads an
+`NPM_TOKEN` repository secret; npm attaches provenance from the OIDC identity.
+After verifying the first OIDC release, npm recommends setting **Publishing
+access** to require 2FA and disallow tokens, then revoking any obsolete
+automation token.
+
+The publisher skips an identical existing version, refuses older versions,
+verifies every existing npm release's `gitHead`, and refuses to reuse a tag
+that points at another commit. The `latest` dist-tag therefore advances only
+to the newest validated App-plus-build release.
