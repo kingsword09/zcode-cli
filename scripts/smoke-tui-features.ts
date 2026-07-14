@@ -102,7 +102,9 @@ try {
   await sendAndWait("/effort\r", "effort picker", /Select reasoning effort/i);
   await sendAndWait("\x1b[B\r", "effort picker selection", /alpha\/model · build · low/i);
   await sendAndWait("\x16", "clipboard image", /1 image attached/i);
-  await sendAndWait("inspect\r", "feature turn", /Feature prompt complete\./i, 12_000);
+  await sendAndWait("inspect @ind", "workspace path suggestions", /index\.ts[\s\S]*src\/index\.ts/i);
+  await sendAndWait("\r", "workspace path completion", /inspect @src\/index\.ts/i);
+  await sendAndWait("\r", "feature turn", /Feature prompt complete\./i, 12_000);
   await waitFor("feature turn completion", /Feature background audit · turn complete/i, 0, 4_000);
   await sendAndWait("\x0f", "expanded Agent transcript", /Response:\s*Nested rendering inspected\./i);
 
@@ -183,6 +185,7 @@ for (const [label, pattern] of [
   ["model picker", /Select model/i],
   ["effort picker", /Select reasoning effort/i],
   ["image attachment", /1 image attached/i],
+  ["workspace file reference", /[›↪]\s*inspect @src\/index\.ts/i],
   ["completed thinking card", /◇ Thought/i],
   ["reasoning content", /Inspecting the repository before using tools\./i],
   ["updated plan", /● Updated Plan/i],

@@ -65,6 +65,22 @@ the only persistence path.
 - `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling with token usage and resume guidance on exit;
 - `--no-color` and `NO_COLOR` support.
 
+### Referencing workspace files
+
+Type `@` at the start of the prompt or after whitespace to open project file
+completion. Continue typing a path, use Up/Down to choose a candidate, then
+press Tab or Enter to insert it. Selecting a directory lets you continue with
+the next path segment.
+
+```text
+Explain @README.md
+Compare @src/index.ts with @"docs/design notes.md"
+```
+
+Suggestions come from the official ZCode runtime, stay inside the current
+workspace and exclude common repository metadata and dependency directories.
+Paths containing spaces are inserted in the quoted `@"..."` form.
+
 ### TUI inspection and navigation
 
 ```text

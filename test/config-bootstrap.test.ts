@@ -51,9 +51,9 @@ describe("user config bootstrap", () => {
 
     expect(result).toEqual({ configPath: userConfigPath(env), created: true });
     expect(config.provider.zai.options.apiKey).toBeUndefined();
+    expect(config.provider.zai.models["glm-5.2"]).toBeDefined();
     expect(config.provider.zai.models["glm-5.1"]).toBeDefined();
-    expect(config.provider.zai.models["glm-4.7"]).toBeDefined();
-    expect(config.model).toEqual({ main: "zai/glm-5.1", lite: "zai/glm-4.7" });
+    expect(config.model).toEqual({ main: "zai/glm-5.2", lite: "zai/glm-5.1" });
     expect(await readConfiguredModelAccess(env)).toBeNull();
 
     if (process.platform !== "win32") {

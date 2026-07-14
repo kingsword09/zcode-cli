@@ -17,6 +17,26 @@ export interface PromptCallOptions {
   requestPermission?: (request: unknown, context?: unknown) => Promise<unknown>;
 }
 
+export interface WorkspacePathSuggestionRequest {
+  token: string;
+  limit?: number;
+  abortSignal?: AbortSignal;
+}
+
+export interface WorkspacePathSuggestion {
+  kind: "file" | "directory";
+  path: string;
+}
+
+export interface WorkspacePathSuggestionResult {
+  items: WorkspacePathSuggestion[];
+  truncated: boolean;
+}
+
+export type ListWorkspacePathSuggestions = (
+  request: WorkspacePathSuggestionRequest
+) => Promise<WorkspacePathSuggestionResult>;
+
 export interface TuiOptions {
   initialMode?: string;
   initialModel?: unknown;
@@ -36,6 +56,7 @@ export interface TuiOptions {
   stdout?: NodeJS.WriteStream;
   stderr?: NodeJS.WriteStream;
   loadSessionTranscript?: () => Promise<unknown>;
+  listWorkspacePathSuggestions?: ListWorkspacePathSuggestions;
   recallPreviousInput?: (skip: number) => Promise<unknown>;
   readGoal?: () => Promise<unknown>;
   readTodos?: () => Promise<unknown>;

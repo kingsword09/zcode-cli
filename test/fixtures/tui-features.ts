@@ -110,6 +110,12 @@ await runTui({
   listMcpServers: async () => ({
     docs: { status: "disconnected", transport: "stdio", toolCount: 2 }
   }),
+  listWorkspacePathSuggestions: async ({ token, abortSignal }) => {
+    if (abortSignal?.aborted) return { items: [], truncated: false };
+    return token === "@ind"
+      ? { items: [{ kind: "file" as const, path: "src/index.ts" }], truncated: false }
+      : { items: [], truncated: false };
+  },
   refreshWorkflowPanel: async () => workflowPanel(),
   stopWorkflow: async () => workflowPanel("cancelled"),
   readGoal: async () => goal,
@@ -166,8 +172,12 @@ await runTui({
     const prompt = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
     const attachments = Array.isArray(prompt.attachments) ? prompt.attachments : [];
     const image = attachments[0] as Record<string, unknown> | undefined;
-    if (prompt.text !== "inspect" || image?.type !== "image" || typeof image.content !== "string") {
-      throw new Error("Feature smoke prompt did not include the clipboard image attachment.");
+    if (
+      prompt.text !== "inspect @src/index.ts" ||
+      image?.type !== "image" ||
+      typeof image.content !== "string"
+    ) {
+      throw new Error("Feature smoke prompt did not include the selected file and image attachment.");
     }
     await emit(options, { kind: "reasoning_delta", delta: "Inspecting " });
     await emit(options, { kind: "reasoning_delta", delta: "the repository before using tools." });
