@@ -21,7 +21,14 @@ const publishedFiles = [
 ];
 
 interface PackageManifest {
+  author?: unknown;
+  bugs?: Record<string, unknown>;
+  description?: unknown;
+  homepage?: unknown;
+  keywords?: unknown;
+  license?: unknown;
   name?: unknown;
+  repository?: Record<string, unknown>;
   version?: unknown;
   bin?: Record<string, unknown>;
   files?: unknown;
@@ -89,6 +96,23 @@ export async function validatePackageTree(base = root): Promise<void> {
   const packageJson = JSON.parse(await readFile(join(base, "package.json"), "utf8")) as PackageManifest;
   const release = parseReleaseVersion(String(packageJson.version ?? ""));
   if (!release) throw new Error("package.json version must use <app-version>-<build>.");
+  if (typeof packageJson.description !== "string" || !packageJson.description.trim()) {
+    throw new Error("The npm package description is missing.");
+  }
+  const keywords = Array.isArray(packageJson.keywords) ? packageJson.keywords : [];
+  if (!keywords.every((keyword) => typeof keyword === "string")
+    || !["bun", "cli", "tui", "zcode"].every((keyword) => keywords.includes(keyword))) {
+    throw new Error("The npm package keywords are incomplete.");
+  }
+  if (packageJson.homepage !== "https://github.com/kingsword09/zcode-cli#readme"
+    || packageJson.bugs?.url !== "https://github.com/kingsword09/zcode-cli/issues"
+    || packageJson.repository?.type !== "git"
+    || packageJson.repository?.url !== "git+https://github.com/kingsword09/zcode-cli.git") {
+    throw new Error("The npm package repository metadata is inconsistent.");
+  }
+  if (packageJson.license !== "MIT" || typeof packageJson.author !== "string" || !packageJson.author.trim()) {
+    throw new Error("The npm package license or author metadata is missing.");
+  }
   if (packageJson.bin?.zcode !== "bin/zcode.ts") throw new Error("The zcode npm bin entry is invalid.");
   if (!sameStringArray(packageJson.files, publishedFiles)) {
     throw new Error("The package.json files allowlist does not match the reviewed release contents.");

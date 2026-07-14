@@ -2,6 +2,29 @@
   "name": "zcode-app-cli",
   "version": "3.3.5-1",
   "description": "Unofficial Bun and pi-tui terminal client for the ZCode agent runtime",
+  "keywords": [
+    "agent",
+    "ai",
+    "bun",
+    "cli",
+    "coding-agent",
+    "glm",
+    "pi-tui",
+    "terminal",
+    "tui",
+    "z-ai",
+    "zcode"
+  ],
+  "homepage": "https://github.com/kingsword09/zcode-cli#readme",
+  "bugs": {
+    "url": "https://github.com/kingsword09/zcode-cli/issues"
+  },
+  "license": "MIT",
+  "author": "Kingsword kingsword09 <kingsword09@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kingsword09/zcode-cli.git"
+  },
   "type": "module",
   "bin": {
     "zcode": "bin/zcode.ts"
@@ -50,6 +73,5 @@
     "beautiful-mermaid": "^1.1.3",
     "typescript": "^7.0.2",
     "yaml": "^2.8.1"
-  },
-  "license": "MIT"
+  }
 }

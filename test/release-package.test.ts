@@ -53,6 +53,13 @@ describe("release package", () => {
     expect(packageJson.scripts["release:build"]).toBe("bun scripts/build-release.ts");
     expect(packageJson.scripts["release:pack"]).toBe("bun scripts/pack-release.ts");
     expect(packageJson.scripts.prepack).toBe("bun scripts/check-package.ts --prepack");
+    expect(packageJson.homepage).toBe("https://github.com/kingsword09/zcode-cli#readme");
+    expect(packageJson.bugs.url).toBe("https://github.com/kingsword09/zcode-cli/issues");
+    expect(packageJson.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/kingsword09/zcode-cli.git"
+    });
+    expect(packageJson.keywords).toEqual(expect.arrayContaining(["bun", "cli", "tui", "zcode"]));
   });
 
   test("accepts reviewed paths and rejects omissions or development files", () => {
@@ -81,6 +88,16 @@ describe("release package", () => {
     const packageJson = {
       name: "zcode-app-cli",
       version: "3.3.5-1",
+      description: "Unofficial terminal client",
+      keywords: ["bun", "cli", "tui", "zcode"],
+      homepage: "https://github.com/kingsword09/zcode-cli#readme",
+      bugs: { url: "https://github.com/kingsword09/zcode-cli/issues" },
+      license: "MIT",
+      author: "Kingsword kingsword09 <kingsword09@gmail.com>",
+      repository: {
+        type: "git",
+        url: "git+https://github.com/kingsword09/zcode-cli.git"
+      },
       bin: { zcode: "bin/zcode.ts" },
       files: ["bin", "src", "vendor", "config.example.json", "zcode-runtime.lock.json", "README.md", "LICENSE"],
       publishConfig: { access: "public", provenance: true },
