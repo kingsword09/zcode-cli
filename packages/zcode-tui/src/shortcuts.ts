@@ -1,20 +1,29 @@
 import type { PickerSpec } from "./selectors.ts";
 
-export const autonomyModes = ["build", "edit", "yolo"] as const;
+export const modes = ["build", "edit", "yolo", "plan"] as const;
+export type Mode = (typeof modes)[number];
+export type SettingTarget = "mode" | "model" | "effort";
 
-export function executionMode(mode?: string, fallback = "build"): string {
-  const candidate = mode as (typeof autonomyModes)[number];
-  return autonomyModes.includes(candidate) ? candidate : fallback;
+export function normalizedMode(mode?: string, fallback: Mode = "build"): Mode {
+  const candidate = mode as Mode;
+  return modes.includes(candidate) ? candidate : fallback;
 }
 
-export function toggledWorkMode(currentMode: string, lastExecutionMode: string): string {
-  return currentMode === "plan" ? executionMode(lastExecutionMode) : "plan";
+export function nextMode(currentMode?: string): Mode {
+  const currentIndex = modes.indexOf(normalizedMode(currentMode));
+  return modes[(currentIndex + 1) % modes.length] ?? modes[0];
 }
 
-export function nextAutonomyMode(currentMode: string, lastExecutionMode: string): string {
-  if (currentMode === "plan") return executionMode(lastExecutionMode);
-  const currentIndex = autonomyModes.indexOf(currentMode as (typeof autonomyModes)[number]);
-  return autonomyModes[(currentIndex + 1) % autonomyModes.length] ?? autonomyModes[0];
+export function settingTargetForCommand(input: string): SettingTarget | undefined {
+  const command = /^\/([^\s]+)/u.exec(input.trim())?.[1]?.toLowerCase();
+  if (command === "mode") return "mode";
+  if (command === "model") return "model";
+  if (command === "effort" || command === "variant") return "effort";
+  return undefined;
+}
+
+export function appliesToSetting(target: SettingTarget | undefined, field: SettingTarget): boolean {
+  return target === undefined || target === field;
 }
 
 export function nextPickerCommand(picker: PickerSpec, currentValue?: string): string | undefined {

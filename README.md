@@ -62,7 +62,7 @@ path.
 - persisted prompt history through ZCode's history API;
 - `/mode`, `/model`, `/resume`, `/plugins` and other upstream slash commands;
 - searchable model and reasoning-effort selectors, plus MCP and workflow panels;
-- status-bar-only Shift+Tab mode, Ctrl+N model, Ctrl+L autonomy and empty-prompt Tab effort cycling;
+- status-bar-only Shift+Tab mode (`build` → `edit` → `yolo` → `plan`), Ctrl+N model and empty-prompt Tab effort cycling;
 - structured session-goal status in the right side of the turn footer;
 - responsive context-remaining and session-token metrics in the status line;
 - generic upstream selection dialogs for sessions, plugins and checkpoints;
