@@ -3,6 +3,7 @@ import {
   getKeybindings,
   Input,
   SelectList,
+  truncateToWidth,
   type Component,
   type Container,
   type SelectItem,
@@ -189,6 +190,36 @@ class TextPromptDialog implements Component {
   }
 }
 
+class PromptInput extends Input {
+  constructor(
+    private readonly mask: boolean,
+    private readonly placeholder: string | undefined,
+    private readonly theme: ZCodeTheme
+  ) {
+    super();
+  }
+
+  override render(width: number): string[] {
+    const value = this.getValue();
+    if (this.mask && value) {
+      this.setValue("*".repeat(value.length));
+      try {
+        return super.render(width);
+      } finally {
+        this.setValue(value);
+      }
+    }
+
+    const lines = super.render(width);
+    if (!value && this.placeholder && lines[0]) {
+      const placeholder = this.theme.muted(this.placeholder);
+      const line = lines[0].replace("\x1b[7m \x1b[27m", `\x1b[7m \x1b[27m${placeholder}`);
+      return [truncateToWidth(line, width, "", true)];
+    }
+    return lines;
+  }
+}
+
 export function promptText(
   ui: TUI,
   host: Container,
@@ -199,10 +230,18 @@ export function promptText(
     initialValue?: string;
     help?: string;
     signal?: AbortSignal;
+    mask?: boolean;
+    placeholder?: string;
   }
 ): Promise<string | null> {
   return new Promise((resolve) => {
-    const input = new Input();
+    const input = new PromptInput(
+      options.mask === true,
+      options.placeholder
+        ? sanitizeTerminalText(options.placeholder, { preserveSgr: false })
+        : undefined,
+      theme
+    );
     if (options.initialValue) input.setValue(options.initialValue);
     const dialog = new TextPromptDialog(
       sanitizeTerminalText(options.title, { preserveSgr: false }),

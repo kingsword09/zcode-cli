@@ -20,7 +20,14 @@ const terminal = new Bun.Terminal({
 
 const child = Bun.spawn([process.execPath, fixture], {
   cwd: root,
-  env: { ...process.env, CI: "1", HOME: temporaryHome, TERM: "xterm-256color" },
+  env: {
+    ...process.env,
+    CI: "1",
+    HOME: temporaryHome,
+    TERM: "xterm-256color",
+    ZCODE_APP_CLI_BUN: process.execPath,
+    ZCODE_APP_CLI_ENTRY: fixture
+  },
   terminal
 });
 
@@ -42,10 +49,11 @@ async function waitFor(label: string, pattern: RegExp, start = 0, timeoutMs = 8_
   throw new Error(`Timed out waiting for ${label}.\n${plainText(output).slice(-6_000)}`);
 }
 
-async function sendAndWait(input: string, label: string, pattern: RegExp, timeoutMs?: number): Promise<void> {
+async function sendAndWait(input: string, label: string, pattern: RegExp, timeoutMs?: number): Promise<number> {
   const start = output.length;
   terminal.write(input);
   await waitFor(label, pattern, start, timeoutMs);
+  return start;
 }
 
 async function sendAndSettle(input: string): Promise<void> {
@@ -62,6 +70,27 @@ let interactionError: unknown;
 try {
   await waitFor("welcome screen", /ZCode/i);
   await waitFor("restored startup transcript", /Restored startup response\./i);
+  await sendAndWait("/login\r", "login setup picker", /Set Up Coding Plan/i);
+  await sendAndWait("\r", "masked API key prompt", /Enter Z\.AI Coding Plan API Key/i);
+  await sendAndWait("\x1b", "return to login picker", /API key entry cancelled\.[\s\S]*Set Up Coding Plan/i);
+  await sendAndWait("\r", "reopened API key prompt", /Enter Z\.AI Coding Plan API Key/i);
+  await sendAndWait("feature-secret-api-key", "masked API key value", /\*{20,}/i);
+  await sendAndWait("\r", "API key setup", /Configured Z\.AI Coding Plan\./i);
+  const overrideLoginStart = await sendAndWait("/login\r", "suspended login command", /External login command completed\./i);
+  await waitFor("refreshed login state", /Model access configured via[\s\S]*config\.json/i, overrideLoginStart);
+  await sendAndWait("/disable-login-override\r", "disable login override", /Login override disabled\./i);
+  await sendAndWait("/login\r", "reopened login setup picker", /Set Up Coding Plan/i);
+  const defaultLoginStart = await sendAndWait("\x1b[B\r", "default suspended OAuth command", /External login command completed\./i);
+  await waitFor("default OAuth login refresh", /Model access configured via[\s\S]*config\.json/i, defaultLoginStart);
+  const directLoginStart = await sendAndWait(
+    "/login zai-coding-plan\r",
+    "direct suspended OAuth command",
+    /External login command completed\./i
+  );
+  await waitFor("direct OAuth login refresh", /Model access configured via[\s\S]*config\.json/i, directLoginStart);
+  await sendAndWait("/prepare-failing-login\r", "prepare OAuth failure", /Failing login prepared\./i);
+  await sendAndWait("/login\r", "failure login setup picker", /Set Up Coding Plan/i);
+  await sendAndWait("\x1b[B\r", "restored OAuth failure", /Login failed: OAuth HTTP error 404 \(empty or non-JSON response\)/i);
   await sendAndWait("/help\r", "long help", /Use \/help <command> for details/i);
   await sendAndWait("\x1b[Z", "plan shortcut", /alpha\/model · plan · low/i);
   await sendAndWait("\x0c", "autonomy shortcut", /alpha\/model · build · low/i);
@@ -131,6 +160,15 @@ if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain
 for (const [label, pattern] of [
   ["restored startup transcript", /Restored startup response\./i],
   ["restored selected transcript", /Restored selected response\./i],
+  ["login setup picker", /Set Up Coding Plan/i],
+  ["custom provider login entry", /Custom provider/i],
+  ["API key prompt cancellation", /API key entry cancelled\./i],
+  ["masked API key command", /\/login zai-coding-plan-api-key \[redacted\]/i],
+  ["API key setup", /Configured Z\.AI Coding Plan\./i],
+  ["suspended login command", /External login command completed\./i],
+  ["refreshed login state", /Model access configured via[\s\S]*config\.json/i],
+  ["default OAuth suspension", /Login override disabled\.[\s\S]*External login command completed\./i],
+  ["OAuth HTTP diagnostic", /Login failed: OAuth HTTP error 404 \(empty or non-JSON response\)/i],
   ["resume picker", /Resume Session/i],
   ["long help output", /Use \/help <command> for details/i],
   ["turn timer tick", /\[1s\]/i],
@@ -194,6 +232,10 @@ if (/\b(?:ready|switching)\b/i.test(plain)) {
 
 if (/Wait for the active turn or press Ctrl\+C before running a slash command/i.test(plain)) {
   throw new Error(`Resume selection was blocked by the active submission.\n${plain.slice(-6_000)}`);
+}
+
+if (plain.includes("feature-secret-api-key") || plain.includes("override-fixture-key")) {
+  throw new Error(`API key leaked into TUI output.\n${plain.slice(-6_000)}`);
 }
 
 let stateOffset = 0;

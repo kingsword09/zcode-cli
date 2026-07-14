@@ -161,6 +161,91 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   return patched;
 }
 
+export function patchRuntimeOAuthHttpErrors(runtime: string): string {
+  if (runtime.includes("empty or non-JSON response")) return runtime;
+  if (!runtime.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')) return runtime;
+
+  const parserPattern = /function ([A-Za-z_$][\w$]*)\(e\)\{try\{return JSON\.parse\(e\)\}catch\{throw new ([A-Za-z_$][\w$]*)\("OAuth response is not valid JSON",\{httpStatus:void 0\}\)\}\}/u;
+  const parser = parserPattern.exec(runtime);
+  if (!parser) {
+    throw new Error("ZCode runtime is incompatible with the OAuth HTTP error patch (parser anchor missing).");
+  }
+  const [, parserName, errorName] = parser;
+  const decoderPattern = new RegExp(
+    `([A-Za-z_$][\\w$]*)=new TextDecoder\\(\\)\\.decode\\(([A-Za-z_$][\\w$]*)\\.body\\),([A-Za-z_$][\\w$]*)=${parserName}\\(\\1\\)`,
+    "u"
+  );
+  const decoder = decoderPattern.exec(runtime);
+  if (!decoder) {
+    throw new Error("ZCode runtime is incompatible with the OAuth HTTP error patch (status anchor missing).");
+  }
+  const [, bodyName, responseName, parsedName] = decoder;
+  const withStatus = runtime.replace(
+    decoder[0],
+    `${bodyName}=new TextDecoder().decode(${responseName}.body),${parsedName}=${parserName}(${bodyName},${responseName}.status)`
+  );
+  return withStatus.replace(
+    parser[0],
+    `function ${parserName}(e,t){try{return JSON.parse(e)}catch{let r=typeof t=="number"&&(t<200||t>=300)?\`OAuth HTTP error \${t} (empty or non-JSON response)\`:"OAuth response is not valid JSON";throw new ${errorName}(r,{httpStatus:t})}}`
+  );
+}
+
+export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
+  if (runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')) return runtime;
+
+  const credentialMarker = ".saveZaiLoginCredentials({accessToken:";
+  const markerIndex = runtime.indexOf(credentialMarker);
+  if (markerIndex < 0) {
+    throw new Error("ZCode runtime is incompatible with the Desktop OAuth patch (credential anchor missing).");
+  }
+  const functionStart = runtime.lastIndexOf("async function ", markerIndex);
+  const nextFunction = runtime.indexOf("async function ", markerIndex + credentialMarker.length);
+  if (functionStart < 0 || nextFunction < 0) {
+    throw new Error("ZCode runtime is incompatible with the Desktop OAuth patch (function anchor missing).");
+  }
+  const originalFunction = runtime.slice(functionStart, nextFunction);
+  const prefix = /^async function ([A-Za-z_$][\w$]*)\(e=\{\}\)\{/u.exec(originalFunction);
+  const abortHelper = /;([A-Za-z_$][\w$]*)\(e\.abortSignal\);let/u.exec(originalFunction)?.[1];
+  const credentialStore = /e\.credentialStore\?\?([A-Za-z_$][\w$]*)\(\{env:[A-Za-z_$][\w$]*\}\)/u.exec(originalFunction)?.[1];
+  const loginError = /new ([A-Za-z_$][\w$]*)\("credential_write_failed"/u.exec(originalFunction)?.[1];
+  const apiKeyResolver = /await ([A-Za-z_$][\w$]*)\(\{accessToken:[^,]+,env:[^,]+,httpClient:e\.httpClient,providerId:"zai"/u.exec(originalFunction)?.[1];
+  const configWriter = /await ([A-Za-z_$][\w$]*)\(\{apiKey:[^,]+,filePath:e\.userConfigPath,providerId:"zai"\}\)/u.exec(originalFunction)?.[1];
+  const httpClientFactory = /e\.httpClient\?\?([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*=e\.state\?\?/u.exec(runtime)?.[1];
+  if (!prefix || !abortHelper || !credentialStore || !loginError
+    || !apiKeyResolver || !configWriter || !httpClientFactory) {
+    throw new Error("ZCode runtime is incompatible with the Desktop OAuth patch (dependency anchor missing).");
+  }
+
+  const branch = [
+    'if((e.env??process.env).ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"){',
+    "let $zEnv=e.env??process.env;",
+    `${abortHelper}(e.abortSignal);`,
+    `let $zStore=e.credentialStore??${credentialStore}({env:$zEnv}),$zHttp=e.httpClient??${httpClientFactory}($zEnv),$zPayload;`,
+    `try{$zPayload=JSON.parse(require("node:fs").readFileSync(0,"utf8"))}catch($zError){throw new ${loginError}("invalid_callback","Unable to read the Z.AI OAuth callback.",{cause:$zError})}`,
+    `if(!$zPayload||typeof $zPayload.callbackUrl!=="string"||typeof $zPayload.state!=="string")throw new ${loginError}("invalid_callback","The Z.AI OAuth callback payload is invalid.");`,
+    "let $zUrl;",
+    `try{$zUrl=new URL($zPayload.callbackUrl)}catch($zError){throw new ${loginError}("invalid_callback","The Z.AI OAuth callback URL is invalid.",{cause:$zError})}`,
+    `if($zUrl.protocol!=="zcode:"||$zUrl.hostname!=="zai-auth"||$zUrl.pathname.replace(/\\/+$/u,"")!=="/callback")throw new ${loginError}("invalid_callback","The Z.AI OAuth callback target is invalid.");`,
+    "let $zCode=$zUrl.searchParams.get(\"code\")??$zUrl.searchParams.get(\"authCode\"),$zState=$zUrl.searchParams.get(\"state\");",
+    `if(!$zCode||!$zState||$zState!==$zPayload.state)throw new ${loginError}("invalid_callback","The Z.AI OAuth callback state is invalid or expired.");`,
+    "let $zResponse=await $zHttp.request({maxResponseBytes:65536,body:new TextEncoder().encode(JSON.stringify({provider:\"zai\",code:$zCode,redirect_uri:\"zcode://zai-auth/callback\",state:$zState})),headers:{\"Content-Type\":\"application/json\"},method:\"POST\",trace:e.trace,url:\"https://zcode.z.ai/api/v1/oauth/token\"},e.abortSignal),$zText=new TextDecoder().decode($zResponse.body),$zEnvelope;",
+    `try{$zEnvelope=JSON.parse($zText)}catch($zError){throw new ${loginError}("token_exchange_failed",$zResponse.status<200||$zResponse.status>=300?"OAuth HTTP error "+$zResponse.status+" (empty or non-JSON response)":"OAuth response is not valid JSON",{cause:$zError})}`,
+    "let $zMessage=typeof $zEnvelope?.msg===\"string\"&&$zEnvelope.msg.trim()?$zEnvelope.msg.trim():void 0;",
+    `if($zResponse.status<200||$zResponse.status>=300)throw new ${loginError}("token_exchange_failed",$zMessage??"OAuth HTTP error "+$zResponse.status);`,
+    `if($zEnvelope?.code!==0)throw new ${loginError}("token_exchange_failed",$zMessage??"Z.AI token exchange failed.");`,
+    "let $zData=$zEnvelope.data,$zAccessToken=$zData?.zai?.access_token,$zJwtToken=$zData?.token,$zUser=$zData?.user;",
+    `if(typeof $zAccessToken!=="string"||typeof $zJwtToken!=="string"||!$zUser||typeof $zUser!=="object")throw new ${loginError}("token_exchange_failed","Z.AI token response is missing credentials or user data.");`,
+    `${abortHelper}(e.abortSignal);`,
+    `try{await $zStore.saveZaiLoginCredentials({accessToken:$zAccessToken,jwtToken:$zJwtToken,user:$zUser})}catch($zError){throw new ${loginError}("credential_write_failed","Login succeeded but writing credentials failed.",{cause:$zError})}`,
+    `let $zApiKey=await ${apiKeyResolver}({accessToken:$zAccessToken,env:$zEnv,httpClient:$zHttp,providerId:"zai",resolver:e.apiKeyResolver}),$zConfig;`,
+    `try{$zConfig=await ${configWriter}({apiKey:$zApiKey,filePath:e.userConfigPath,providerId:"zai"})}catch($zError){throw new ${loginError}("config_update_failed","Login succeeded but updating ZCode config failed.",{cause:$zError})}`,
+    'return{configPath:$zConfig.path,credentialsPath:$zStore.filePath,model:$zConfig.mainModel,providerId:"zai",user:$zUser}',
+    "}"
+  ].join("");
+  const insertionPoint = functionStart + prefix[0].length;
+  return `${runtime.slice(0, insertionPoint)}${branch}${runtime.slice(insertionPoint)}`;
+}
+
 async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, { redirect: "follow" });
   if (!response.ok) throw new Error(`GET ${url} failed: ${response.status} ${response.statusText}`);
@@ -222,7 +307,10 @@ async function installLocalTui(nextVendor: string): Promise<void> {
 async function installTuiBridge(nextVendor: string): Promise<void> {
   const runtimePath = join(nextVendor, "zcode.cjs");
   const runtime = await readFile(runtimePath, "utf8");
-  await writeFile(runtimePath, patchRuntimeTuiBridge(runtime));
+  await writeFile(
+    runtimePath,
+    patchRuntimeZaiDesktopOAuth(patchRuntimeOAuthHttpErrors(patchRuntimeTuiBridge(runtime)))
+  );
 }
 
 async function findFile(directory: string, name: string): Promise<string | null> {

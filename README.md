@@ -22,12 +22,18 @@ Bun launcher
                   └─ @earendil-works/pi-tui
 ```
 
-The official agent, model, session, tool, plugin, MCP and login logic is not
-reimplemented. The local package only supplies the missing terminal interface.
+The official agent, model, session, tool, plugin, MCP, credential store and
+provider-configuration logic remains in the extracted runtime. The local
+package supplies the missing terminal interface and a narrow macOS callback
+bridge for Z.AI's registered Desktop OAuth flow.
 
 Node.js remains necessary because ZCode CLI 0.15.x imports `node:sea`, which Bun
 does not currently implement. Bun owns the outer CLI and native terminal; Node
-is the compatibility host for the unmodified upstream kernel.
+is the compatibility host for the extracted upstream kernel. Synchronization
+adds the local TUI/data bridge, OAuth compatibility handoff and clearer HTTP
+diagnostics. OAuth callbacks are passed to the official runtime over stdin; its
+encrypted credential store, Coding Plan key resolver and config writer remain
+the only persistence path.
 
 ## Current TUI functionality
 
@@ -41,6 +47,8 @@ is the compatibility host for the unmodified upstream kernel.
 - structured session-goal status in the right side of the turn footer;
 - responsive context-remaining and session-token metrics in the status line;
 - generic upstream selection dialogs for sessions, plugins and checkpoints;
+- `/login` setup choices with masked API-key entry, redacted transcript/history and OAuth waiting state;
+- suspended Z.AI browser login with terminal restoration and an optional `ZCODE_TUI_LOGIN_CMD` override;
 - interactive tool-permission approval dialogs;
 - clipboard image attachments through Ctrl+V or `/paste-image`;
 - compact tool execution views with path, command, progress, result and image previews;
@@ -85,6 +93,10 @@ an oversized selected block without rendering the entire message at once.
 - macOS, Linux or Windows for `Bun.Terminal`;
 - `7z` when downloading and extracting a remote installer.
 
+Z.AI browser OAuth currently requires macOS because the registered provider
+callback is `zcode://zai-auth/callback`; API-key and custom-provider access work
+on every supported platform.
+
 Set `ZCODE_NODE=/absolute/path/to/node` when the desired Node.js executable is
 not available on `PATH`.
 
@@ -93,9 +105,48 @@ not available on `PATH`.
 ZCode reads the user configuration from `~/.zcode/cli/config.json`. Choose one
 of these model-access paths:
 
-- Z.AI OAuth: run `zcode login`;
+- Z.AI OAuth on macOS: run `zcode login` when no provider is configured, or
+  `zcode login --oauth` to force reauthorization;
+- Z.AI/BigModel Coding Plan API key: open `/login` in the TUI and choose the
+  matching masked API-key option;
 - direct API key with a custom provider: use the
   [`config.example.json`](./config.example.json) template and do not log in.
+
+When `model.main` already resolves to a configured provider/model with an
+inline API key, plain `zcode login` exits successfully and explains that OAuth
+is unnecessary. This prevents a custom provider from being replaced by an
+unrelated login flow.
+
+### Coding Plan API key
+
+Start the TUI and open its setup picker:
+
+```text
+/login
+```
+
+Choose either **Z.AI Coding Plan API Key** or **BigModel Coding Plan API Key**,
+then paste the key into the masked prompt. The raw key is sent only to the
+official runtime's `configureCodingPlanApiKey` implementation. The local TUI
+does not add it to editor history or the visible/session transcript, and error
+messages are redacted before rendering.
+
+The same picker includes a **Custom provider** entry that points to the
+configuration-template path below. Custom providers do not use OAuth.
+
+Selecting **Z.AI Coding Plan** releases TUI raw mode and starts the registered
+Desktop authorization-code flow. On macOS the CLI temporarily installs a
+background-only callback receiver, verifies the returned `state`, restores the
+previous `zcode://` handler, and hands the callback to the official runtime.
+The authorization code travels over stdin instead of command-line arguments or
+environment variables. The runtime performs token exchange, encrypted
+credential persistence, Coding Plan API-key resolution and `config.json`
+updates. The TUI is then restored and the model configuration is re-read.
+
+The callback receiver is removed after success, cancellation or timeout. A
+small recovery record lets the next login restore the previous handler after
+an unclean process exit. The BigModel option continues to use the official
+localhost-callback implementation inside the runtime.
 
 ### Custom provider without login
 
@@ -218,13 +269,14 @@ bun run check
 bun run check:tui
 ```
 
-`check:tui` runs two real-PTY scenarios. The official runtime scenario executes
-`/help`, switches to plan mode, and exits. The offline feature scenario exercises
-model and effort selectors, image attachments, nested Agent tools, Markdown,
-Mermaid, inline and browsable diffs, transcript navigation, context/status
-details, MCP actions, background tasks and the workflow panel. Both scenarios
-advance from observed terminal output instead of fixed timers, use temporary
-home directories and do not make API calls.
+`check:tui` runs two real-PTY scenarios. The official runtime scenario completes
+masked Coding Plan API-key setup in a temporary home, verifies the official
+config output, executes `/help`, switches to plan mode, and exits. The offline
+feature scenario also covers suspended login restoration, selectors, image
+attachments, nested Agent tools, Markdown, Mermaid, diffs, transcript
+navigation, context/status details, MCP actions, background tasks and the
+workflow panel. Both scenarios advance from observed terminal output instead
+of fixed timers and do not make model API calls.
 
 Start the client directly:
 
@@ -235,9 +287,37 @@ bun bin/zcode.ts
 For the OAuth path:
 
 ```bash
-bun bin/zcode.ts login
+bun bin/zcode.ts login --oauth
 bun bin/zcode.ts
 ```
+
+To print the authorization URL without launching the browser:
+
+```bash
+bun bin/zcode.ts login --oauth --no-browser
+```
+
+The URL must still be opened on the same Mac so its `zcode://` callback reaches
+the waiting CLI. Cross-device SSH login is not supported by this provider flow;
+use the masked Z.AI Coding Plan API-key option instead. The wrapper no longer
+uses the upstream `oauth/cli/init` polling endpoint, which currently returns
+HTTP 404.
+
+Verify native callback capture and automatic handler restoration without
+contacting Z.AI or changing the real `zcode://` association:
+
+```bash
+bun run check:oauth-callback
+```
+
+To hand `/login` to another interactive command, set an explicit override:
+
+```bash
+export ZCODE_TUI_LOGIN_CMD='zcode login --oauth'
+```
+
+The TUI then releases raw terminal mode, runs that command with inherited
+stdio, restores the interface, and checks `~/.zcode/cli/config.json` again.
 
 For the direct API-key path, follow
 [Custom provider without login](#custom-provider-without-login) instead.

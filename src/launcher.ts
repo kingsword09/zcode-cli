@@ -2,8 +2,16 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readConfiguredModelAccess } from "./model-access.ts";
+import {
+  classifyZaiOAuthInvocation,
+  runZaiOAuthLogin,
+  type OfficialLoginPayload
+} from "./zai-oauth.ts";
+
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
+const launcherPath = join(packageRoot, "bin", "zcode.ts");
 const NON_TUI_COMMANDS = new Set([
   "app-server",
   "commands",
@@ -61,10 +69,31 @@ export function resolveNodeExecutable(): string | null {
   return Bun.which("node");
 }
 
+export function normalizeLoginArgs(args: string[]): { args: string[]; checkConfiguredAccess: boolean } {
+  if (args.length === 1 && args[0] === "login") {
+    return { args, checkConfiguredAccess: true };
+  }
+  if (args[0] === "login" && args.includes("--oauth")) {
+    return { args: args.filter((argument) => argument !== "--oauth"), checkConfiguredAccess: false };
+  }
+  return { args, checkConfiguredAccess: false };
+}
+
+function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.ZCODE_CLI_OAUTH_CALLBACK_STDIN;
+  return {
+    ...env,
+    ...extra,
+    ZCODE_APP_CLI_BUN: process.execPath,
+    ZCODE_APP_CLI_ENTRY: launcherPath
+  };
+}
+
 async function runWithInheritedStdio(node: string, args: string[]): Promise<number> {
   const child = Bun.spawn([node, runtimePath, ...args], {
     cwd: process.cwd(),
-    env: process.env,
+    env: runtimeEnvironment(),
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit"
@@ -109,7 +138,7 @@ async function runInNativeTerminal(node: string, args: string[]): Promise<number
     child = Bun.spawn([node, runtimePath, ...args], {
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...runtimeEnvironment(),
         TERM: process.env.TERM ?? "xterm-256color"
       },
       terminal
@@ -133,12 +162,51 @@ async function runInNativeTerminal(node: string, args: string[]): Promise<number
   }
 }
 
+async function completeOfficialZaiLogin(
+  node: string,
+  payload: OfficialLoginPayload,
+  runtimeArgs: string[],
+  abortSignal: AbortSignal
+): Promise<number> {
+  if (abortSignal.aborted) return 130;
+  const child = Bun.spawn([node, runtimePath, ...runtimeArgs], {
+    cwd: process.cwd(),
+    env: runtimeEnvironment({ ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" }),
+    stdin: "pipe",
+    stdout: "inherit",
+    stderr: "inherit"
+  });
+  const onAbort = () => child.kill("SIGINT");
+  abortSignal.addEventListener("abort", onAbort, { once: true });
+  try {
+    child.stdin.write(JSON.stringify(payload));
+    child.stdin.end();
+    return await child.exited;
+  } finally {
+    abortSignal.removeEventListener("abort", onAbort);
+  }
+}
+
 export async function main(args: string[]): Promise<number> {
   if (!existsSync(runtimePath)) {
     console.error(
       "ZCode runtime is missing. Reinstall the package or run `bun run sync:local` in the source checkout."
     );
     return 1;
+  }
+
+  const login = normalizeLoginArgs(args);
+  const zaiOAuth = classifyZaiOAuthInvocation(args);
+  if (login.checkConfiguredAccess) {
+    const access = await readConfiguredModelAccess();
+    if (access) {
+      console.log(
+        `Model access is already configured for ${access.model}; OAuth login is not required.\n`
+        + `Config: ${access.configPath}\n`
+        + "Run `zcode login --oauth` to force Z.AI OAuth."
+      );
+      return 0;
+    }
   }
 
   const node = resolveNodeExecutable();
@@ -149,6 +217,33 @@ export async function main(args: string[]): Promise<number> {
     return 1;
   }
 
-  const interactive = isTuiInvocation(args) && process.stdin.isTTY && process.stdout.isTTY;
-  return interactive ? runInNativeTerminal(node, args) : runWithInheritedStdio(node, args);
+
+  if (zaiOAuth) {
+    const abortController = new AbortController();
+    const cancel = () => abortController.abort(new Error("Login cancelled."));
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    try {
+      return await runZaiOAuthLogin({
+        abortSignal: abortController.signal,
+        completeLogin: (payload, runtimeArgs) => completeOfficialZaiLogin(
+          node,
+          payload,
+          runtimeArgs,
+          abortController.signal
+        ),
+        invocation: zaiOAuth,
+        output: zaiOAuth.json ? process.stderr : process.stdout
+      });
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      return abortController.signal.aborted ? 130 : 1;
+    } finally {
+      process.off("SIGINT", cancel);
+      process.off("SIGTERM", cancel);
+    }
+  }
+
+  const interactive = isTuiInvocation(login.args) && process.stdin.isTTY && process.stdout.isTTY;
+  return interactive ? runInNativeTerminal(node, login.args) : runWithInheritedStdio(node, login.args);
 }
