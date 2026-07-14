@@ -4,6 +4,7 @@ import {
   contextRemainingPercent,
   mergeMetrics,
   projectionMetrics,
+  sessionIdFromUsage,
   usageMetrics
 } from "../packages/zcode-tui/src/session-status.ts";
 
@@ -38,5 +39,11 @@ describe("TUI session status", () => {
     expect(metrics.contextUsed).toBe(32_000);
     expect(contextRemainingPercent(metrics)).toBe(75);
     expect(contextRemainingPercent({ contextUsed: 200, contextWindow: 100 })).toBe(0);
+  });
+
+  test("extracts the official session identifier from usage snapshots", () => {
+    expect(sessionIdFromUsage({ sessionId: "sess_protocol" })).toBe("sess_protocol");
+    expect(sessionIdFromUsage({ sessionID: "sess_store" })).toBe("sess_store");
+    expect(sessionIdFromUsage({ totalTokens: 10 })).toBeUndefined();
   });
 });

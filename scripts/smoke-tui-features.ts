@@ -106,7 +106,7 @@ try {
   await sendAndWait("\r", "background task detail", /Background task · bg_feature/i);
   await sendAndSettle("\r");
   await sendAndWait("/goal pause\r", "paused goal", /Goal paused \(\/goal resume\)/i);
-  terminal.write("/exit\r");
+  terminal.write("\x03");
 } catch (error) {
   interactionError = error;
   child.kill("SIGKILL");
@@ -168,6 +168,14 @@ for (const [label, pattern] of [
   ["workflow stop", /Status: cancelled/i]
 ] as const) {
   if (!pattern.test(plain)) throw new Error(`Missing ${label} in feature TUI smoke.\n${plain.slice(-6_000)}`);
+}
+
+if (!/Token usage: total=9,500 input=5,000 \(\+ 9,000 cached\) output=4,000 \(reasoning 500\)/i.test(plain)) {
+  throw new Error(`Missing token usage exit summary.\n${plain.slice(-6_000)}`);
+}
+
+if (!/To continue this session, run zcode --resume feature-session/i.test(plain)) {
+  throw new Error(`Missing session resume exit hint.\n${plain.slice(-6_000)}`);
 }
 
 if (/Shift\+Tab mode · Ctrl\+N model/i.test(plain)) {
