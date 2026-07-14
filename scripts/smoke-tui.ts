@@ -12,6 +12,7 @@ if (!existsSync(runtime)) throw new Error("vendor/zcode.cjs is missing; run `bun
 const decoder = new TextDecoder();
 let output = "";
 const temporaryHome = await mkdtemp(join(tmpdir(), "zcode-cli-smoke-"));
+const configPath = join(temporaryHome, ".zcode", "cli", "config.json");
 const smokeApiKey = "smoke-api-key-not-real";
 const command = process.argv[2]
   ? [resolve(process.argv[2])]
@@ -31,6 +32,7 @@ const child = Bun.spawn(command, {
     ...process.env,
     CI: "1",
     HOME: temporaryHome,
+    USERPROFILE: temporaryHome,
     TERM: "xterm-256color"
   },
   terminal
@@ -78,6 +80,17 @@ const timeout = setTimeout(() => {
 let interactionError: unknown;
 try {
   await waitFor("welcome screen", /ZCode/i);
+  if (!await Bun.file(configPath).exists()) {
+    throw new Error("The launcher did not create config.json before starting the TUI.");
+  }
+  const initialConfig = await Bun.file(configPath).json() as {
+    model?: { main?: string };
+    provider?: { zai?: { options?: { apiKey?: string } } };
+  };
+  if (initialConfig.model?.main !== "zai/glm-5.1"
+    || initialConfig.provider?.zai?.options?.apiKey !== undefined) {
+    throw new Error("The launcher created an invalid initial config.json.");
+  }
   await sendAndWait("/login\r", "login setup picker", /Set Up Coding Plan|配置 Coding Plan/i);
   await sendAndWait("\x1b[B\x1b[B\r", "masked API key prompt", /Enter Z\.AI Coding Plan API Key|输入 Z\.AI Coding Plan API Key/i);
   await sendAndWait(smokeApiKey, "masked API key value", /\*{20,}/i);
@@ -102,7 +115,6 @@ try {
 const code = await child.exited;
 clearTimeout(timeout);
 if (!terminal.closed) terminal.close();
-const configPath = join(temporaryHome, ".zcode", "cli", "config.json");
 const configured = await Bun.file(configPath).exists()
   ? await Bun.file(configPath).text()
   : "";
@@ -128,6 +140,9 @@ if (!/custom provider/i.test(plain)) {
 }
 if (!/Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan/i.test(plain)) {
   throw new Error(`The masked API-key setup did not complete.\n${plain.slice(-4_000)}`);
+}
+if (/Model config is missing/i.test(plain)) {
+  throw new Error(`The generated config did not satisfy the official runtime.\n${plain.slice(-4_000)}`);
 }
 if (plain.includes(smokeApiKey)) {
   throw new Error(`The API key leaked into terminal output.\n${plain.slice(-4_000)}`);

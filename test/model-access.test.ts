@@ -22,7 +22,8 @@ async function temporaryHome(): Promise<string> {
 describe("configured model access", () => {
   test("detects an internally consistent custom provider", async () => {
     const home = await temporaryHome();
-    const path = userConfigPath({ HOME: home });
+    const env = { HOME: home, USERPROFILE: home };
+    const path = userConfigPath(env);
     await mkdir(join(home, ".zcode", "cli"), { recursive: true });
     await writeFile(path, JSON.stringify({
       provider: {
@@ -34,7 +35,7 @@ describe("configured model access", () => {
       model: { main: "zai/custom/model" }
     }));
 
-    expect(await readConfiguredModelAccess({ HOME: home })).toEqual({
+    expect(await readConfiguredModelAccess(env)).toEqual({
       configPath: path,
       model: "zai/custom/model",
       providerId: "zai"
@@ -43,14 +44,15 @@ describe("configured model access", () => {
 
   test("rejects missing keys, missing models, and invalid JSON", async () => {
     const home = await temporaryHome();
-    const path = userConfigPath({ HOME: home });
+    const env = { HOME: home, USERPROFILE: home };
+    const path = userConfigPath(env);
     await mkdir(join(home, ".zcode", "cli"), { recursive: true });
     await writeFile(path, JSON.stringify({
       provider: { zai: { options: {}, models: { model: {} } } },
       model: { main: "zai/model" }
     }));
-    expect(await readConfiguredModelAccess({ HOME: home })).toBeNull();
+    expect(await readConfiguredModelAccess(env)).toBeNull();
     await writeFile(path, "not-json");
-    expect(await readConfiguredModelAccess({ HOME: home })).toBeNull();
+    expect(await readConfiguredModelAccess(env)).toBeNull();
   });
 });

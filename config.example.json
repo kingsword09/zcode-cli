@@ -2,23 +2,25 @@
   "provider": {
     "zai": {
       "kind": "anthropic",
-      "name": "Custom Anthropic-compatible Provider",
+      "name": "Z.AI Coding Plan",
       "options": {
-        "apiKey": "REPLACE_WITH_YOUR_API_KEY",
         "apiKeyRequired": true,
-        "baseURL": "https://example.com/api/anthropic"
+        "baseURL": "https://api.z.ai/api/anthropic"
       },
       "headers": {},
       "models": {
-        "replace-with-model-id": {
-          "name": "Replace with model name"
+        "glm-5.2": {
+          "name": "GLM-5.2"
+        },
+        "glm-5.1": {
+          "name": "GLM-5.1"
         }
       }
     }
   },
   "model": {
-    "main": "zai/replace-with-model-id",
-    "lite": "zai/replace-with-model-id"
+    "main": "zai/glm-5.2",
+    "lite": "zai/glm-5.1"
   },
   "modelCatalog": {
     "overrides": {}

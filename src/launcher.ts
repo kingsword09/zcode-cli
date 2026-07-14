@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readConfiguredModelAccess } from "./model-access.ts";
+import { ensureUserConfig, readConfiguredModelAccess } from "./model-access.ts";
 import {
   classifyZaiOAuthInvocation,
   runZaiOAuthLogin,
@@ -192,6 +192,13 @@ export async function main(args: string[]): Promise<number> {
     console.error(
       "ZCode runtime is missing. Reinstall the package or run `bun run sync:local` in the source checkout."
     );
+    return 1;
+  }
+
+  try {
+    await ensureUserConfig();
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
 
