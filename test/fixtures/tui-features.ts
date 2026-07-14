@@ -44,6 +44,13 @@ const planTodos = [
   { content: "Verify the TUI", status: "in_progress", priority: "medium" }
 ];
 
+let sessionTranscript = [
+  { messageId: "message_startup", role: "user", content: "Restored startup prompt." },
+  { messageId: "message_startup_reply", role: "agent", content: "Restored startup response." },
+  { messageId: "message_later", role: "user", content: "Restored later prompt." },
+  { messageId: "message_later_reply", role: "agent", content: "Restored later response." }
+];
+
 const workflowPanel = (status = "running") => ({
   title: "/workflows",
   selectedRunId: "run_feature",
@@ -98,10 +105,7 @@ await runTui({
     { name: "workflows", description: "Manage workflows" },
     { name: "goal", description: "Manage the session goal" }
   ],
-  loadSessionTranscript: async () => [
-    { role: "user", content: "Restored startup prompt." },
-    { role: "agent", content: "Restored startup response." }
-  ],
+  loadSessionTranscript: async () => sessionTranscript,
   readClipboardImage: async () => ({
     dataUrl: "data:image/png;base64,aGVsbG8=",
     mediaType: "image/png",
@@ -157,6 +161,23 @@ await runTui({
     if (taskId !== "bg_feature") throw new Error(`Unexpected background task: ${taskId}`);
     backgroundStatus = "cancelled";
     return { cancelled: true, status: backgroundStatus, taskId };
+  },
+  previewFileRewind: async (targetMessageIds) => {
+    if (!targetMessageIds.every((messageId) => sessionTranscript.some((message) => message.messageId === messageId))) {
+      throw new Error(`Unexpected rewind preview targets: ${targetMessageIds.join(", ")}`);
+    }
+    return {
+      canApply: true,
+      safeFiles: [{ path: "src/rewind-fixture.ts", action: "restore", operationCount: 1, toolNames: ["Edit"] }],
+      unsafeFiles: [],
+      ignoredFiles: [{ path: "tmp/bash-output.txt", reason: "bash_ignored", operationCount: 1, toolNames: ["Bash"] }]
+    };
+  },
+  applyFileRewind: async (targetMessageIds) => {
+    if (!targetMessageIds.includes("message_later") || !targetMessageIds.includes("message_later_reply")) {
+      throw new Error(`Unexpected file rewind targets: ${targetMessageIds.join(", ")}`);
+    }
+    return { applied: true, response: "Rewound fixture workspace files." };
   },
   readSessionUsage: async () => ({
     totalTokens: 18_500,
@@ -367,6 +388,13 @@ await runTui({
   },
   submitPrompt: async (input) => {
     if (typeof input !== "string") return { response: "Unexpected structured slash command." };
+    if (input.startsWith("/rewind cascade conversation ")) {
+      const targetMessageId = input.slice("/rewind cascade conversation ".length);
+      const targetIndex = sessionTranscript.findIndex((message) => message.messageId === targetMessageId);
+      if (targetIndex < 0) throw new Error(`Unexpected conversation rewind target: ${targetMessageId}`);
+      sessionTranscript = sessionTranscript.slice(0, targetIndex);
+      return { response: `Rewound conversation before ${targetMessageId}.`, model, thoughtLevel: effort };
+    }
     if (input === "/login") {
       return {
         response: "Choose how to configure model access.",

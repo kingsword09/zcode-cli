@@ -73,6 +73,13 @@ let interactionError: unknown;
 try {
   await waitFor("welcome screen", /ZCode/i);
   await waitFor("restored startup transcript", /Restored startup response\./i);
+  await sendAndWait("\x1b", "double-Esc rewind hint", /Esc again to rewind conversation/i);
+  await sendAndWait("\x1b", "rewind target picker", /Rewind conversation[\s\S]*Restored later prompt/i);
+  await sendAndWait("\x1b[B\r", "selected older rewind target", /Return to before: Restored startup prompt/i);
+  await sendAndWait("\x1b", "rewind scope returned to targets", /Choose the user input to return to/i);
+  await sendAndWait("\r", "latest rewind target scope", /Return to before: Restored later prompt/i);
+  await sendAndWait("\r", "conversation and workspace rewind", /Conversation and workspace rewound[\s\S]*selected input was restored to the editor/i);
+  await sendAndSettle("\x15");
   await sendAndWait("/settings\r", "settings picker", /ZCode settings/i);
   await sendAndWait("\x1b[B\r", "notification timing picker", /When to notify/i);
   await sendAndWait("\x1b[B\r", "saved setting returned to root", /When to notify: always saved · environment override remains active/i);
@@ -182,6 +189,10 @@ if (turnNotifications.length !== 1 || !output.includes("\x1b]9;ZCode · Feature 
 for (const [label, pattern] of [
   ["restored startup transcript", /Restored startup response\./i],
   ["restored selected transcript", /Restored selected response\./i],
+  ["double-Esc rewind hint", /Esc again to rewind conversation/i],
+  ["rewind target picker", /Rewind conversation[\s\S]*Restored later prompt/i],
+  ["selected older rewind target", /Return to before: Restored startup prompt/i],
+  ["conversation and workspace rewind", /Conversation and workspace rewound/i],
   ["settings picker", /ZCode settings/i],
   ["saved setting returned to root", /When to notify: always saved · environment override remains active/i],
   ["child escape returned to settings", /No changes · Esc closes settings/i],

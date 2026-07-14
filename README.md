@@ -63,6 +63,7 @@ the only persistence path.
 - persistent active-tool, background-task and open-plan activity between the transcript and editor;
 - active-turn steering, cancellation and error reporting;
 - unfocused turn-completion notifications through OSC 9, native desktop APIs or BEL fallback;
+- double-Esc rewind with input-point selection and safe conversation/workspace scopes;
 - `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling with token usage and resume guidance on exit;
 - `--no-color` and `NO_COLOR` support.
 
@@ -123,6 +124,24 @@ export ZCODE_TUI_NOTIFICATION_METHOD=auto       # auto|osc9|bel|native|off
 export ZCODE_TUI_NOTIFICATION_CONDITION=always  # unfocused|always
 bun bin/zcode.ts
 ```
+
+### Conversation rewind
+
+With an empty editor and no active turn, press `Esc` twice within 800 ms to
+open the conversation rewind picker. Choose the user input to return to, review
+the available workspace checkpoints, then select one of the available scopes:
+
+- **Conversation only** removes later conversation turns, keeps workspace
+  files unchanged, and restores the selected input to the editor;
+- **Conversation and workspace** also restores safe checkpointed file changes;
+- **Workspace only** restores safe checkpointed files without changing the
+  conversation.
+
+The scope picker only offers workspace restoration when the official ZCode
+runtime reports a complete safe checkpoint plan. Files changed externally are
+not overwritten, and Bash or terminal file mutations are reported as ignored
+because they do not have restorable ZCode checkpoints. Press `Esc` in the scope
+picker to return to input selection, then `Esc` again to close rewind.
 
 ### TUI inspection and navigation
 

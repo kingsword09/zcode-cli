@@ -132,6 +132,10 @@ describe("runtime synchronization", () => {
 
   test("injects transcript and structured state readers into the official TUI adapter", () => {
     const runtime = [
+      "function R(e,t){return f(e,{rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}",
+      "async function L(e){if(!e.sessionStore)return[];let t=await e.sessionStore.messages({sessionID:e.sessionId});return p(t)}",
+      'function p(e){let t=[];for(let r of e){if(r.info.role==="user"){let l=r.text;t.push({content:l,role:"user"});continue}let n=[],s=[],u=r.text;t.push({content:u,...s.length>0?{parts:s}:{},role:"agent"})}return t}',
+      "function c(e,t){if(t.targetMessageId)return O(e,[t.targetMessageId]);let r=P(e,t.targetCheckpointId);return r?[r]:[]}",
       "E.sendInput=async(A,$)=>{return Kvt(await S(),D,O1(t))},",
       "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
       "CVr(E,S,r);",
@@ -149,12 +153,20 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("E.readRuntimeProjection=async()=>{let e=await S();return e.runtime?.getProjection?.()??null}");
     expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
     expect(patched).toContain("E.cancelBackgroundTask=async e=>await(await S()).cancelBackgroundTask?.(e)??null");
+    expect(patched).toContain("E.previewFileRewind=async e=>{let t=await S();return await t.runtime?.previewWorkspaceFileRewind?.({targetMessageIds:e})??null}");
+    expect(patched).toContain("E.applyFileRewind=async e=>{let t=await S();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}");
+    expect(patched).toContain('messageId:r.info.id,role:"user"');
+    expect(patched).toContain('messageId:r.info.id,role:"agent"');
+    expect(patched).toContain("Array.isArray(t.targetMessageIds)");
+    expect(patched).toContain("r=await e.sessionStore.getSession(e.sessionId);return p(r?R(t,r):t)");
     expect(patched).toContain("loadSessionTranscript:g.loadSessionTranscript");
     expect(patched).toContain("readGoal:g.readGoal");
     expect(patched).toContain("readTodos:g.readTodos");
     expect(patched).toContain("readRuntimeProjection:g.readRuntimeProjection");
     expect(patched).toContain("readSessionUsage:g.readSessionUsage");
     expect(patched).toContain("cancelBackgroundTask:g.cancelBackgroundTask");
+    expect(patched).toContain("previewFileRewind:g.previewFileRewind");
+    expect(patched).toContain("applyFileRewind:g.applyFileRewind");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);
