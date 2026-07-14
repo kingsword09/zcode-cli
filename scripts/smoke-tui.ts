@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+
+import { nextBuildVersion } from "./release-version.ts";
 
 const root = join(import.meta.dir, "..");
 const runtime = join(root, "vendor", "zcode.cjs");
@@ -16,6 +18,8 @@ const decoder = new TextDecoder();
 let output = "";
 const temporaryHome = await mkdtemp(join(tmpdir(), "zcode-cli-smoke-"));
 const configPath = join(temporaryHome, ".zcode", "cli", "config.json");
+const updateCachePath = join(temporaryHome, ".zcode", "cli", "version.json");
+const availableVersion = nextBuildVersion(packageVersion);
 const smokeApiKey = "smoke-api-key-not-real";
 const command = process.argv[2]
   ? [resolve(process.argv[2])]
@@ -29,13 +33,21 @@ const terminal = new Bun.Terminal({
   }
 });
 
+await mkdir(dirname(updateCachePath), { recursive: true });
+await writeFile(updateCachePath, `${JSON.stringify({
+  latestVersion: availableVersion,
+  lastCheckedAt: new Date().toISOString()
+})}\n`);
+
 const child = Bun.spawn(command, {
   cwd: root,
   env: {
     ...process.env,
-    CI: "1",
+    CI: "0",
     HOME: temporaryHome,
+    NO_UPDATE_NOTIFIER: "0",
     USERPROFILE: temporaryHome,
+    ZCODE_DISABLE_UPDATE_CHECK: "0",
     TERM: "xterm-256color"
   },
   terminal
@@ -140,6 +152,9 @@ if (code !== 0) throw new Error(`TUI smoke test exited with ${code}.\n${plain.sl
 if (!plain.includes("ZCode")) throw new Error(`TUI welcome screen was not rendered.\n${plain.slice(-4_000)}`);
 if (!plain.includes(`v${packageVersion} · runtime v`)) {
   throw new Error(`The TUI did not render the npm and runtime versions separately.\n${plain.slice(-4_000)}`);
+}
+if (!plain.includes(`Update available! ${packageVersion} → ${availableVersion}`)) {
+  throw new Error(`The TUI did not render the cached update notice.\n${plain.slice(-4_000)}`);
 }
 if (!/custom provider/i.test(plain)) {
   throw new Error(`The custom-provider configuration hint was not rendered.\n${plain.slice(-4_000)}`);

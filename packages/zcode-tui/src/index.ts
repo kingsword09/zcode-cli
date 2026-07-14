@@ -2,6 +2,11 @@ import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 import { readConfiguredModelAccess } from "../../../src/model-access.ts";
+import {
+  readStartupUpdate,
+  refreshUpdateCache,
+  type StartupUpdateCheck
+} from "../../../src/update-check.ts";
 
 import {
   Container,
@@ -147,6 +152,7 @@ import { ToolExecutionView, toolSucceeded } from "./tool-view.ts";
 import { Transcript } from "./transcript.ts";
 import { turnStatusText } from "./turn-status.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
+import { UpdateAvailableView, updateCommand } from "./update-available-view.ts";
 import { WorkspaceAutocompleteProvider } from "./workspace-autocomplete.ts";
 import { readWorkspaceDiff } from "./workspace-diff.ts";
 
@@ -311,6 +317,7 @@ class ZCodeTui {
   private runtimeRefreshPending = false;
   private runtimeRefreshTimer?: ReturnType<typeof setTimeout>;
   private runtimePollTimer?: ReturnType<typeof setInterval>;
+  private updateCheckAbortController?: AbortController;
   private loginRequired: boolean;
   private readonly loginWarning = new Text("", 1, 0);
   private readonly loginHelp = new Text("", 1, 0);
@@ -357,6 +364,9 @@ class ZCodeTui {
     } catch (error) {
       notificationConfigError = error instanceof Error ? error.message : String(error);
     }
+    const updateCheck = this.distributionVersion
+      ? await readStartupUpdate({ currentVersion: this.distributionVersion }).catch(() => undefined)
+      : undefined;
     this.ui.start();
     await this.resolveTerminalColorScheme();
     this.buildLayout();
@@ -364,12 +374,16 @@ class ZCodeTui {
       this.addNotice(`Unable to load notification settings: ${notificationConfigError}`, "warning");
     }
     await this.restoreInitialTranscript();
+    if (updateCheck?.availableVersion && this.distributionVersion) {
+      this.addUpdateAvailable(this.distributionVersion, updateCheck.availableVersion);
+    }
     this.bindInput();
     this.notifications.start();
     this.ui.setFocus(this.editor);
     this.updateMetadata();
     this.updateTurnStatus();
     this.ui.requestRender(true);
+    this.startUpdateRefresh(updateCheck);
     if (!this.loginRequired) void this.refreshGoal();
     if (!this.loginRequired) void this.refreshSessionUsage();
     void this.refreshRuntimeState();
@@ -1292,6 +1306,30 @@ class ZCodeTui {
     this.currentToolGroup = undefined;
     this.transcript.addBlock(new SystemEventView(this.theme, event), { kind: "system-event" });
     this.ui.requestRender();
+  }
+
+  private addUpdateAvailable(currentVersion: string, latestVersion: string): void {
+    this.currentToolGroup = undefined;
+    this.transcript.addBlock(new UpdateAvailableView(this.theme, currentVersion, latestVersion), {
+      kind: "update",
+      searchText: `Update available: ${currentVersion} -> ${latestVersion}\n${updateCommand}`
+    });
+    this.ui.requestRender();
+  }
+
+  private startUpdateRefresh(updateCheck: StartupUpdateCheck | undefined): void {
+    if (!updateCheck?.refreshRequired || !this.distributionVersion) return;
+    const controller = new AbortController();
+    this.updateCheckAbortController = controller;
+    void refreshUpdateCache({
+      cachePath: updateCheck.cachePath,
+      currentVersion: this.distributionVersion,
+      signal: controller.signal
+    }).catch(() => {
+      // Update discovery is optional and must never interrupt the TUI.
+    }).finally(() => {
+      if (this.updateCheckAbortController === controller) this.updateCheckAbortController = undefined;
+    });
   }
 
   private ensureToolView(
@@ -3005,6 +3043,7 @@ class ZCodeTui {
     if (this.stopped) return;
     this.stopped = true;
     this.turnAbortController?.abort();
+    this.updateCheckAbortController?.abort();
     if (this.turnTimer) clearInterval(this.turnTimer);
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
