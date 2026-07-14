@@ -15,11 +15,13 @@ if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode ru
 if (typeof Bun.Terminal !== "function") throw new Error("This Bun build does not provide Bun.Terminal.");
 
 const runtimeSource = await Bun.file(runtime).text();
-if (!runtimeSource.includes(".readGoal=async()=>await(await")
+if (!runtimeSource.includes(".loadSessionTranscript=async()=>await(await")
+  || !runtimeSource.includes(".readGoal=async()=>await(await")
   || !runtimeSource.includes(".readTodos=async()=>await(await")
   || !runtimeSource.includes(".readRuntimeProjection=async()=>")
   || !runtimeSource.includes(".readSessionUsage=async()=>await(await")
   || !runtimeSource.includes(".cancelBackgroundTask=async")
+  || !/loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(runtimeSource)
   || !/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtimeSource)
   || !/readTodos:[A-Za-z_$][\w$]*\.readTodos/u.test(runtimeSource)
   || !/readRuntimeProjection:[A-Za-z_$][\w$]*\.readRuntimeProjection/u.test(runtimeSource)

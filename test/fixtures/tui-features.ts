@@ -82,6 +82,10 @@ await runTui({
     { name: "workflows", description: "Manage workflows" },
     { name: "goal", description: "Manage the session goal" }
   ],
+  loadSessionTranscript: async () => [
+    { role: "user", content: "Restored startup prompt." },
+    { role: "agent", content: "Restored startup response." }
+  ],
   readClipboardImage: async () => ({
     dataUrl: "data:image/png;base64,aGVsbG8=",
     mediaType: "image/png",
@@ -337,6 +341,33 @@ await runTui({
   },
   submitPrompt: async (input) => {
     if (typeof input !== "string") return { response: "Unexpected structured slash command." };
+    if (input === "/resume") {
+      return {
+        response: "Select a session to resume.",
+        selection: {
+          title: "Resume Session",
+          prompt: "Choose a session to resume.",
+          items: [{
+            command: "/resume fixture-session",
+            id: "fixture-session",
+            primary: "Fixture session",
+            secondary: "fixture-session"
+          }]
+        }
+      };
+    }
+    if (input === "/resume fixture-session") {
+      return {
+        resetSessionProjection: true,
+        restoredMessages: [
+          { role: "user", content: "Restored selected prompt." },
+          { role: "agent", content: "Restored selected response." }
+        ],
+        response: "Resumed session fixture-session.",
+        model,
+        thoughtLevel: effort
+      };
+    }
     if (input === "/help") {
       return {
         response: [

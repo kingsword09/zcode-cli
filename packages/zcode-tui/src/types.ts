@@ -35,6 +35,7 @@ export interface TuiOptions {
   stdin?: NodeJS.ReadStream;
   stdout?: NodeJS.WriteStream;
   stderr?: NodeJS.WriteStream;
+  loadSessionTranscript?: () => Promise<unknown>;
   recallPreviousInput?: (skip: number) => Promise<unknown>;
   readGoal?: () => Promise<unknown>;
   readTodos?: () => Promise<unknown>;

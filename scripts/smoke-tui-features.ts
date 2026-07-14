@@ -61,6 +61,7 @@ const timeout = setTimeout(() => child.kill("SIGKILL"), 45_000);
 let interactionError: unknown;
 try {
   await waitFor("welcome screen", /ZCode/i);
+  await waitFor("restored startup transcript", /Restored startup response\./i);
   await sendAndWait("/help\r", "long help", /Use \/help <command> for details/i);
   await sendAndWait("\x1b[Z", "plan shortcut", /alpha\/model · plan · low/i);
   await sendAndWait("\x0c", "autonomy shortcut", /alpha\/model · build · low/i);
@@ -106,6 +107,8 @@ try {
   await sendAndWait("\r", "background task detail", /Background task · bg_feature/i);
   await sendAndSettle("\r");
   await sendAndWait("/goal pause\r", "paused goal", /Goal paused \(\/goal resume\)/i);
+  await sendAndWait("/resume\r", "resume picker", /Resume Session/i);
+  await sendAndWait("\r", "selected session transcript", /Restored selected response\./i);
   terminal.write("\x03");
 } catch (error) {
   interactionError = error;
@@ -126,6 +129,9 @@ if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain.slice(-6_000)}`);
 
 for (const [label, pattern] of [
+  ["restored startup transcript", /Restored startup response\./i],
+  ["restored selected transcript", /Restored selected response\./i],
+  ["resume picker", /Resume Session/i],
   ["long help output", /Use \/help <command> for details/i],
   ["turn timer tick", /\[1s\]/i],
   ["context remaining", /75% context left/i],
@@ -184,6 +190,10 @@ if (/Shift\+Tab mode · Ctrl\+N model/i.test(plain)) {
 
 if (/\b(?:ready|switching)\b/i.test(plain)) {
   throw new Error(`Unexpected transient state log in feature TUI smoke.\n${plain.slice(-6_000)}`);
+}
+
+if (/Wait for the active turn or press Ctrl\+C before running a slash command/i.test(plain)) {
+  throw new Error(`Resume selection was blocked by the active submission.\n${plain.slice(-6_000)}`);
 }
 
 let stateOffset = 0;

@@ -181,6 +181,7 @@ class ZCodeTui {
   private resolveDone!: () => void;
   private stopped = false;
   private activeSubmissions = 0;
+  private queuedSelectionCommand?: string;
   private turnAbortController?: AbortController;
   private currentThinking?: ThinkingView;
   private currentThinkingPartId?: string;
@@ -261,6 +262,7 @@ class ZCodeTui {
     this.ui.start();
     await this.resolveTerminalColorScheme();
     this.buildLayout();
+    await this.restoreInitialTranscript();
     this.bindInput();
     this.ui.setFocus(this.editor);
     this.updateMetadata();
@@ -564,6 +566,7 @@ class ZCodeTui {
 
     let accepted = false;
     let unfinishedToolState = "interrupted";
+    let nextCommand: string | undefined;
     try {
       if (input.startsWith("/") || !this.options.sendInput) {
         const result = await this.options.submitPrompt(
@@ -595,10 +598,13 @@ class ZCodeTui {
       if (this.turnAbortController === abortController) this.turnAbortController = undefined;
       if (this.activeSubmissions === 0) {
         this.finishTurn(unfinishedToolState);
+        nextCommand = this.queuedSelectionCommand;
+        this.queuedSelectionCommand = undefined;
       }
       void this.refreshGoal();
       void this.refreshSessionUsage();
     }
+    if (nextCommand) await this.submit(nextCommand);
   }
 
   private async handleSendOutcome(outcome: unknown): Promise<boolean> {
@@ -1623,7 +1629,7 @@ class ZCodeTui {
       items,
       selectedIndex: typeof selection.selectedIndex === "number" ? selection.selectedIndex : 0
     });
-    if (typeof selected?.payload === "string") void this.submit(selected.payload);
+    if (typeof selected?.payload === "string") this.queuedSelectionCommand = selected.payload;
   }
 
   private async showCommandPicker(
@@ -2099,6 +2105,16 @@ class ZCodeTui {
       }
     }
     for (const input of history.reverse()) this.editor.addToHistory(input);
+  }
+
+  private async restoreInitialTranscript(): Promise<void> {
+    if (!this.options.loadSessionTranscript) return;
+    try {
+      this.restoreTranscript(restoredMessages(await this.options.loadSessionTranscript()));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addNotice(`Unable to restore session transcript: ${message}`, "warning");
+    }
   }
 
   private updateMetadata(): void {
