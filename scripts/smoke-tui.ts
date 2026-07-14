@@ -149,8 +149,8 @@ const plain = plainText(output);
 if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 
 if (code !== 0) throw new Error(`TUI smoke test exited with ${code}.\n${plain.slice(-4_000)}`);
-if (!plain.includes("ZCode")) throw new Error(`TUI welcome screen was not rendered.\n${plain.slice(-4_000)}`);
-if (!plain.includes(`v${packageVersion} · runtime v`)) {
+if (!/ZCODE/i.test(plain)) throw new Error(`TUI welcome screen was not rendered.\n${plain.slice(-4_000)}`);
+if (!plain.includes(`ZCODE  v${packageVersion}`) || !/runtime v\d+/u.test(plain)) {
   throw new Error(`The TUI did not render the npm and runtime versions separately.\n${plain.slice(-4_000)}`);
 }
 if (!plain.includes(`Update available! ${packageVersion} → ${availableVersion}`)) {
