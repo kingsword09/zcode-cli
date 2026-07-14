@@ -17,9 +17,15 @@ interface WorkflowStep {
 }
 
 interface Workflow {
+  concurrency?: {
+    group?: string;
+    "cancel-in-progress"?: boolean;
+  };
   jobs: Record<string, {
     if?: string;
+    "runs-on"?: string;
     steps: WorkflowStep[];
+    "timeout-minutes"?: number;
   }>;
   on: Record<string, unknown>;
   permissions: Record<string, string>;
@@ -31,6 +37,39 @@ async function readWorkflow(name: string): Promise<{ source: string; workflow: W
 }
 
 describe("release workflows", () => {
+  test("runs read-only CI and cancels superseded branch or PR checks", async () => {
+    const { source, workflow } = await readWorkflow("ci.yml");
+    const job = workflow.jobs.validate!;
+    const checkout = job.steps.find((step) => step.uses === "actions/checkout@v6");
+    const setupNode = job.steps.find((step) => step.uses === "actions/setup-node@v6");
+    const install = job.steps.find((step) => step.name === "Install dependencies");
+    const build = job.steps.find((step) => step.name === "Build and test");
+    const pack = job.steps.find((step) => step.name === "Pack and install-test");
+    const metadata = job.steps.find((step) => step.name === "Verify repository and npm metadata");
+
+    expect(workflow.on).toHaveProperty("push");
+    expect(workflow.on).toHaveProperty("pull_request");
+    expect(workflow.on).toHaveProperty("workflow_dispatch");
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.concurrency?.group).toContain("github.event.pull_request.number");
+    expect(workflow.concurrency?.group).toContain("github.ref");
+    expect(workflow.concurrency?.["cancel-in-progress"]).toBe(true);
+    expect(job["runs-on"]).toBe("ubuntu-latest");
+    expect(job["timeout-minutes"]).toBe(45);
+    expect(checkout?.with?.["persist-credentials"]).toBe(false);
+    expect(setupNode?.with?.["node-version"]).toBe("22.19.0");
+    expect(setupNode?.with?.["package-manager-cache"]).toBe(false);
+    expect(install?.run).toBe("bun install --frozen-lockfile");
+    expect(build?.run).toBe("bun run release:build");
+    expect(pack?.run).toBe("bun run release:pack");
+    expect(metadata?.run).toContain("npm pkg fix --dry-run --json");
+    expect(metadata?.run).toContain("git diff --check");
+    expect(metadata?.run).toContain("git diff --exit-code -- package.json zcode-runtime.lock.json");
+    expect(source).not.toContain("NPM_TOKEN");
+    expect(source).not.toContain("npm publish");
+    expect(source).not.toContain("id-token: write");
+  });
+
   test("prepares reviewed release PRs without publishing credentials", async () => {
     const { source, workflow } = await readWorkflow("prepare-release.yml");
     const steps = workflow.jobs.prepare!.steps;

@@ -434,6 +434,15 @@ contacting Z.AI or changing the real `zcode://` association:
 bun run check:oauth-callback
 ```
 
+### Continuous integration
+
+`.github/workflows/ci.yml` runs for pull requests, pushes to `main` and manual
+dispatches. It validates the project on the minimum supported Node.js 22.19,
+including the locked runtime build, TypeScript and unit tests, PTY scenarios,
+the reviewed npm tarball and an isolated installed-package smoke test. A newer
+commit to the same pull request or branch automatically cancels its superseded
+CI run; unrelated pull requests continue independently.
+
 To hand `/login` to another interactive command, set an explicit override:
 
 ```bash
