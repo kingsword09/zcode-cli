@@ -62,6 +62,7 @@ the only persistence path.
 - searchable transcript navigation with per-block expansion, selected-block copying and `n`/`N` match traversal;
 - persistent active-tool, background-task and open-plan activity between the transcript and editor;
 - active-turn steering, cancellation and error reporting;
+- unfocused turn-completion notifications through OSC 9, native desktop APIs or BEL fallback;
 - `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling with token usage and resume guidance on exit;
 - `--no-color` and `NO_COLOR` support.
 
@@ -80,6 +81,48 @@ Compare @src/index.ts with @"docs/design notes.md"
 Suggestions come from the official ZCode runtime, stay inside the current
 workspace and exclude common repository metadata and dependency directories.
 Paths containing spaces are inserted in the quoted `@"..."` form.
+
+### Turn completion notifications
+
+Notifications are enabled by default and emitted after a normal agent turn
+completes or fails while the terminal is unfocused. `auto` delivery uses OSC 9
+in Ghostty, iTerm2, Kitty, Warp and WezTerm; otherwise it tries the native
+desktop notifier (`osascript` on macOS, `notify-send` on Linux, PowerShell Toast
+on Windows) and falls back to BEL. SSH sessions skip remote desktop commands.
+
+Open the interactive settings picker inside the TUI (both commands are
+equivalent):
+
+```text
+/config
+/settings
+```
+
+Saving a value returns to the settings root so several options can be changed
+in one visit. `Esc` returns from a setting to the root, then closes the root.
+
+The picker updates the active session immediately and persists the selected
+values under `ui.notifications` in the cross-platform user `config.json`:
+
+```json
+{
+  "ui": {
+    "notifications": {
+      "method": "auto",
+      "condition": "unfocused"
+    }
+  }
+}
+```
+
+Environment variables override `config.json` on startup and are useful for a
+temporary per-shell setting:
+
+```bash
+export ZCODE_TUI_NOTIFICATION_METHOD=auto       # auto|osc9|bel|native|off
+export ZCODE_TUI_NOTIFICATION_CONDITION=always  # unfocused|always
+bun bin/zcode.ts
+```
 
 ### TUI inspection and navigation
 

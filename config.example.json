@@ -80,7 +80,11 @@
   },
   "ui": {
     "locale": "auto",
-    "theme": "auto"
+    "theme": "auto",
+    "notifications": {
+      "method": "auto",
+      "condition": "unfocused"
+    }
   },
   "toolConcurrency": {
     "maxConcurrency": 10
