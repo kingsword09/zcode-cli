@@ -4,16 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  detectedTerminal,
   nativeNotificationCommand,
+  notificationDeliveryLabel,
   notificationPreview,
   notificationSettings,
   osc9NotificationSequence,
   readNotificationSettings,
   readStoredNotificationSettings,
+  resolveNotificationBackend,
   supportsOsc9,
+  terminalBundleIdentifier,
+  terminalNotifierCommand,
   TurnNotifier,
   writeNotificationSettings,
-  type NotificationCommand
+  type NativeNotificationSender
 } from "../packages/zcode-tui/src/notifications.ts";
 
 const temporaryDirectories: string[] = [];
@@ -82,25 +87,60 @@ describe("TUI turn notifications", () => {
     expect(supportsOsc9({ TERM_PROGRAM: "iTerm.app" })).toBe(true);
     expect(supportsOsc9({ WEZTERM_PANE: "1" })).toBe(true);
     expect(supportsOsc9({ TERM_PROGRAM: "Apple_Terminal" })).toBe(false);
+    expect(detectedTerminal({ TERM_PROGRAM: "Apple_Terminal" })).toBe("Apple_Terminal");
+    expect(resolveNotificationBackend("auto", { TERM_PROGRAM: "Apple_Terminal" })).toBe("bel");
+    expect(resolveNotificationBackend("osc9", { TERM_PROGRAM: "Apple_Terminal" })).toBe("bel");
+    expect(resolveNotificationBackend("osc9", { TERM_PROGRAM: "iTerm.app" })).toBe("osc9");
+    expect(resolveNotificationBackend("native", { TERM_PROGRAM: "iTerm.app" })).toBe("native");
+    expect(notificationDeliveryLabel("native", "native")).toBe("native");
+    expect(notificationDeliveryLabel("auto", "bel")).toBe("auto → bel");
+    expect(notificationDeliveryLabel("osc9", "bel")).toBe("osc9 → bel fallback");
   });
 
-  test("constructs native commands without interpolating notification text", () => {
-    const mac = nativeNotificationCommand("darwin", "title ' quoted", "body \" quoted");
-    expect(mac?.command).toBe("osascript");
-    expect(mac?.args.slice(-3)).toEqual(["--", "title ' quoted", "body \" quoted"]);
+  test("builds dependency-free native commands without shell interpolation", () => {
+    const commands = new Map([
+      ["terminal-notifier", "/opt/bin/terminal-notifier"],
+      ["notify-send", "/usr/bin/notify-send"],
+      ["SnoreToast.exe", "C:\\Tools\\SnoreToast.exe"]
+    ]);
+    const which = (name: string) => commands.get(name) ?? null;
 
-    expect(nativeNotificationCommand("linux", "Title", "Body")).toEqual({
-      command: "notify-send",
+    expect(terminalBundleIdentifier({ TERM_PROGRAM: "iTerm.app" })).toBe("com.googlecode.iterm2");
+    expect(terminalBundleIdentifier({ TERM_PROGRAM: "vscode" })).toBe("com.microsoft.VSCode");
+    expect(terminalBundleIdentifier({})).toBeUndefined();
+    const command = terminalNotifierCommand("title ' quoted", "body \" quoted", {
+      TERM_PROGRAM: "Apple_Terminal"
+    }, which);
+    expect(command).toEqual({
+      command: "/opt/bin/terminal-notifier",
+      args: [
+        "-title", "title ' quoted",
+        "-message", "body \" quoted",
+        "-group", "zcode-cli-turn",
+        "-sender", "com.apple.Terminal",
+        "-activate", "com.apple.Terminal"
+      ]
+    });
+    expect(terminalNotifierCommand("Title", "Body", {}, () => null)).toBeUndefined();
+    expect(nativeNotificationCommand("linux", "Title", "Body", {}, which)).toEqual({
+      command: "/usr/bin/notify-send",
       args: ["--app-name=ZCode", "Title", "Body"]
     });
-
-    const windows = nativeNotificationCommand("win32", "Title", "Body");
-    expect(windows?.command).toBe("powershell.exe");
-    expect(windows?.args.slice(-2)).toEqual(["Title", "Body"]);
-    expect(windows?.args.join(" ")).not.toContain("CreateTextNode(Title)");
+    expect(nativeNotificationCommand("win32", "Title", "Body", {}, which)).toEqual({
+      command: "C:\\Tools\\SnoreToast.exe",
+      args: ["-t", "Title", "-m", "Body", "-appID", "ZCode CLI"]
+    });
+    expect(nativeNotificationCommand("freebsd", "Title", "Body", {}, which)).toBeUndefined();
+    expect(command?.args).toEqual([
+      "-title", "title ' quoted",
+      "-message", "body \" quoted",
+      "-group", "zcode-cli-turn",
+      "-sender", "com.apple.Terminal",
+      "-activate", "com.apple.Terminal"
+    ]);
   });
 
-  test("notifies through OSC 9 only after the terminal loses focus", async () => {
+  test("uses reported focus and does not suppress notifications while focus is unknown", async () => {
     const writes: string[] = [];
     const notifier = new TurnNotifier({
       env: { TERM_PROGRAM: "iTerm.app" },
@@ -111,6 +151,14 @@ describe("TUI turn notifications", () => {
 
     notifier.start();
     expect(writes).toEqual(["\x1b[?1004h"]);
+    expect(notifier.diagnostics()).toEqual({
+      configuredMethod: "auto",
+      backend: "osc9",
+      focus: "unknown",
+      terminal: "iTerm.app"
+    });
+    expect(await notifier.notify("completed", "Focus support is not known yet.")).toBe(true);
+    expect(notifier.handleInput("\x1b[I")).toBe(true);
     expect(await notifier.notify("completed", "Finished the task.")).toBe(false);
     expect(notifier.handleInput("\x1b[O")).toBe(true);
     expect(await notifier.notify("completed", "Finished\n the task.")).toBe(true);
@@ -131,44 +179,68 @@ describe("TUI turn notifications", () => {
     notifier.start();
     notifier.setSettings({ method: "off", condition: "unfocused" });
     notifier.setSettings({ method: "bel", condition: "always" });
+    notifier.setSettings({ method: "bel", condition: "unfocused" });
 
-    expect(notifier.currentSettings()).toEqual({ method: "bel", condition: "always" });
+    expect(notifier.currentSettings()).toEqual({ method: "bel", condition: "unfocused" });
     expect(writes).toEqual(["\x1b[?1004h", "\x1b[?1004l", "\x1b[?1004h"]);
   });
 
-  test("uses a native notification and falls back to BEL when unavailable", async () => {
-    const commands: NotificationCommand[] = [];
+  test("uses Codex-style BEL fallback in Apple Terminal without requiring focus support", async () => {
+    let nativeCalls = 0;
     const writes: string[] = [];
-    const native = new TurnNotifier({
+    const automatic = new TurnNotifier({
       env: { TERM_PROGRAM: "Apple_Terminal" },
       platform: "linux",
-      settings: { method: "auto", condition: "always" },
+      settings: { method: "osc9", condition: "unfocused" },
       writeTerminal: (data) => writes.push(data),
-      runCommand: async (command) => {
-        commands.push(command);
+      nativeNotify: async () => {
+        nativeCalls += 1;
         return true;
       }
     });
 
-    expect(await native.notify("failed", "Build failed")).toBe(true);
-    expect(commands).toEqual([{
-      command: "notify-send",
-      args: ["--app-name=ZCode", "ZCode · Task failed", "Build failed"]
-    }]);
-    expect(writes).toEqual([]);
+    automatic.start();
+    expect(await automatic.notify("failed", "Build failed")).toBe(true);
+    expect(nativeCalls).toBe(0);
+    expect(writes).toEqual(["\x1b[?1004h", "\x07"]);
+    expect(automatic.diagnostics()).toEqual({
+      configuredMethod: "osc9",
+      backend: "bel",
+      focus: "unknown",
+      terminal: "Apple_Terminal"
+    });
+    automatic.stop();
 
-    const fallback = new TurnNotifier({
+    const native = new TurnNotifier({
       env: {},
       platform: "linux",
-      settings: { method: "auto", condition: "always" },
+      settings: { method: "native", condition: "always" },
       writeTerminal: (data) => writes.push(data),
-      runCommand: async () => false
+      nativeNotify: async () => false
     });
-    expect(await fallback.notify("completed")).toBe(true);
-    expect(writes).toEqual(["\x07"]);
+    expect(await native.notify("completed")).toBe(true);
+    expect(writes.at(-1)).toBe("\x07");
   });
 
-  test("avoids remote native commands over SSH and supports disabling notifications", async () => {
+  test("uses the explicitly selected native backend when its command succeeds", async () => {
+    const calls: Parameters<NativeNotificationSender>[] = [];
+    const writes: string[] = [];
+    const notifier = new TurnNotifier({
+      platform: "linux",
+      settings: { method: "native", condition: "always" },
+      writeTerminal: (data) => writes.push(data),
+      nativeNotify: async (...args) => {
+        calls.push(args);
+        return true;
+      }
+    });
+
+    expect(await notifier.notify("failed", "Build failed")).toBe(true);
+    expect(calls).toEqual([["linux", "ZCode · Task failed", "Build failed"]]);
+    expect(writes).toEqual([]);
+  });
+
+  test("uses BEL for automatic SSH notifications and supports disabling notifications", async () => {
     let commandRuns = 0;
     const writes: string[] = [];
     const remote = new TurnNotifier({
@@ -176,7 +248,7 @@ describe("TUI turn notifications", () => {
       platform: "linux",
       settings: { method: "auto", condition: "always" },
       writeTerminal: (data) => writes.push(data),
-      runCommand: async () => {
+      nativeNotify: async () => {
         commandRuns += 1;
         return true;
       }
