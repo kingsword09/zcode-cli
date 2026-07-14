@@ -65,11 +65,24 @@ describe("TUI tool execution view", () => {
       input: { command: "bun test" }
     });
 
-    expect(view.render(72).join("\n")).toContain("\x1b[48;5;236m");
+    expect(view.render(72).join("\n")).toContain("\x1b[38;5;252;48;5;236m");
     view.update({ name: "Bash", state: "complete", input: { command: "bun test" } });
-    expect(view.render(72).join("\n")).toContain("\x1b[48;5;234m");
+    expect(view.render(72).join("\n")).toContain("\x1b[38;5;252;48;5;234m");
     view.update({ name: "Bash", state: "failed", input: { command: "bun test" } });
-    expect(view.render(72).join("\n")).toContain("\x1b[48;5;52m");
+    expect(view.render(72).join("\n")).toContain("\x1b[38;5;252;48;5;52m");
+  });
+
+  test("uses dark text on light cards and restores it after child ANSI resets", () => {
+    const view = new ToolExecutionView(createTheme(true, "light"), {
+      name: "Bash",
+      state: "complete",
+      input: { command: "printf color" },
+      result: "\x1b[31mred\x1b[0m plain output"
+    });
+    const rendered = view.render(72).join("\n");
+
+    expect(rendered).toContain("\x1b[38;5;236;48;5;254m");
+    expect(rendered).toContain("\x1b[0m\x1b[38;5;236;48;5;254m plain output");
   });
 
   test("hides metadata-only success results and surfaces embedded errors", () => {

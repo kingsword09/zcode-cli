@@ -22,6 +22,7 @@ import {
 } from "./attachments.ts";
 import { AssistantStream } from "./assistant-stream.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
+import { colorSchemeFromColorFgBg, colorSchemeFromRgb } from "./color-scheme.ts";
 import {
   historyText,
   modelLabel,
@@ -144,6 +145,8 @@ const toolLifecycleEventKinds = new Set([
   "closed"
 ]);
 
+const terminalThemeQueryTimeoutMs = 100;
+
 function restoredToolState(status: string): string {
   switch (status.toLowerCase()) {
     case "pending": return "queued";
@@ -160,6 +163,7 @@ function restoredToolState(status: string): string {
 }
 
 class ZCodeTui {
+  private readonly colorsEnabled: boolean;
   private readonly theme: ZCodeTheme;
   private readonly ui: TUI;
   private readonly transcript: Transcript;
@@ -222,7 +226,8 @@ class ZCodeTui {
   private runtimePollTimer?: ReturnType<typeof setInterval>;
 
   constructor(private readonly options: TuiOptions) {
-    this.theme = createTheme(!options.noColor && !process.env.NO_COLOR);
+    this.colorsEnabled = !options.noColor && !process.env.NO_COLOR;
+    this.theme = createTheme(this.colorsEnabled, colorSchemeFromColorFgBg() ?? "dark");
     this.transcript = new Transcript(this.theme.searchMatch);
     this.mode = options.initialMode ?? "build";
     this.lastExecutionMode = executionMode(this.mode);
@@ -243,8 +248,6 @@ class ZCodeTui {
     this.done = new Promise((resolve) => {
       this.resolveDone = resolve;
     });
-    this.buildLayout();
-    this.bindInput();
   }
 
   async run(): Promise<void> {
@@ -252,9 +255,13 @@ class ZCodeTui {
       throw new Error("ZCode TUI requires an interactive terminal.");
     }
     this.ui.start();
+    await this.resolveTerminalColorScheme();
+    this.buildLayout();
+    this.bindInput();
     this.ui.setFocus(this.editor);
     this.updateMetadata();
     this.updateTurnStatus();
+    this.ui.requestRender(true);
     if (!this.options.loginRequired) void this.refreshGoal();
     if (!this.options.loginRequired) void this.refreshSessionUsage();
     void this.refreshRuntimeState();
@@ -270,6 +277,20 @@ class ZCodeTui {
       }) ?? undefined;
     }
     await this.done;
+  }
+
+  private async resolveTerminalColorScheme(): Promise<void> {
+    if (!this.colorsEnabled) return;
+    try {
+      const [background, reportedScheme] = await Promise.all([
+        this.ui.queryTerminalBackgroundColor({ timeoutMs: terminalThemeQueryTimeoutMs }),
+        this.ui.queryTerminalColorScheme({ timeoutMs: terminalThemeQueryTimeoutMs })
+      ]);
+      const colorScheme = background ? colorSchemeFromRgb(background) : reportedScheme;
+      if (colorScheme) this.theme.setColorScheme(colorScheme);
+    } catch {
+      // Terminal color probing is optional; COLORFGBG or the dark fallback remains active.
+    }
   }
 
   private buildLayout(): void {
