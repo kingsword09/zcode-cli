@@ -75,11 +75,13 @@ export function chooseArtifact(manifest: UpdateManifest, platform: SyncOptions["
 }
 
 export function patchRuntimeTuiBridge(runtime: string): string {
-  const alreadyPatched = runtime.includes(".readGoal=async()=>await(await")
+  const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
+    && runtime.includes(".readGoal=async()=>await(await")
     && runtime.includes(".readTodos=async()=>await(await")
     && runtime.includes(".readRuntimeProjection=async()=>")
     && runtime.includes(".readSessionUsage=async()=>await(await")
     && runtime.includes(".cancelBackgroundTask=async")
+    && /loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(runtime)
     && /readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtime)
     && /readTodos:[A-Za-z_$][\w$]*\.readTodos/u.test(runtime)
     && /readRuntimeProjection:[A-Za-z_$][\w$]*\.readRuntimeProjection/u.test(runtime)
@@ -108,6 +110,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   const [recallAssignment, bridge, , getApp] = assignment;
   const assignments: string[] = [];
+  if (!patched.includes(".loadSessionTranscript=async()=>await(await")) {
+    assignments.push(`${bridge}.loadSessionTranscript=async()=>await(await ${getApp}()).loadSessionTranscript?.()??[]`);
+  }
   if (!patched.includes(".readGoal=async()=>await(await")) {
     assignments.push(`${bridge}.readGoal=async()=>await(await ${getApp}()).readTarget?.()??null`);
   }
@@ -132,6 +137,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!options) throw new Error("ZCode runtime is incompatible with the TUI bridge (runTui options anchor missing).");
   const [optionsAssignment, submitBridge] = options;
   const optionFields: string[] = [];
+  if (!/loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(patched)) {
+    optionFields.push(`loadSessionTranscript:${submitBridge}.loadSessionTranscript`);
+  }
   if (!/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(patched)) {
     optionFields.push(`readGoal:${submitBridge}.readGoal`);
   }

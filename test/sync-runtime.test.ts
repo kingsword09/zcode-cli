@@ -33,7 +33,7 @@ describe("runtime synchronization", () => {
     expect(() => chooseArtifact({ files: [] }, "linux")).toThrow(/No \.deb artifact/);
   });
 
-  test("injects structured goal and usage readers into the official TUI adapter", () => {
+  test("injects transcript and structured state readers into the official TUI adapter", () => {
     const runtime = [
       "E.sendInput=async(A,$)=>{return Kvt(await S(),D,O1(t))},",
       "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
@@ -46,11 +46,13 @@ describe("runtime synchronization", () => {
     );
     const patched = patchRuntimeTuiBridge(runtimeWithApp);
 
+    expect(patched).toContain("E.loadSessionTranscript=async()=>await(await S()).loadSessionTranscript?.()??[]");
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
     expect(patched).toContain("E.readTodos=async()=>await(await S()).readTodos?.()??[]");
     expect(patched).toContain("E.readRuntimeProjection=async()=>{let e=await S();return e.runtime?.getProjection?.()??null}");
     expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
     expect(patched).toContain("E.cancelBackgroundTask=async e=>await(await S()).cancelBackgroundTask?.(e)??null");
+    expect(patched).toContain("loadSessionTranscript:g.loadSessionTranscript");
     expect(patched).toContain("readGoal:g.readGoal");
     expect(patched).toContain("readTodos:g.readTodos");
     expect(patched).toContain("readRuntimeProjection:g.readRuntimeProjection");
