@@ -23,12 +23,20 @@ if (runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 
   || !runtimeSource.includes(".readRuntimeProjection=async()=>")
   || !runtimeSource.includes(".readSessionUsage=async()=>await(await")
   || !runtimeSource.includes(".cancelBackgroundTask=async")
+  || !runtimeSource.includes(".previewFileRewind=async e=>")
+  || !runtimeSource.includes(".applyFileRewind=async e=>")
+  || !/Array\.isArray\([A-Za-z_$][\w$]*\.targetMessageIds\)/u.test(runtimeSource)
+  || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"/u.test(runtimeSource)
+  || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u.test(runtimeSource)
+  || !/sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u.test(runtimeSource)
   || !/loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(runtimeSource)
   || !/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtimeSource)
   || !/readTodos:[A-Za-z_$][\w$]*\.readTodos/u.test(runtimeSource)
   || !/readRuntimeProjection:[A-Za-z_$][\w$]*\.readRuntimeProjection/u.test(runtimeSource)
   || !/readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtimeSource)
-  || !/cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(runtimeSource)) {
+  || !/cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(runtimeSource)
+  || !/previewFileRewind:[A-Za-z_$][\w$]*\.previewFileRewind/u.test(runtimeSource)
+  || !/applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtimeSource)) {
   throw new Error("The runtime compatibility patches are missing; run `bun run sync` again.");
 }
 

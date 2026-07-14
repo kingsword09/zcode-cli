@@ -75,21 +75,81 @@ export function chooseArtifact(manifest: UpdateManifest, platform: SyncOptions["
 }
 
 export function patchRuntimeTuiBridge(runtime: string): string {
+  const transcriptMessageIdPattern = /\.push\(\{content:[A-Za-z_$][\w$]*,messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"\}\)/u;
+  const transcriptAgentMessageIdPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u;
+  const multiMessageFileRewindPattern = /Array\.isArray\([A-Za-z_$][\w$]*\.targetMessageIds\)/u;
+  const activeTranscriptPattern = /sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u;
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
     && runtime.includes(".readGoal=async()=>await(await")
     && runtime.includes(".readTodos=async()=>await(await")
     && runtime.includes(".readRuntimeProjection=async()=>")
     && runtime.includes(".readSessionUsage=async()=>await(await")
     && runtime.includes(".cancelBackgroundTask=async")
+    && runtime.includes(".previewFileRewind=async e=>")
+    && runtime.includes(".applyFileRewind=async e=>")
+    && transcriptMessageIdPattern.test(runtime)
+    && transcriptAgentMessageIdPattern.test(runtime)
+    && multiMessageFileRewindPattern.test(runtime)
+    && activeTranscriptPattern.test(runtime)
     && /loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(runtime)
     && /readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtime)
     && /readTodos:[A-Za-z_$][\w$]*\.readTodos/u.test(runtime)
     && /readRuntimeProjection:[A-Za-z_$][\w$]*\.readRuntimeProjection/u.test(runtime)
     && /cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(runtime)
+    && /previewFileRewind:[A-Za-z_$][\w$]*\.previewFileRewind/u.test(runtime)
+    && /applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtime)
     && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime);
   if (alreadyPatched) return runtime;
 
   let patched = runtime;
+  if (!activeTranscriptPattern.test(patched)) {
+    const activeFilter = /function ([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)\{return [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\{rewindCreatedMessageId:[A-Za-z_$][\w$]*\.revert\?\.createdMessageID,rewindKeptMessageIds:[A-Za-z_$][\w$]*\.revert\?\.keptMessageIDs,rewindTargetMessageId:[A-Za-z_$][\w$]*\.revert\?\.targetMessageID\}\)\}/u.exec(patched)?.[1];
+    const transcriptLoaderPattern = /async function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{if\(!\2\.sessionStore\)return\[\];let ([A-Za-z_$][\w$]*)=await \2\.sessionStore\.messages\(\{sessionID:\2\.sessionId\}\);return ([A-Za-z_$][\w$]*)\(\3\)\}/u;
+    if (!activeFilter || !transcriptLoaderPattern.test(patched)) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (active transcript anchor missing).");
+    }
+    patched = patched.replace(
+      transcriptLoaderPattern,
+      `async function $1($2){if(!$2.sessionStore)return[];let $3=await $2.sessionStore.messages({sessionID:$2.sessionId}),r=await $2.sessionStore.getSession($2.sessionId);return $4(r?${activeFilter}($3,r):$3)}`
+    );
+  }
+  if (!transcriptMessageIdPattern.test(patched)) {
+    const userProjectionPattern = /(if\(([A-Za-z_$][\w$]*)\.info\.role==="user"\)\{.{0,400}?)([A-Za-z_$][\w$]*)\.push\(\{content:([A-Za-z_$][\w$]*),role:"user"\}\)(;continue\})/u;
+    if (!userProjectionPattern.test(patched)) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (transcript message-id anchor missing).");
+    }
+    patched = patched.replace(
+      userProjectionPattern,
+      "$1$3.push({content:$4,messageId:$2.info.id,role:\"user\"})$5"
+    );
+  }
+  if (!transcriptAgentMessageIdPattern.test(patched)) {
+    const agentProjectionPattern = /([A-Za-z_$][\w$]*)\.push\(\{content:([A-Za-z_$][\w$]*),\.\.\.([A-Za-z_$][\w$]*)\.length>0\?\{parts:\3\}:\{\},role:"agent"\}\)/u;
+    const agentProjection = agentProjectionPattern.exec(patched);
+    const functionStart = agentProjection ? patched.lastIndexOf("function ", agentProjection.index) : -1;
+    const messageRecord = functionStart >= 0 && agentProjection
+      ? /for\(let ([A-Za-z_$][\w$]*) of [A-Za-z_$][\w$]*\)\{/u.exec(
+          patched.slice(functionStart, agentProjection.index)
+        )?.[1]
+      : undefined;
+    if (!agentProjection || !messageRecord) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (assistant message-id anchor missing).");
+    }
+    patched = patched.replace(
+      agentProjectionPattern,
+      `$1.push({content:$2,...$3.length>0?{parts:$3}:{},messageId:${messageRecord}.info.id,role:"agent"})`
+    );
+  }
+  if (!multiMessageFileRewindPattern.test(patched)) {
+    const fileRewindTargetPattern = /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{if\(\3\.targetMessageId\)return ([A-Za-z_$][\w$]*)\(\2,\[\3\.targetMessageId\]\);/u;
+    if (!fileRewindTargetPattern.test(patched)) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (multi-message file rewind anchor missing).");
+    }
+    patched = patched.replace(
+      fileRewindTargetPattern,
+      "function $1($2,$3){if(Array.isArray($3.targetMessageIds)&&$3.targetMessageIds.length>0)return $4($2,$3.targetMessageIds);if($3.targetMessageId)return $4($2,[$3.targetMessageId]);"
+    );
+  }
   if (!patched.includes("readSessionUsage:")) {
     const appPattern = /loadSessionTranscript:([A-Za-z_$][\w$]*)\(async\(\)=>await [A-Za-z_$][\w$]*\(\{sessionId:([A-Za-z_$][\w$]*)\.sessionId,sessionStore:\2\.sessionStore\}\),"loadSessionTranscript"\),readTodos:/u;
     const app = appPattern.exec(patched);
@@ -128,6 +188,12 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".cancelBackgroundTask=async")) {
     assignments.push(`${bridge}.cancelBackgroundTask=async e=>await(await ${getApp}()).cancelBackgroundTask?.(e)??null`);
   }
+  if (!patched.includes(".previewFileRewind=async e=>")) {
+    assignments.push(`${bridge}.previewFileRewind=async e=>{let t=await ${getApp}();return await t.runtime?.previewWorkspaceFileRewind?.({targetMessageIds:e})??null}`);
+  }
+  if (!patched.includes(".applyFileRewind=async e=>")) {
+    assignments.push(`${bridge}.applyFileRewind=async e=>{let t=await ${getApp}();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}`);
+  }
   if (assignments.length > 0) {
     patched = patched.replace(recallAssignment, `${assignments.join(",")},${recallAssignment}`);
   }
@@ -154,6 +220,12 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(patched)) {
     optionFields.push(`cancelBackgroundTask:${submitBridge}.cancelBackgroundTask`);
+  }
+  if (!/previewFileRewind:[A-Za-z_$][\w$]*\.previewFileRewind/u.test(patched)) {
+    optionFields.push(`previewFileRewind:${submitBridge}.previewFileRewind`);
+  }
+  if (!/applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(patched)) {
+    optionFields.push(`applyFileRewind:${submitBridge}.applyFileRewind`);
   }
   if (optionFields.length > 0) {
     patched = patched.replace(optionsAssignment, `${optionFields.join(",")},${optionsAssignment}`);

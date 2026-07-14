@@ -84,6 +84,15 @@ import {
   type PickerSpec
 } from "./selectors.ts";
 import { RichMarkdown } from "./rich-markdown.ts";
+import {
+  fileRewindPreview,
+  rewindCommand,
+  rewindTargetLabel,
+  rewindTargets,
+  type FileRewindPreview,
+  type RewindScope,
+  type RewindTarget
+} from "./rewind.ts";
 import { isVisibleProtocolPart, ProtocolPartView } from "./protocol-part-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
 import {
@@ -171,7 +180,9 @@ const toolLifecycleEventKinds = new Set([
 
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
+const doubleEscapeTimeoutMs = 800;
 const customProviderHelpCommand = "__zcode_custom_provider_help__";
+const rewindEscapeHint = "Esc again to rewind conversation";
 
 interface QueuedSubmission extends ProtectedSubmission {
   externalLogin?: boolean;
@@ -273,6 +284,9 @@ class ZCodeTui {
   private workflowRefreshInFlight = false;
   private choiceDepth = 0;
   private settingSwitchInFlight = false;
+  private rewindEscapePending = false;
+  private rewindEscapeTimer?: ReturnType<typeof setTimeout>;
+  private rewindFlowActive = false;
   private activity?: string;
   private turnStartedAt?: number;
   private turnElapsedMilliseconds = 0;
@@ -551,6 +565,8 @@ class ZCodeTui {
     this.ui.addInputListener((data) => {
       if (this.notifications.handleInput(data)) return { consume: true };
       if (this.choiceDepth > 0) return undefined;
+      if (this.rewindFlowActive) return { consume: true };
+      if (!matchesKey(data, "escape")) this.clearRewindEscape();
       if (matchesKey(data, "ctrl+o")) {
         this.prepareTranscriptViewport();
         if (this.transcript.toggleFocusedExpanded() === undefined) this.transcript.toggleExpanded();
@@ -627,15 +643,21 @@ class ZCodeTui {
       }
       if (matchesKey(data, "escape")) {
         if (this.turnAbortController) {
+          this.clearRewindEscape();
           this.turnAbortController.abort();
           this.updateActivity("cancelling…");
           return { consume: true };
         }
         if (this.transcript.searchStatus() || this.transcript.cursorStatus()) {
+          this.clearRewindEscape();
           this.transcript.clearSearch();
           this.transcript.clearCursor();
           this.updateMetadata();
           this.ui.requestRender(true);
+          return { consume: true };
+        }
+        if (!this.editor.getText() && this.activeSubmissions === 0) {
+          this.handleRewindEscape();
           return { consume: true };
         }
       }
@@ -2039,6 +2061,204 @@ class ZCodeTui {
     }
   }
 
+  private handleRewindEscape(): void {
+    if (this.rewindEscapePending) {
+      this.clearRewindEscape();
+      void this.showConversationRewind();
+      return;
+    }
+
+    this.rewindEscapePending = true;
+    this.updateActivity(rewindEscapeHint);
+    if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
+    this.rewindEscapeTimer = setTimeout(() => this.clearRewindEscape(), doubleEscapeTimeoutMs);
+    this.rewindEscapeTimer.unref?.();
+  }
+
+  private clearRewindEscape(): void {
+    if (this.rewindEscapeTimer) {
+      clearTimeout(this.rewindEscapeTimer);
+      this.rewindEscapeTimer = undefined;
+    }
+    if (!this.rewindEscapePending) return;
+    this.rewindEscapePending = false;
+    if (this.activity === rewindEscapeHint) this.updateActivity(undefined);
+  }
+
+  private async showConversationRewind(): Promise<void> {
+    if (this.rewindFlowActive) return;
+    if (!this.options.loadSessionTranscript) {
+      this.addNotice("Conversation rewind is unavailable in this runtime.", "warning");
+      return;
+    }
+
+    this.rewindFlowActive = true;
+    try {
+      this.updateActivity("loading rewind points…");
+      const targets = rewindTargets(await this.options.loadSessionTranscript());
+      this.updateActivity(undefined);
+      if (targets.length === 0) {
+        this.addNotice("There are no previous user inputs to rewind to.", "muted");
+        return;
+      }
+
+      while (true) {
+        const selected = await this.showChoice({
+          title: "Rewind conversation",
+          prompt: "Choose the user input to return to. It will be restored to the editor.",
+          help: "Type to filter · Up/Down choose · Enter continue · Esc cancel",
+          items: targets.map((target, index) => ({
+            value: target.messageId,
+            label: rewindTargetLabel(target.text),
+            description: index === 0 ? "Latest input" : `${index + 1} inputs back`,
+            payload: target,
+            preview: new Text(sanitizeTerminalText(target.text, { preserveSgr: false }), 1, 0)
+          }))
+        });
+        const target = selected?.payload as RewindTarget | undefined;
+        if (!target) return;
+
+        this.updateActivity("checking workspace checkpoints…");
+        let preview: FileRewindPreview | undefined;
+        let previewError: string | undefined;
+        if (this.options.previewFileRewind) {
+          try {
+            preview = fileRewindPreview(await this.options.previewFileRewind(target.checkpointMessageIds));
+          } catch (error) {
+            previewError = error instanceof Error ? error.message : String(error);
+          }
+        }
+        this.updateActivity(undefined);
+
+        const codeAvailable = Boolean(
+          this.options.applyFileRewind && preview?.canApply && preview.safeFiles.length > 0
+        );
+        const actions: ChoiceItem[] = [
+          ...(codeAvailable ? [{
+            value: "both",
+            label: "Conversation and workspace",
+            description: `Restore the conversation and ${preview!.safeFiles.length} checkpointed file${preview!.safeFiles.length === 1 ? "" : "s"}`
+          }] : []),
+          {
+            value: "conversation",
+            label: "Conversation only",
+            description: "Keep the current workspace files"
+          },
+          ...(codeAvailable ? [{
+            value: "workspace",
+            label: "Workspace only",
+            description: "Restore checkpointed files without changing the conversation"
+          }] : [])
+        ];
+        const action = await this.showChoice({
+          title: "Choose rewind scope",
+          prompt: `Return to before: ${rewindTargetLabel(target.text, 72)}`,
+          help: "Up/Down choose · Enter rewind · Esc back",
+          content: new Text(this.rewindFilePreviewText(preview, previewError), 1, 0),
+          items: actions
+        });
+        if (!action) continue;
+        await this.applyConversationRewind(target, action.value as RewindScope);
+        return;
+      }
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      this.rewindFlowActive = false;
+      if (this.activity?.includes("rewind")) this.updateActivity(undefined);
+    }
+  }
+
+  private rewindFilePreviewText(preview: FileRewindPreview | undefined, error?: string): string {
+    if (error) return this.theme.warning(`Workspace preview unavailable: ${error}`);
+    if (!this.options.previewFileRewind || !this.options.applyFileRewind) {
+      return this.theme.muted("Workspace rewind is unavailable in this runtime.");
+    }
+    if (!preview) return this.theme.muted("No workspace checkpoint information is available.");
+
+    const lines: string[] = [];
+    if (preview.safeFiles.length > 0) {
+      const safeSummary = `${preview.safeFiles.length} checkpointed file${preview.safeFiles.length === 1 ? "" : "s"}`;
+      lines.push(preview.canApply
+        ? this.theme.success(`${safeSummary} can be restored`)
+        : this.theme.muted(`${safeSummary} found`));
+      lines.push(...preview.safeFiles.slice(0, 5).map((file) => `  ${file.action ?? "restore"} ${file.path}`));
+      if (preview.safeFiles.length > 5) lines.push(`  … ${preview.safeFiles.length - 5} more`);
+    } else {
+      lines.push(this.theme.muted("No checkpointed file changes are available for this input."));
+    }
+    if (preview.unsafeFiles.length > 0) {
+      lines.push(this.theme.warning(
+        `${preview.unsafeFiles.length} file${preview.unsafeFiles.length === 1 ? "" : "s"} cannot be restored safely`
+      ));
+      lines.push(...preview.unsafeFiles.slice(0, 3).map((file) => (
+        `  ${file.path} · ${file.reason ?? "unsafe"}`
+      )));
+    }
+    if (preview.ignoredFiles.length > 0) {
+      lines.push(this.theme.warning(
+        `${preview.ignoredFiles.length} Bash/terminal file change${preview.ignoredFiles.length === 1 ? " is" : "s are"} not checkpointed`
+      ));
+    }
+    return lines.join("\n");
+  }
+
+  private async applyConversationRewind(target: RewindTarget, scope: RewindScope): Promise<void> {
+    let workspaceApplied = false;
+    this.updateActivity("rewinding…");
+    try {
+      if (scope === "workspace" || scope === "both") {
+        if (!this.options.applyFileRewind) throw new Error("Workspace rewind is unavailable.");
+        const result = await this.options.applyFileRewind(target.checkpointMessageIds);
+        if (!isRecord(result) || result.applied !== true) {
+          throw new Error(responseText(result) ?? "Workspace files could not be rewound safely.");
+        }
+        workspaceApplied = true;
+      }
+
+      if (scope === "conversation" || scope === "both") {
+        const result = await this.options.submitPrompt(rewindCommand("conversation", target.messageId), {
+          inputId: `input_${crypto.randomUUID()}`,
+          queryId: `query_${crypto.randomUUID()}`,
+          onEvent: (event) => this.onEvent(event)
+        });
+        await this.handleResult(result, false);
+        const transcript = await this.options.loadSessionTranscript?.();
+        if (rewindTargets(transcript).some((message) => message.messageId === target.messageId)) {
+          throw new Error("The runtime did not apply the requested conversation rewind.");
+        }
+        const restored = restoredMessages(transcript);
+        this.clearTranscriptProjection();
+        this.lastAssistantText = "";
+        this.turnAssistantText = "";
+        this.restoreTranscript(restored);
+        this.editor.setText(target.text);
+      }
+
+      const label = scope === "both"
+        ? "Conversation and workspace rewound. The selected input was restored to the editor."
+        : scope === "conversation"
+          ? "Conversation rewound. The selected input was restored to the editor."
+          : "Workspace files rewound. Conversation history was kept.";
+      this.addNotice(label, "muted");
+      await this.refreshRuntimeState();
+      void this.refreshGoal();
+      void this.refreshSessionUsage();
+      this.updateMetadata();
+      this.ui.requestRender(true);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        workspaceApplied && scope === "both"
+          ? `Workspace files were rewound, but conversation rewind failed: ${detail}`
+          : detail,
+        { cause: error }
+      );
+    } finally {
+      this.updateActivity(undefined);
+    }
+  }
+
   private shortcutAvailable(): boolean {
     if (this.settingSwitchInFlight) return false;
     if (this.activeSubmissions === 0) return true;
@@ -2776,6 +2996,7 @@ class ZCodeTui {
     this.stopped = true;
     this.turnAbortController?.abort();
     if (this.turnTimer) clearInterval(this.turnTimer);
+    if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
     if (this.runtimePollTimer) clearInterval(this.runtimePollTimer);
     this.unsubscribeWorkflow?.();

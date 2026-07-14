@@ -63,6 +63,8 @@ export interface TuiOptions {
   readRuntimeProjection?: () => Promise<unknown>;
   readSessionUsage?: () => Promise<unknown>;
   cancelBackgroundTask?: (taskId: string) => Promise<unknown>;
+  previewFileRewind?: (targetMessageIds: string[]) => Promise<unknown>;
+  applyFileRewind?: (targetMessageIds: string[]) => Promise<unknown>;
   sendInput?: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   submitPrompt: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   setMode?: (mode: string) => Promise<unknown>;
