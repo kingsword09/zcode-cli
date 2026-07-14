@@ -4,7 +4,6 @@ import { appendFileSync } from "node:fs";
 import { readConfiguredModelAccess } from "../../../src/model-access.ts";
 
 import {
-  CombinedAutocompleteProvider,
   Container,
   Editor,
   Markdown,
@@ -124,6 +123,7 @@ import { ToolExecutionView, toolSucceeded } from "./tool-view.ts";
 import { Transcript } from "./transcript.ts";
 import { turnStatusText } from "./turn-status.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
+import { WorkspaceAutocompleteProvider } from "./workspace-autocomplete.ts";
 import { readWorkspaceDiff } from "./workspace-diff.ts";
 
 interface ToolViewState {
@@ -372,7 +372,11 @@ class ZCodeTui {
 
     const commands = this.autocompleteCommands();
     this.editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider(commands, this.options.workspaceDirectory ?? process.cwd(), null)
+      new WorkspaceAutocompleteProvider(
+        commands,
+        this.options.workspaceDirectory ?? process.cwd(),
+        this.options.listWorkspacePathSuggestions
+      )
     );
     this.editor.onSubmit = (text) => void this.submit(text);
   }

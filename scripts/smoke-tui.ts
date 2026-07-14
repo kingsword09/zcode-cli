@@ -87,7 +87,7 @@ try {
     model?: { main?: string };
     provider?: { zai?: { options?: { apiKey?: string } } };
   };
-  if (initialConfig.model?.main !== "zai/glm-5.1"
+  if (initialConfig.model?.main !== "zai/glm-5.2"
     || initialConfig.provider?.zai?.options?.apiKey !== undefined) {
     throw new Error("The launcher created an invalid initial config.json.");
   }
