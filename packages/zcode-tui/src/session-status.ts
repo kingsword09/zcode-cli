@@ -1,4 +1,4 @@
-import { isRecord } from "./types.ts";
+import { asString, isRecord } from "./types.ts";
 
 export interface SessionMetrics {
   contextUsed?: number;
@@ -44,6 +44,12 @@ export function usageMetrics(value: unknown): SessionMetrics | undefined {
     modelErrorCount: nonNegativeNumber(value.modelErrorCount)
   };
   return Object.values(metrics).some((metric) => metric !== undefined) ? metrics : undefined;
+}
+
+export function sessionIdFromUsage(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const sessionId = asString(value.sessionId) ?? asString(value.sessionID);
+  return sessionId?.trim() || undefined;
 }
 
 export function mergeMetrics(current: SessionMetrics, update: SessionMetrics | undefined): SessionMetrics {

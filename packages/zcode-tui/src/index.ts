@@ -33,6 +33,7 @@ import {
   type RestoredPart,
   type StreamEvent
 } from "./events.ts";
+import { buildExitSummary } from "./exit-summary.ts";
 import { FooterBar } from "./footer-bar.ts";
 import { ContextDetailView, StatusDetailView } from "./context-status-view.ts";
 import {
@@ -86,6 +87,7 @@ import {
   contextRemainingPercent,
   mergeMetrics,
   projectionMetrics,
+  sessionIdFromUsage,
   usageMetrics,
   type SessionMetrics
 } from "./session-status.ts";
@@ -146,6 +148,7 @@ const toolLifecycleEventKinds = new Set([
 ]);
 
 const terminalThemeQueryTimeoutMs = 100;
+const exitUsageQueryTimeoutMs = 250;
 
 function restoredToolState(status: string): string {
   switch (status.toLowerCase()) {
@@ -214,6 +217,7 @@ class ZCodeTui {
   private goal?: GoalState;
   private goalRefreshInFlight = false;
   private goalRefreshPending = false;
+  private sessionId?: string;
   private sessionMetrics: SessionMetrics = {};
   private usageRefreshInFlight = false;
   private usageRefreshPending = false;
@@ -616,6 +620,7 @@ class ZCodeTui {
     if (result.resetSessionProjection === true) {
       this.clearTranscriptProjection();
       this.workflowView = undefined;
+      this.sessionId = undefined;
       this.sessionMetrics = {};
       this.restoreTranscript(restoredMessages(result.restoredMessages));
     }
@@ -2209,6 +2214,7 @@ class ZCodeTui {
   private applyRuntimeProjection(projection: RuntimeProjectionSnapshot | undefined): void {
     if (!projection) return;
     this.runtimeProjection = projection;
+    if (projection.sessionId) this.sessionId = projection.sessionId;
     if (projection.mode) {
       this.mode = projection.mode;
       this.lastExecutionMode = executionMode(this.mode, this.lastExecutionMode);
@@ -2295,10 +2301,8 @@ class ZCodeTui {
       do {
         this.usageRefreshPending = false;
         try {
-          this.sessionMetrics = mergeMetrics(
-            this.sessionMetrics,
-            usageMetrics(await this.options.readSessionUsage())
-          );
+          const usage = await this.options.readSessionUsage();
+          this.applySessionUsage(usage);
           this.updateMetadata();
         } catch {
           // Usage is supplementary and must not interrupt the active turn.
@@ -2307,6 +2311,26 @@ class ZCodeTui {
     } finally {
       this.usageRefreshInFlight = false;
     }
+  }
+
+  private applySessionUsage(usage: unknown): void {
+    const sessionId = sessionIdFromUsage(usage);
+    if (sessionId) this.sessionId = sessionId;
+    this.sessionMetrics = mergeMetrics(this.sessionMetrics, usageMetrics(usage));
+  }
+
+  private async refreshExitUsage(): Promise<void> {
+    const readSessionUsage = this.options.readSessionUsage;
+    if (!readSessionUsage) return;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const usage = await Promise.race([
+      Promise.resolve().then(() => readSessionUsage()).catch(() => undefined),
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), exitUsageQueryTimeoutMs);
+      })
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (usage !== undefined) this.applySessionUsage(usage);
   }
 
   private finishTurn(unfinishedToolState = "interrupted"): void {
@@ -2345,7 +2369,35 @@ class ZCodeTui {
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
     if (this.runtimePollTimer) clearInterval(this.runtimePollTimer);
     this.unsubscribeWorkflow?.();
+    const elapsedMilliseconds = this.turnStartedAt === undefined
+      ? this.turnElapsedMilliseconds
+      : Math.max(0, Date.now() - this.turnStartedAt);
     this.ui.stop();
+    void this.finishStop(elapsedMilliseconds);
+  }
+
+  private async finishStop(elapsedMilliseconds: number): Promise<void> {
+    await this.refreshExitUsage();
+    const summary = buildExitSummary({
+      elapsedMilliseconds,
+      metrics: this.sessionMetrics,
+      sessionId: this.sessionId ?? this.runtimeProjection?.sessionId,
+      width: this.ui.terminal.columns
+    });
+    const lines = [
+      summary.divider && this.theme.muted(summary.divider),
+      summary.tokenUsage,
+      summary.resumeCommand
+        ? `To continue this session, run ${this.theme.accent(summary.resumeCommand)}`
+        : undefined
+    ].filter((line): line is string => Boolean(line));
+    if (lines.length > 0) {
+      try {
+        (this.options.stdout ?? process.stdout).write(`${lines.join("\n")}\n`);
+      } catch {
+        // Exit diagnostics must not prevent terminal cleanup.
+      }
+    }
     this.resolveDone();
   }
 }

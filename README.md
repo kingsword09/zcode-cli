@@ -54,7 +54,7 @@ is the compatibility host for the unmodified upstream kernel.
 - searchable transcript navigation with per-block expansion, selected-block copying and `n`/`N` match traversal;
 - persistent active-tool, background-task and open-plan activity between the transcript and editor;
 - active-turn steering, cancellation and error reporting;
-- `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling;
+- `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling with token usage and resume guidance on exit;
 - `--no-color` and `NO_COLOR` support.
 
 ### TUI inspection and navigation
