@@ -1,4 +1,7 @@
+import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
+
+import { readConfiguredModelAccess } from "../../../src/model-access.ts";
 
 import {
   CombinedAutocompleteProvider,
@@ -73,6 +76,14 @@ import {
 import { RichMarkdown } from "./rich-markdown.ts";
 import { isVisibleProtocolPart, ProtocolPartView } from "./protocol-part-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
+import {
+  parseSelectionCommand,
+  protectSubmission,
+  redactSecrets,
+  selectionSubmission,
+  type ProtectedSubmission,
+  type SelectionCommand
+} from "./selection-command.ts";
 import {
   isActiveBackgroundJob,
   normalizeRuntimeProjection,
@@ -149,6 +160,44 @@ const toolLifecycleEventKinds = new Set([
 
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
+const customProviderHelpCommand = "__zcode_custom_provider_help__";
+
+interface QueuedSubmission extends ProtectedSubmission {
+  externalLogin?: boolean;
+}
+
+export function shouldUseNoBrowserForLogin(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  if (env.SSH_CONNECTION?.trim() || env.SSH_TTY?.trim()) return true;
+  if (platform !== "linux") return false;
+  return !env.DISPLAY?.trim() && !env.WAYLAND_DISPLAY?.trim();
+}
+
+export function shouldSuspendForLoginCommand(command: string): boolean {
+  return command === "/login zai-coding-plan";
+}
+
+export function suspendedZaiLoginCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  runtimeExecutable = process.execPath,
+  runtimeEntry = process.argv[1]
+): { args: string[]; program: string } {
+  const bun = env.ZCODE_APP_CLI_BUN?.trim();
+  const launcher = env.ZCODE_APP_CLI_ENTRY?.trim();
+  if (bun && launcher) {
+    return { args: [launcher, "login", "--oauth"], program: bun };
+  }
+  if (!runtimeEntry) throw new Error("Unable to locate the ZCode runtime entry point.");
+  return { args: [runtimeEntry, "login"], program: runtimeExecutable };
+}
+
+export function loginFailureDiagnostic(stdout: string, stderr: string): string | undefined {
+  const lines = (stderr || stdout).trim().split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  return lines.find((line) => /^(?:error:|failed\b|invalid\b|unknown\b)/iu.test(line))
+    ?? lines.at(-1);
+}
 
 function restoredToolState(status: string): string {
   switch (status.toLowerCase()) {
@@ -181,7 +230,7 @@ class ZCodeTui {
   private resolveDone!: () => void;
   private stopped = false;
   private activeSubmissions = 0;
-  private queuedSelectionCommand?: string;
+  private queuedSelectionCommand?: QueuedSubmission;
   private turnAbortController?: AbortController;
   private currentThinking?: ThinkingView;
   private currentThinkingPartId?: string;
@@ -229,6 +278,9 @@ class ZCodeTui {
   private runtimeRefreshPending = false;
   private runtimeRefreshTimer?: ReturnType<typeof setTimeout>;
   private runtimePollTimer?: ReturnType<typeof setInterval>;
+  private loginRequired: boolean;
+  private readonly loginWarning = new Text("", 1, 0);
+  private readonly loginHelp = new Text("", 1, 0);
 
   constructor(private readonly options: TuiOptions) {
     this.colorsEnabled = !options.noColor && !process.env.NO_COLOR;
@@ -240,6 +292,7 @@ class ZCodeTui {
     this.thoughtLevel = options.initialThoughtLevel;
     this.modelOptions = [...(options.modelOptions ?? [])];
     this.effortOptions = [...(options.effortOptions ?? [])];
+    this.loginRequired = options.loginRequired === true;
     this.ui = new TUI(new ProcessTerminal(), true);
     this.status = new StatusLine();
     this.turnStatus = new FooterBar();
@@ -268,8 +321,8 @@ class ZCodeTui {
     this.updateMetadata();
     this.updateTurnStatus();
     this.ui.requestRender(true);
-    if (!this.options.loginRequired) void this.refreshGoal();
-    if (!this.options.loginRequired) void this.refreshSessionUsage();
+    if (!this.loginRequired) void this.refreshGoal();
+    if (!this.loginRequired) void this.refreshSessionUsage();
     void this.refreshRuntimeState();
     if (this.options.readRuntimeProjection || this.options.readTodos) {
       this.runtimePollTimer = setInterval(() => void this.refreshRuntimeState(), 1_000);
@@ -305,16 +358,9 @@ class ZCodeTui {
     const title = `${this.theme.accent(this.theme.bold("ZCode"))} ${this.theme.muted(`v${this.options.version ?? "unknown"}`)}`;
     this.ui.addChild(new Text(title, 1, 0));
     this.ui.addChild(new Text(this.theme.muted(`${workspace}${branch}`), 1, 0));
-    if (this.options.loginRequired) {
-      this.ui.addChild(new Text(this.theme.warning("Model access is not configured."), 1, 0));
-      this.ui.addChild(
-        new Text(
-          this.theme.warning("Run /login, or configure a custom provider in ~/.zcode/cli/config.json."),
-          1,
-          0
-        )
-      );
-    }
+    this.ui.addChild(this.loginWarning);
+    this.ui.addChild(this.loginHelp);
+    this.updateLoginWarning();
     this.ui.addChild(new Spacer(1));
     this.ui.addChild(this.transcript);
     this.ui.addChild(this.runtimeActivity);
@@ -329,6 +375,111 @@ class ZCodeTui {
       new CombinedAutocompleteProvider(commands, this.options.workspaceDirectory ?? process.cwd(), null)
     );
     this.editor.onSubmit = (text) => void this.submit(text);
+  }
+
+  private updateLoginWarning(): void {
+    this.loginWarning.setText(
+      this.loginRequired ? this.theme.warning("Model access is not configured.") : ""
+    );
+    this.loginHelp.setText(
+      this.loginRequired
+        ? this.theme.warning("Run /login, or configure a custom provider in ~/.zcode/cli/config.json.")
+        : ""
+    );
+  }
+
+  private setLoginRequired(required: boolean): void {
+    const changed = this.loginRequired !== required;
+    this.loginRequired = required;
+    this.updateLoginWarning();
+    if (changed && !required) {
+      void this.refreshGoal();
+      void this.refreshSessionUsage();
+    }
+  }
+
+  private async runSuspendedLogin(displayInput: string, overrideCommand?: string): Promise<void> {
+    this.transcript.clearSearch();
+    this.transcript.clearCursor();
+    this.addUserMessage(displayInput, false);
+    this.beginTurn(displayInput);
+    this.activeSubmissions += 1;
+    this.updateActivity("signing in…");
+    this.ui.stop();
+
+    let code = 1;
+    let failure: string | undefined;
+    let childStdout = "";
+    let childStderr = "";
+    try {
+      let program: string;
+      let args: string[];
+      if (overrideCommand) {
+        program = process.platform === "win32"
+          ? process.env.ComSpec ?? "cmd.exe"
+          : process.env.SHELL ?? "/bin/sh";
+        args = process.platform === "win32"
+          ? ["/d", "/s", "/c", overrideCommand]
+          : ["-lc", overrideCommand];
+      } else {
+        const command = suspendedZaiLoginCommand();
+        program = command.program;
+        args = command.args;
+        if (shouldUseNoBrowserForLogin()) args.push("--no-browser");
+      }
+      code = await new Promise<number>((resolve, reject) => {
+        const child = spawn(program, args, {
+          cwd: process.cwd(),
+          env: process.env,
+          stdio: overrideCommand ? "inherit" : ["inherit", "pipe", "pipe"]
+        });
+        if (!overrideCommand) {
+          child.stdout?.on("data", (data: Buffer | string) => {
+            const text = String(data);
+            childStdout = `${childStdout}${text}`.slice(-16_384);
+            process.stdout.write(text);
+          });
+          child.stderr?.on("data", (data: Buffer | string) => {
+            const text = String(data);
+            childStderr = `${childStderr}${text}`.slice(-16_384);
+            process.stderr.write(text);
+          });
+        }
+        child.once("error", reject);
+        child.once("close", (exitCode, signal) => {
+          resolve(exitCode ?? (signal ? 128 : 1));
+        });
+      });
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.ui.start();
+      this.ui.setFocus(this.editor);
+      this.ui.requestRender(true);
+    }
+
+    const access = code === 0 ? await readConfiguredModelAccess() : null;
+    if (access) {
+      this.model = access.model;
+      this.setLoginRequired(false);
+      this.addNotice(`Model access configured via ${access.configPath}.`, "muted");
+    } else if (failure) {
+      this.addNotice(`Login command failed: ${failure}`, "error");
+    } else if (code !== 0) {
+      const diagnostic = loginFailureDiagnostic(childStdout, childStderr);
+      this.addNotice(
+        diagnostic
+          ? `Login failed: ${diagnostic.replace(/^Error:\s*/u, "")}`
+          : `Login command exited with status ${code}.`,
+        "error"
+      );
+    } else {
+      this.addNotice("Login command finished, but no configured model access was found.", "warning");
+    }
+    this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
+    this.finishTurn(code === 0 && access ? "completed" : "failed");
+    this.updateMetadata();
+    this.ui.requestRender(true);
   }
 
   private autocompleteCommands(): SlashCommand[] {
@@ -455,10 +606,11 @@ class ZCodeTui {
     });
   }
 
-  private async submit(rawInput: string): Promise<void> {
-    const input = rawInput.trim();
+  private async submit(rawInput: string, queuedSubmission?: QueuedSubmission): Promise<void> {
+    const input = (queuedSubmission?.input ?? rawInput).trim();
     if (!input || this.stopped) return;
-    this.editor.addToHistory(input);
+    const submission = queuedSubmission ?? protectSubmission(input);
+    if (submission.recordHistory) this.editor.addToHistory(input);
 
     if (input === "/exit" || input === "/quit") {
       this.stop();
@@ -543,18 +695,35 @@ class ZCodeTui {
       return;
     }
 
+    const loginOverride = input === "/login" ? process.env.ZCODE_TUI_LOGIN_CMD?.trim() : undefined;
+    if (loginOverride) {
+      await this.runSuspendedLogin(submission.displayInput, loginOverride);
+      return;
+    }
+    if (queuedSubmission?.externalLogin || shouldSuspendForLoginCommand(input)) {
+      await this.runSuspendedLogin(submission.displayInput);
+      return;
+    }
+
     this.transcript.clearSearch();
     this.transcript.clearCursor();
 
     const steering = this.activeSubmissions > 0;
     const attachments = !steering && !input.startsWith("/") ? [...this.pendingAttachments] : [];
-    this.addUserMessage(input, steering, attachments.length);
-    if (!steering) this.beginTurn(input);
+    this.addUserMessage(submission.displayInput, steering, attachments.length);
+    if (submission.pending) {
+      this.addNotice([
+        submission.pending.primary,
+        submission.pending.secondary,
+        submission.pending.help
+      ].filter(Boolean).join("\n"), "muted");
+    }
+    if (!steering) this.beginTurn(submission.displayInput);
 
     const abortController = new AbortController();
     if (!steering) this.turnAbortController = abortController;
     this.activeSubmissions += 1;
-    this.updateActivity(steering ? "steering…" : "working…");
+    this.updateActivity(submission.status ?? (steering ? "steering…" : "working…"));
 
     const callOptions: PromptCallOptions = {
       abortSignal: abortController.signal,
@@ -566,7 +735,7 @@ class ZCodeTui {
 
     let accepted = false;
     let unfinishedToolState = "interrupted";
-    let nextCommand: string | undefined;
+    let nextCommand: QueuedSubmission | undefined;
     try {
       if (input.startsWith("/") || !this.options.sendInput) {
         const result = await this.options.submitPrompt(
@@ -582,11 +751,11 @@ class ZCodeTui {
     } catch (error) {
       if (abortController.signal.aborted) {
         unfinishedToolState = "cancelled";
-        this.addNotice("Turn cancelled.", "muted");
+        this.addNotice(submission.cancelStatus ?? "Turn cancelled.", "muted");
       } else {
         unfinishedToolState = "failed";
         const message = error instanceof Error ? error.message : String(error);
-        this.addNotice(message, "error");
+        this.addNotice(redactSecrets(message, submission.secrets), "error");
       }
     } finally {
       if (accepted && attachments.length > 0) {
@@ -604,7 +773,7 @@ class ZCodeTui {
       void this.refreshGoal();
       void this.refreshSessionUsage();
     }
-    if (nextCommand) await this.submit(nextCommand);
+    if (nextCommand) await this.submit(nextCommand.input, nextCommand);
   }
 
   private async handleSendOutcome(outcome: unknown): Promise<boolean> {
@@ -641,6 +810,13 @@ class ZCodeTui {
       this.lastExecutionMode = executionMode(this.mode, this.lastExecutionMode);
     }
     if (result.model !== undefined) this.model = modelLabel(result.model);
+    if (typeof result.loginRequired === "boolean") {
+      this.setLoginRequired(result.loginRequired);
+      if (!result.loginRequired && result.model === undefined) {
+        const access = await readConfiguredModelAccess();
+        if (access) this.model = access.model;
+      }
+    }
     if (typeof result.thoughtLevel === "string") this.thoughtLevel = result.thoughtLevel;
     if (Array.isArray(result.modelOptions)) this.modelOptions = [...result.modelOptions];
     if (Array.isArray(result.effortOptions)) this.effortOptions = [...result.effortOptions];
@@ -1611,25 +1787,70 @@ class ZCodeTui {
 
   private async showSelection(selection: Record<string, unknown>): Promise<void> {
     const rawItems = Array.isArray(selection.items) ? selection.items : [];
-    const items: ChoiceItem[] = rawItems.flatMap((item, index) => {
-      if (!isRecord(item)) return [];
-      const command = asString(item.command);
-      if (!command) return [];
-      return [{
-        value: command,
-        label: asString(item.primary) ?? asString(item.label) ?? asString(item.id) ?? String(index),
-        description: [asString(item.secondary), asString(item.meta)].filter(Boolean).join(" · "),
-        payload: command
-      }];
+    const commands = rawItems.flatMap((item, index) => {
+      const parsed = parseSelectionCommand(item, index);
+      return parsed ? [parsed] : [];
     });
-    const selected = await this.showChoice({
-      title: asString(selection.title) ?? "Choose",
-      prompt: asString(selection.prompt) ?? "Select an item.",
-      help: asString(selection.help),
-      items,
-      selectedIndex: typeof selection.selectedIndex === "number" ? selection.selectedIndex : 0
-    });
-    if (typeof selected?.payload === "string") this.queuedSelectionCommand = selected.payload;
+    if (commands.some((command) => /^\/login\s+(?:zai|bigmodel)-/u.test(command.command))) {
+      commands.push({
+        command: customProviderHelpCommand,
+        description: "Configure any supported endpoint in config.json without signing in",
+        label: "Custom provider"
+      });
+    }
+    const items: ChoiceItem[] = commands.map((parsed) => ({
+      value: parsed.command,
+      label: parsed.label,
+      description: parsed.description,
+      payload: parsed
+    }));
+    while (true) {
+      const selected = await this.showChoice({
+        title: asString(selection.title) ?? "Choose",
+        prompt: asString(selection.prompt) ?? "Select an item.",
+        help: asString(selection.help),
+        items,
+        selectedIndex: typeof selection.selectedIndex === "number" ? selection.selectedIndex : 0
+      });
+      const command = selected?.payload as SelectionCommand | undefined;
+      if (!command?.command) return;
+      if (command.command === customProviderHelpCommand) {
+        this.addNotice(
+          "Custom providers do not require login. Copy config.example.json to ~/.zcode/cli/config.json, "
+          + "set provider kind, baseURL, apiKey and model IDs, then run /new. "
+          + "See README: Custom provider without login.",
+          "muted"
+        );
+        return;
+      }
+      if (!command.input) {
+        const submission = selectionSubmission(command) ?? undefined;
+        this.queuedSelectionCommand = shouldSuspendForLoginCommand(command.command) && submission
+          ? { ...submission, externalLogin: true }
+          : submission;
+        return;
+      }
+
+      while (true) {
+        const value = await this.showTextPrompt({
+          title: command.input.primary ?? command.label,
+          prompt: command.input.secondary ?? "Enter a value.",
+          help: command.input.help,
+          mask: command.input.mask,
+          placeholder: command.input.placeholder
+        });
+        if (value === null) {
+          if (command.input.cancelStatus) this.addNotice(command.input.cancelStatus, "muted");
+          break;
+        }
+        const submission = selectionSubmission(command, value);
+        if (submission) {
+          this.queuedSelectionCommand = submission;
+          return;
+        }
+        this.addNotice(command.input.emptyStatus ?? "A value is required.", "warning");
+      }
+    }
   }
 
   private async showCommandPicker(

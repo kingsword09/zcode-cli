@@ -6,7 +6,7 @@ import {
   type TUI
 } from "@earendil-works/pi-tui";
 
-import { choose } from "../packages/zcode-tui/src/choice-dialog.ts";
+import { choose, promptText } from "../packages/zcode-tui/src/choice-dialog.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
 describe("TUI choice dialog", () => {
@@ -54,6 +54,37 @@ describe("TUI choice dialog", () => {
 
     host.children[0]?.handleInput?.("\r");
     expect(await pending).toMatchObject({ value: "max" });
+    expect(host.children).toHaveLength(0);
+  });
+
+  test("masked prompts return the secret without rendering it", async () => {
+    const root = new Container();
+    const host = new Container();
+    const focusState: { current: Component | null } = { current: null };
+    const ui = {
+      terminal: { rows: 24 },
+      requestRender() {},
+      setFocus(component: Component | null) {
+        focusState.current = component;
+      }
+    } as unknown as TUI;
+    root.addChild(host);
+
+    const pending = promptText(ui, host, createTheme(false), {
+      title: "Enter API key",
+      prompt: "The key stays hidden.",
+      mask: true,
+      placeholder: "Paste API key"
+    });
+
+    expect(root.render(80).join("\n")).toContain("Paste API key");
+    focusState.current?.handleInput?.("secret-value-123");
+    const rendered = root.render(80).join("\n");
+    expect(rendered).not.toContain("secret-value-123");
+    expect(rendered).toContain("****************");
+
+    focusState.current?.handleInput?.("\r");
+    expect(await pending).toBe("secret-value-123");
     expect(host.children).toHaveLength(0);
   });
 });

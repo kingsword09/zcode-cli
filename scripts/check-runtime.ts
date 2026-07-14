@@ -15,7 +15,9 @@ if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode ru
 if (typeof Bun.Terminal !== "function") throw new Error("This Bun build does not provide Bun.Terminal.");
 
 const runtimeSource = await Bun.file(runtime).text();
-if (!runtimeSource.includes(".loadSessionTranscript=async()=>await(await")
+if (runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')
+  || !runtimeSource.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
+  || !runtimeSource.includes(".loadSessionTranscript=async()=>await(await")
   || !runtimeSource.includes(".readGoal=async()=>await(await")
   || !runtimeSource.includes(".readTodos=async()=>await(await")
   || !runtimeSource.includes(".readRuntimeProjection=async()=>")
@@ -27,7 +29,7 @@ if (!runtimeSource.includes(".loadSessionTranscript=async()=>await(await")
   || !/readRuntimeProjection:[A-Za-z_$][\w$]*\.readRuntimeProjection/u.test(runtimeSource)
   || !/readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtimeSource)
   || !/cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(runtimeSource)) {
-  throw new Error("The structured TUI data bridge is missing; run `bun run sync` again.");
+  throw new Error("The runtime compatibility patches are missing; run `bun run sync` again.");
 }
 
 async function execute(

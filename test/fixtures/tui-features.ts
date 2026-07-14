@@ -1,7 +1,22 @@
 #!/usr/bin/env bun
 
+import { join } from "node:path";
+
 import { runTui } from "../../packages/zcode-tui/src/index.ts";
 import type { PromptCallOptions } from "../../packages/zcode-tui/src/types.ts";
+
+if (process.argv[2] === "login") {
+  if (!process.argv.includes("--oauth")) {
+    console.error("Error: explicit Z.AI login did not force OAuth");
+    process.exit(1);
+  }
+  if (process.env.ZCODE_FIXTURE_LOGIN_FAIL === "1") {
+    console.error("Error: OAuth HTTP error 404 (empty or non-JSON response)");
+    process.exit(1);
+  }
+  await import("./tui-login-override.ts");
+  process.exit(0);
+}
 
 let model = "alpha/model";
 let effort = "low";
@@ -78,6 +93,7 @@ await runTui({
   slashCommands: [
     { name: "model", description: "Select model" },
     { name: "effort", description: "Select effort" },
+    { name: "login", description: "Configure model access" },
     { name: "mcp", description: "Manage MCP" },
     { name: "workflows", description: "Manage workflows" },
     { name: "goal", description: "Manage the session goal" }
@@ -341,6 +357,55 @@ await runTui({
   },
   submitPrompt: async (input) => {
     if (typeof input !== "string") return { response: "Unexpected structured slash command." };
+    if (input === "/login") {
+      return {
+        response: "Choose how to configure model access.",
+        selection: {
+          title: "Set Up Coding Plan",
+          prompt: "Choose a setup method.",
+          items: [
+            {
+              command: "/login zai-coding-plan-api-key",
+              id: "zai-coding-plan-api-key",
+              primary: "Z.AI Coding Plan API Key",
+              secondary: "Paste an API key manually.",
+              input: {
+                cancelStatus: "API key entry cancelled.",
+                emptyStatus: "API key is required.",
+                help: "Enter saves the key. Esc cancels.",
+                mask: true,
+                placeholder: "Paste API key",
+                primary: "Enter Z.AI Coding Plan API Key",
+                secondary: "The key is hidden while typing.",
+                submitStatus: "Saving API key..."
+              }
+            },
+            {
+              command: "/login zai-coding-plan",
+              id: "zai-coding-plan",
+              primary: "Z.AI Coding Plan",
+              secondary: "Run the official browser OAuth flow.",
+              pending: {
+                cancelStatus: "Login cancelled.",
+                help: "Esc cancels.",
+                primary: "Waiting for Z.AI authorization",
+                secondary: "Complete sign-in in the browser.",
+                status: "Waiting for browser authorization..."
+              }
+            }
+          ]
+        }
+      };
+    }
+    if (input === "/login zai-coding-plan-api-key feature-secret-api-key") {
+      const override = join(import.meta.dir, "tui-login-override.ts").replaceAll("'", "'\\''");
+      process.env.ZCODE_TUI_LOGIN_CMD = `'${process.execPath}' '${override}'`;
+      return {
+        loginRequired: false,
+        model,
+        response: "Configured Z.AI Coding Plan."
+      };
+    }
     if (input === "/resume") {
       return {
         response: "Select a session to resume.",
@@ -355,6 +420,14 @@ await runTui({
           }]
         }
       };
+    }
+    if (input === "/disable-login-override") {
+      delete process.env.ZCODE_TUI_LOGIN_CMD;
+      return { response: "Login override disabled.", model, thoughtLevel: effort };
+    }
+    if (input === "/prepare-failing-login") {
+      process.env.ZCODE_FIXTURE_LOGIN_FAIL = "1";
+      return { response: "Failing login prepared.", model, thoughtLevel: effort };
     }
     if (input === "/resume fixture-session") {
       return {
