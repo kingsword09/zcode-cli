@@ -27,7 +27,9 @@ const child = Bun.spawn([process.execPath, fixture], {
     USERPROFILE: temporaryHome,
     TERM: "xterm-256color",
     ZCODE_APP_CLI_BUN: process.execPath,
-    ZCODE_APP_CLI_ENTRY: fixture
+    ZCODE_APP_CLI_ENTRY: fixture,
+    ZCODE_TUI_NOTIFICATION_METHOD: "osc9",
+    ZCODE_TUI_NOTIFICATION_CONDITION: "unfocused"
   },
   terminal
 });
@@ -71,6 +73,18 @@ let interactionError: unknown;
 try {
   await waitFor("welcome screen", /ZCode/i);
   await waitFor("restored startup transcript", /Restored startup response\./i);
+  await sendAndWait("/settings\r", "settings picker", /ZCode settings/i);
+  await sendAndWait("\x1b[B\r", "notification timing picker", /When to notify/i);
+  await sendAndWait("\x1b[B\r", "saved setting returned to root", /When to notify: always saved · environment override remains active/i);
+  const savedConfig = (await Bun.file(join(temporaryHome, ".zcode", "cli", "config.json")).json()) as {
+    ui?: { notifications?: { condition?: string } };
+  };
+  if (savedConfig.ui?.notifications?.condition !== "always") {
+    throw new Error("Settings picker did not persist the notification condition.");
+  }
+  await sendAndWait("\r", "reopened notification timing", /Select when completed and failed turns notify you\./i);
+  await sendAndWait("\x1b", "child escape returned to settings", /No changes · Esc closes settings/i);
+  await sendAndSettle("\x1b");
   await sendAndWait("/login\r", "login setup picker", /Set Up Coding Plan/i);
   await sendAndWait("\r", "masked API key prompt", /Enter Z\.AI Coding Plan API Key/i);
   await sendAndWait("\x1b", "return to login picker", /API key entry cancelled\.[\s\S]*Set Up Coding Plan/i);
@@ -104,7 +118,7 @@ try {
   await sendAndWait("\x16", "clipboard image", /1 image attached/i);
   await sendAndWait("inspect @ind", "workspace path suggestions", /index\.ts[\s\S]*src\/index\.ts/i);
   await sendAndWait("\r", "workspace path completion", /inspect @src\/index\.ts/i);
-  await sendAndWait("\r", "feature turn", /Feature prompt complete\./i, 12_000);
+  await sendAndWait("\x1b[O\r", "feature turn", /Feature prompt complete\./i, 12_000);
   await waitFor("feature turn completion", /Feature background audit · turn complete/i, 0, 4_000);
   await sendAndWait("\x0f", "expanded Agent transcript", /Response:\s*Nested rendering inspected\./i);
 
@@ -160,9 +174,17 @@ const plain = plainText(output);
 if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain.slice(-6_000)}`);
 
+const turnNotifications = output.match(/\x1b\]9;ZCode ·/gu) ?? [];
+if (turnNotifications.length !== 1 || !output.includes("\x1b]9;ZCode · Feature prompt complete.")) {
+  throw new Error(`Expected one unfocused agent-turn notification, received ${turnNotifications.length}.`);
+}
+
 for (const [label, pattern] of [
   ["restored startup transcript", /Restored startup response\./i],
   ["restored selected transcript", /Restored selected response\./i],
+  ["settings picker", /ZCode settings/i],
+  ["saved setting returned to root", /When to notify: always saved · environment override remains active/i],
+  ["child escape returned to settings", /No changes · Esc closes settings/i],
   ["login setup picker", /Set Up Coding Plan/i],
   ["custom provider login entry", /Custom provider/i],
   ["API key prompt cancellation", /API key entry cancelled\./i],

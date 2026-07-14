@@ -66,6 +66,17 @@ import {
   workflowStatus
 } from "./panels.ts";
 import {
+  notificationSettings,
+  readNotificationSettings,
+  readStoredNotificationSettings,
+  TurnNotifier,
+  writeNotificationSettings,
+  type NotificationCondition,
+  type NotificationMethod,
+  type NotificationSettings,
+  type TurnNotificationKind
+} from "./notifications.ts";
+import {
   effortPicker,
   isEffortPickerRequest,
   isModelPickerRequest,
@@ -226,6 +237,7 @@ class ZCodeTui {
   private readonly attachmentStatus: Text;
   private readonly editor: Editor;
   private readonly assistantStream: AssistantStream;
+  private readonly notifications: TurnNotifier;
   private readonly done: Promise<void>;
   private resolveDone!: () => void;
   private stopped = false;
@@ -254,6 +266,7 @@ class ZCodeTui {
   private modelOptions: unknown[];
   private effortOptions: unknown[];
   private lastAssistantText = "";
+  private turnAssistantText = "";
   private unsubscribeWorkflow?: () => void;
   private workflowPanel?: Record<string, unknown>;
   private workflowView?: Markdown;
@@ -264,6 +277,8 @@ class ZCodeTui {
   private turnStartedAt?: number;
   private turnElapsedMilliseconds = 0;
   private turnTimer?: ReturnType<typeof setInterval>;
+  private pendingTurnNotification?: TurnNotificationKind;
+  private pendingTurnNotificationDetail = "";
   private goal?: GoalState;
   private goalRefreshInFlight = false;
   private goalRefreshPending = false;
@@ -294,6 +309,9 @@ class ZCodeTui {
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.loginRequired = options.loginRequired === true;
     this.ui = new TUI(new ProcessTerminal(), true);
+    this.notifications = new TurnNotifier({
+      writeTerminal: (data) => this.ui.terminal.write(data)
+    });
     this.status = new StatusLine();
     this.turnStatus = new FooterBar();
     this.attachmentStatus = new Text("", 0, 0);
@@ -312,11 +330,21 @@ class ZCodeTui {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       throw new Error("ZCode TUI requires an interactive terminal.");
     }
+    let notificationConfigError: string | undefined;
+    try {
+      this.notifications.setSettings(await readNotificationSettings());
+    } catch (error) {
+      notificationConfigError = error instanceof Error ? error.message : String(error);
+    }
     this.ui.start();
     await this.resolveTerminalColorScheme();
     this.buildLayout();
+    if (notificationConfigError) {
+      this.addNotice(`Unable to load notification settings: ${notificationConfigError}`, "warning");
+    }
     await this.restoreInitialTranscript();
     this.bindInput();
+    this.notifications.start();
     this.ui.setFocus(this.editor);
     this.updateMetadata();
     this.updateTurnStatus();
@@ -409,6 +437,7 @@ class ZCodeTui {
     this.beginTurn(displayInput);
     this.activeSubmissions += 1;
     this.updateActivity("signing in…");
+    this.notifications.stop();
     this.ui.stop();
 
     let code = 1;
@@ -458,6 +487,7 @@ class ZCodeTui {
       failure = error instanceof Error ? error.message : String(error);
     } finally {
       this.ui.start();
+      this.notifications.start();
       this.ui.setFocus(this.editor);
       this.ui.requestRender(true);
     }
@@ -506,6 +536,8 @@ class ZCodeTui {
       { name: "diff", description: "Browse current and per-turn file changes" },
       { name: "context", description: "Inspect context usage and prompt composition" },
       { name: "status", description: "Inspect detailed runtime and session status" },
+      { name: "config", description: "Configure ZCode TUI settings" },
+      { name: "settings", description: "Configure ZCode TUI settings" },
       { name: "search", description: "Search the retained transcript", argumentHint: "<text>|next|prev|clear" },
       { name: "transcript", description: "Navigate and expand individual transcript blocks", argumentHint: "next|prev|latest|close" },
       { name: "exit", description: "Exit ZCode" }
@@ -517,6 +549,7 @@ class ZCodeTui {
 
   private bindInput(): void {
     this.ui.addInputListener((data) => {
+      if (this.notifications.handleInput(data)) return { consume: true };
       if (this.choiceDepth > 0) return undefined;
       if (matchesKey(data, "ctrl+o")) {
         this.prepareTranscriptViewport();
@@ -679,6 +712,10 @@ class ZCodeTui {
       await this.showStatusDetails();
       return;
     }
+    if (input === "/config" || input === "/settings") {
+      await this.showConfiguration();
+      return;
+    }
     if (isMcpPickerRequest(input) && await this.showMcpPicker()) {
       return;
     }
@@ -728,6 +765,8 @@ class ZCodeTui {
     if (!steering) this.turnAbortController = abortController;
     this.activeSubmissions += 1;
     this.updateActivity(submission.status ?? (steering ? "steering…" : "working…"));
+    const notificationEligible = !steering && !input.startsWith("/");
+    if (notificationEligible) this.pendingTurnNotification = "completed";
 
     const callOptions: PromptCallOptions = {
       abortSignal: abortController.signal,
@@ -752,14 +791,21 @@ class ZCodeTui {
         const outcome = await this.options.sendInput(promptInput(input, attachments), callOptions);
         accepted = await this.handleSendOutcome(outcome);
       }
+      if (!accepted && notificationEligible) this.pendingTurnNotification = undefined;
     } catch (error) {
       if (abortController.signal.aborted) {
         unfinishedToolState = "cancelled";
+        if (notificationEligible) this.pendingTurnNotification = undefined;
         this.addNotice(submission.cancelStatus ?? "Turn cancelled.", "muted");
       } else {
         unfinishedToolState = "failed";
         const message = error instanceof Error ? error.message : String(error);
-        this.addNotice(redactSecrets(message, submission.secrets), "error");
+        const detail = redactSecrets(message, submission.secrets);
+        if (notificationEligible) {
+          this.pendingTurnNotification = "failed";
+          this.pendingTurnNotificationDetail = detail;
+        }
+        this.addNotice(detail, "error");
       }
     } finally {
       if (accepted && attachments.length > 0) {
@@ -807,7 +853,7 @@ class ZCodeTui {
     const response = responseText(result);
     if (renderResponse && response) {
       this.completeThinking();
-      this.lastAssistantText = this.assistantStream.reconcile(response);
+      this.recordAssistantText(this.assistantStream.reconcile(response));
     }
     if (typeof result.mode === "string") {
       this.mode = result.mode;
@@ -859,7 +905,7 @@ class ZCodeTui {
     } else if (event.kind === "text_delta" && event.delta) {
       this.currentToolGroup = undefined;
       this.completeThinking();
-      this.lastAssistantText = this.assistantStream.append(event.delta, event.partId, event.messageId);
+      this.recordAssistantText(this.assistantStream.append(event.delta, event.partId, event.messageId));
     } else if (event.kind === "text_end") {
       this.assistantStream.breakSegment();
     } else if (event.kind === "reasoning_start") {
@@ -965,7 +1011,7 @@ class ZCodeTui {
 
     if (part.type === "text") {
       if (part.partId) {
-        this.lastAssistantText = this.assistantStream.upsert(part.text, part.partId, part.messageId);
+        this.recordAssistantText(this.assistantStream.upsert(part.text, part.partId, part.messageId));
       } else if (part.text) {
         this.addAssistantMessage(part.text);
       }
@@ -1036,7 +1082,7 @@ class ZCodeTui {
     const kind = this.protocolPartKinds.get(partId);
     if (messageId) this.protocolPartMessages.set(partId, messageId);
     if (field === "text" || (!field && kind === "text")) {
-      this.lastAssistantText = this.assistantStream.append(delta, partId, messageId);
+      this.recordAssistantText(this.assistantStream.append(delta, partId, messageId));
       return;
     }
     if (field === "reasoning" || (!field && kind === "thought")) {
@@ -1098,6 +1144,9 @@ class ZCodeTui {
   private beginTurn(prompt?: string): void {
     this.completeThinking();
     this.assistantStream.beginTurn();
+    this.turnAssistantText = "";
+    this.pendingTurnNotification = undefined;
+    this.pendingTurnNotificationDetail = "";
     this.currentToolGroup = undefined;
     this.turnDiffs.beginTurn(prompt);
     this.turnStartedAt = Date.now();
@@ -1175,8 +1224,13 @@ class ZCodeTui {
       kind: "assistant",
       messageId
     });
-    this.lastAssistantText = text;
+    this.recordAssistantText(text);
     this.ui.requestRender();
+  }
+
+  private recordAssistantText(text: string): void {
+    this.lastAssistantText = text;
+    if (this.turnStartedAt !== undefined) this.turnAssistantText = text;
   }
 
   private addNotice(
@@ -1877,6 +1931,114 @@ class ZCodeTui {
     return true;
   }
 
+  private async showConfiguration(): Promise<void> {
+    let stored: NotificationSettings;
+    try {
+      stored = await readStoredNotificationSettings();
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+      return;
+    }
+
+    const methods: Array<{ value: NotificationMethod; label: string; description: string }> = [
+      { value: "auto", label: "Automatic", description: "Use OSC 9, native desktop notification, then BEL fallback" },
+      { value: "osc9", label: "Terminal notification", description: "Send an OSC 9 notification through the terminal" },
+      { value: "native", label: "Desktop notification", description: "Use the operating system notification service" },
+      { value: "bel", label: "Terminal bell", description: "Emit BEL when the turn finishes" },
+      { value: "off", label: "Off", description: "Do not send turn notifications" }
+    ];
+    const conditions: Array<{ value: NotificationCondition; label: string; description: string }> = [
+      { value: "unfocused", label: "When terminal is unfocused", description: "Notify only while you are using another window" },
+      { value: "always", label: "Always", description: "Notify even while the terminal is focused" }
+    ];
+    let selectedSettingIndex = 0;
+    let feedback = "Changes save immediately · Esc closes settings";
+
+    while (!this.stopped) {
+      const effective = this.notifications.currentSettings();
+      const methodOverride = Boolean(process.env.ZCODE_TUI_NOTIFICATION_METHOD?.trim());
+      const conditionOverride = Boolean(process.env.ZCODE_TUI_NOTIFICATION_CONDITION?.trim());
+      const setting = await this.showChoice({
+        title: "ZCode settings",
+        prompt: feedback,
+        help: "Up/Down choose · Enter open · Esc close settings",
+        items: [
+          {
+            value: "notification-method",
+            label: "Notification delivery",
+            description: methodOverride
+              ? `Current: ${effective.method} · Saved: ${stored.method} (environment override)`
+              : `Current: ${stored.method}`
+          },
+          {
+            value: "notification-condition",
+            label: "When to notify",
+            description: conditionOverride
+              ? `Current: ${effective.condition} · Saved: ${stored.condition} (environment override)`
+              : `Current: ${stored.condition}`
+          }
+        ],
+        selectedIndex: selectedSettingIndex
+      });
+      if (!setting) return;
+
+      selectedSettingIndex = setting.value === "notification-condition" ? 1 : 0;
+      let next = stored;
+      let changedLabel: string;
+      let overridden = false;
+      if (setting.value === "notification-method") {
+        const selected = await this.showChoice({
+          title: "Notification delivery",
+          prompt: "Select how completed and failed turns notify you.",
+          help: "Up/Down choose · Enter save · Esc back",
+          items: methods,
+          selectedIndex: Math.max(0, methods.findIndex((item) => item.value === stored.method))
+        });
+        if (!selected) {
+          feedback = "No changes · Esc closes settings";
+          continue;
+        }
+        next = { ...stored, method: selected.value as NotificationMethod };
+        changedLabel = `Notification delivery: ${next.method}`;
+        overridden = methodOverride;
+      } else {
+        const selected = await this.showChoice({
+          title: "When to notify",
+          prompt: "Select when completed and failed turns notify you.",
+          help: "Up/Down choose · Enter save · Esc back",
+          items: conditions,
+          selectedIndex: Math.max(0, conditions.findIndex((item) => item.value === stored.condition))
+        });
+        if (!selected) {
+          feedback = "No changes · Esc closes settings";
+          continue;
+        }
+        next = { ...stored, condition: selected.value as NotificationCondition };
+        changedLabel = `When to notify: ${next.condition}`;
+        overridden = conditionOverride;
+      }
+
+      if (next.method === stored.method && next.condition === stored.condition) {
+        feedback = `${changedLabel} · unchanged`;
+        continue;
+      }
+
+      try {
+        await writeNotificationSettings(next);
+        stored = next;
+        this.notifications.setSettings(notificationSettings(process.env, {
+          ui: { notifications: stored }
+        }));
+        feedback = overridden
+          ? `${changedLabel} saved · environment override remains active`
+          : `${changedLabel} saved`;
+      } catch (error) {
+        this.addNotice(error instanceof Error ? error.message : String(error), "error");
+        feedback = "Could not save the setting · select it to retry";
+      }
+    }
+  }
+
   private shortcutAvailable(): boolean {
     if (this.settingSwitchInFlight) return false;
     if (this.activeSubmissions === 0) return true;
@@ -2575,6 +2737,12 @@ class ZCodeTui {
   }
 
   private finishTurn(unfinishedToolState = "interrupted"): void {
+    const notification = this.pendingTurnNotification;
+    const notificationDetail = notification === "completed"
+      ? this.turnAssistantText
+      : this.pendingTurnNotificationDetail;
+    this.pendingTurnNotification = undefined;
+    this.pendingTurnNotificationDetail = "";
     this.completeThinking();
     this.assistantStream.breakSegment();
     this.finalizeUnresolvedTools(unfinishedToolState);
@@ -2590,6 +2758,7 @@ class ZCodeTui {
     this.activity = undefined;
     this.updateTurnStatus();
     this.scheduleRuntimeRefresh(0);
+    if (notification) void this.notifications.notify(notification, notificationDetail);
   }
 
   private debugEvent(channel: string, value: unknown): void {
@@ -2613,6 +2782,7 @@ class ZCodeTui {
     const elapsedMilliseconds = this.turnStartedAt === undefined
       ? this.turnElapsedMilliseconds
       : Math.max(0, Date.now() - this.turnStartedAt);
+    this.notifications.stop();
     this.ui.stop();
     void this.finishStop(elapsedMilliseconds);
   }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, readFile, rm, stat } from "node:fs/promises";
+import { link, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
 
@@ -29,6 +29,8 @@ export interface UserConfigBootstrapResult {
   configPath: string;
   created: boolean;
 }
+
+export type UserConfigRecord = Record<string, unknown>;
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
@@ -110,6 +112,54 @@ export async function ensureUserConfig(
       cause: error
     });
   } finally {
+    await rm(temporaryPath, { force: true }).catch(() => {});
+  }
+}
+
+export async function readUserConfig(
+  env: NodeJS.ProcessEnv = process.env
+): Promise<UserConfigRecord> {
+  const { configPath } = await ensureUserConfig(env);
+  try {
+    const value: unknown = JSON.parse(await readFile(configPath, "utf8"));
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("the root value must be a JSON object");
+    }
+    return value as UserConfigRecord;
+  } catch (error) {
+    throw new Error(`Unable to read ZCode config ${configPath}: ${errorMessage(error)}`, {
+      cause: error
+    });
+  }
+}
+
+export async function updateUserConfig(
+  update: (config: UserConfigRecord) => void,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<string> {
+  const configPath = userConfigPath(env);
+  const config = await readUserConfig(env);
+  update(config);
+
+  const temporaryPath = join(
+    dirname(configPath),
+    `.${basename(configPath)}.${process.pid}.${randomUUID()}.tmp`
+  );
+  let file;
+  try {
+    file = await open(temporaryPath, "wx", 0o600);
+    await file.writeFile(`${JSON.stringify(config, null, 2)}\n`, "utf8");
+    await file.sync();
+    await file.close();
+    file = undefined;
+    await rename(temporaryPath, configPath);
+    return configPath;
+  } catch (error) {
+    throw new Error(`Unable to update ZCode config ${configPath}: ${errorMessage(error)}`, {
+      cause: error
+    });
+  } finally {
+    await file?.close().catch(() => {});
     await rm(temporaryPath, { force: true }).catch(() => {});
   }
 }
