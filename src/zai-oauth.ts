@@ -4,6 +4,7 @@ import {
   createDarwinUrlCallbackReceiver,
   type DarwinUrlCallbackReceiver
 } from "./darwin-oauth-callback.ts";
+import { captureCommand } from "./command.ts";
 
 const authorizeEndpoint = "https://chat.z.ai/api/oauth/authorize";
 const clientId = "client_P8X5CMWmlaRO9gyO-KSqtg";
@@ -112,18 +113,10 @@ export function parseZaiOAuthCallback(callbackUrl: string, expectedState: string
 }
 
 async function openBrowser(url: string): Promise<BrowserOpenResult> {
-  const child = Bun.spawn(["/usr/bin/open", url], {
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "pipe"
-  });
-  const [code, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stderr).text()
-  ]);
-  return code === 0
+  const result = await captureCommand("/usr/bin/open", [url]);
+  return result.code === 0
     ? { opened: true }
-    : { opened: false, reason: stderr.trim() || `open exited with status ${code}` };
+    : { opened: false, reason: result.stderr.trim() || `open exited with status ${result.code}` };
 }
 
 export async function runZaiOAuthLogin(options: ZaiOAuthLoginOptions): Promise<number> {

@@ -207,10 +207,10 @@ export function suspendedZaiLoginCommand(
   runtimeExecutable = process.execPath,
   runtimeEntry = process.argv[1]
 ): { args: string[]; program: string } {
-  const bun = env.ZCODE_APP_CLI_BUN?.trim();
+  const executable = env.ZCODE_APP_CLI_EXECUTABLE?.trim();
   const launcher = env.ZCODE_APP_CLI_ENTRY?.trim();
-  if (bun && launcher) {
-    return { args: [launcher, "login", "--oauth"], program: bun };
+  if (executable && launcher) {
+    return { args: [launcher, "login", "--oauth"], program: executable };
   }
   if (!runtimeEntry) throw new Error("Unable to locate the ZCode runtime entry point.");
   return { args: [runtimeEntry, "login"], program: runtimeExecutable };

@@ -1,0 +1,170 @@
+name: Prepare ZCode CLI release
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Release an upstream App update or increment the CLI build
+        required: true
+        default: cli
+        type: choice
+        options:
+          - cli
+          - upstream
+  schedule:
+    - cron: "23 2 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: zcode-cli-prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+
+      - name: Install extraction tools
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Capture base release
+        id: base
+        run: |
+          PACKAGE_VERSION=$(bun -e "console.log((await Bun.file('package.json').json()).version)")
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Increment CLI build
+        if: github.event_name == 'workflow_dispatch' && inputs.kind == 'cli'
+        run: bun run version:build
+
+      - name: Build and validate release candidate
+        run: bun run release:prepare
+
+      - name: Increment build for a repackaged upstream runtime
+        if: >-
+          github.event_name == 'schedule' ||
+          (github.event_name == 'workflow_dispatch' && inputs.kind == 'upstream')
+        run: |
+          if git diff --quiet -- package.json && [[ -n "$(git status --porcelain -- zcode-runtime.lock.json)" ]]; then
+            bun run version:build
+          fi
+
+      - name: Prepare release metadata
+        id: release
+        shell: bash
+        env:
+          BASE_VERSION: ${{ steps.base.outputs.package_version }}
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_KIND: ${{ inputs.kind || 'upstream' }}
+        run: |
+          if [[ "$EVENT_NAME" == "schedule" || "$REQUESTED_KIND" == "upstream" ]]; then
+            RELEASE_KIND=upstream
+            RELEASE_BRANCH=release/zcode-upstream
+          else
+            RELEASE_KIND=cli
+            RELEASE_BRANCH=release/zcode-cli
+          fi
+
+          PACKAGE_NAME=$(bun -e "console.log((await Bun.file('package.json').json()).name)")
+          PACKAGE_VERSION=$(bun -e "console.log((await Bun.file('package.json').json()).version)")
+          APP_VERSION=$(bun -e "console.log((await Bun.file('zcode-runtime.lock.json').json()).appVersion)")
+          RUNTIME_SHA512=$(bun -e "console.log((await Bun.file('zcode-runtime.lock.json').json()).sha512)")
+
+          echo "kind=$RELEASE_KIND" >> "$GITHUB_OUTPUT"
+          echo "branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "runtime_sha512=$RUNTIME_SHA512" >> "$GITHUB_OUTPUT"
+
+          if git diff --quiet -- package.json && [[ -z "$(git status --porcelain -- zcode-runtime.lock.json)" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No release is required for ZCode App ${APP_VERSION}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          IS_NEWER_THAN_BASE=$(PACKAGE_VERSION="$PACKAGE_VERSION" BASE_VERSION="$BASE_VERSION" bun -e '
+            import { compareReleaseVersions } from "./scripts/release-version.ts";
+            console.log(compareReleaseVersions(process.env.PACKAGE_VERSION, process.env.BASE_VERSION) > 0);
+          ')
+          if [[ "$IS_NEWER_THAN_BASE" != "true" ]]; then
+            echo "Refusing to prepare ${PACKAGE_VERSION} because it does not advance main from ${BASE_VERSION}." >&2
+            exit 1
+          fi
+
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published; increment the CLI build before creating another release." >&2
+            exit 1
+          fi
+
+          LATEST_VERSION=$(npm view "${PACKAGE_NAME}@latest" version 2>/dev/null || true)
+          if [[ -n "$LATEST_VERSION" ]]; then
+            IS_NEWER=$(PACKAGE_VERSION="$PACKAGE_VERSION" LATEST_VERSION="$LATEST_VERSION" bun -e '
+              import { compareReleaseVersions } from "./scripts/release-version.ts";
+              console.log(compareReleaseVersions(process.env.PACKAGE_VERSION, process.env.LATEST_VERSION) > 0);
+            ')
+            if [[ "$IS_NEWER" != "true" ]]; then
+              echo "Refusing to prepare ${PACKAGE_VERSION} because npm latest is ${LATEST_VERSION}." >&2
+              exit 1
+            fi
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update release pull request
+        id: release_pr
+        if: steps.release.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ github.token }}
+          add-paths: |
+            package.json
+            zcode-runtime.lock.json
+          base: ${{ github.event.repository.default_branch }}
+          branch: ${{ steps.release.outputs.branch }}
+          delete-branch: true
+          commit-message: "chore(release): prepare ${{ steps.release.outputs.package_name }} ${{ steps.release.outputs.package_version }}"
+          title: "chore(release): prepare ${{ steps.release.outputs.package_name }} ${{ steps.release.outputs.package_version }}"
+          body: |
+            Prepare `${{ steps.release.outputs.package_name }}@${{ steps.release.outputs.package_version }}` for release.
+
+            - Release kind: `${{ steps.release.outputs.kind }}`
+            - ZCode App: `${{ steps.release.outputs.app_version }}`
+            - Runtime SHA-512: `${{ steps.release.outputs.runtime_sha512 }}`
+            - Runtime extraction and validation: passed
+
+            The generated `vendor/` runtime remains outside Git; its verified
+            source is committed in `zcode-runtime.lock.json`. Merging this PR
+            triggers a fresh extraction, npm Trusted Publishing, an immutable
+            Git tag, and a GitHub Release from the merge commit.
+
+      - name: Summarize release pull request
+        if: steps.release.outputs.changed == 'true'
+        env:
+          OPERATION: ${{ steps.release_pr.outputs.pull-request-operation }}
+          PR_URL: ${{ steps.release_pr.outputs.pull-request-url }}
+          VERSION: ${{ steps.release.outputs.package_version }}
+        run: |
+          echo "Prepared ${VERSION}: ${OPERATION}." >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$PR_URL" ]]; then
+            echo "Release PR: ${PR_URL}" >> "$GITHUB_STEP_SUMMARY"
+          fi

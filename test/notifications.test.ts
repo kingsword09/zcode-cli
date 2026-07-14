@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -138,6 +138,19 @@ describe("TUI turn notifications", () => {
       "-sender", "com.apple.Terminal",
       "-activate", "com.apple.Terminal"
     ]);
+  });
+
+  test("resolves native notification commands from PATH without Bun", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-notification-path-"));
+    temporaryDirectories.push(directory);
+    const executable = join(directory, "notify-send");
+    await writeFile(executable, "#!/bin/sh\nexit 0\n");
+    await chmod(executable, 0o755);
+
+    expect(nativeNotificationCommand("linux", "Title", "Body", { PATH: directory })).toEqual({
+      command: executable,
+      args: ["--app-name=ZCode", "Title", "Body"]
+    });
   });
 
   test("uses reported focus and does not suppress notifications while focus is unknown", async () => {

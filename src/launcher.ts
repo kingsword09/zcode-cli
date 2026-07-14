@@ -1,6 +1,10 @@
+import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { hasNative, spawn as spawnPty } from "zigpty";
 
 import { ensureUserConfig, readConfiguredModelAccess } from "./model-access.ts";
 import {
@@ -11,7 +15,7 @@ import {
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
-const launcherPath = join(packageRoot, "bin", "zcode.ts");
+const launcherPath = join(packageRoot, "bin", "zcode.js");
 const NON_TUI_COMMANDS = new Set([
   "app-server",
   "commands",
@@ -64,9 +68,8 @@ export function isTuiInvocation(args: string[]): boolean {
   return command ? !NON_TUI_COMMANDS.has(command) : true;
 }
 
-export function resolveNodeExecutable(): string | null {
-  if (process.env.ZCODE_NODE) return process.env.ZCODE_NODE;
-  return Bun.which("node");
+export function resolveNodeExecutable(): string {
+  return process.env.ZCODE_NODE?.trim() || process.execPath;
 }
 
 export function normalizeLoginArgs(args: string[]): { args: string[]; checkConfiguredAccess: boolean } {
@@ -79,32 +82,57 @@ export function normalizeLoginArgs(args: string[]): { args: string[]; checkConfi
   return { args, checkConfiguredAccess: false };
 }
 
-function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env = { ...process.env };
+function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, string> {
+  const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.ZCODE_CLI_OAUTH_CALLBACK_STDIN;
-  return {
+  const merged: NodeJS.ProcessEnv = {
     ...env,
     ...extra,
-    ZCODE_APP_CLI_BUN: process.execPath,
+    ZCODE_APP_CLI_EXECUTABLE: process.execPath,
     ZCODE_APP_CLI_ENTRY: launcherPath
   };
+  return Object.fromEntries(
+    Object.entries(merged).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+  );
+}
+
+function signalExitCode(signal: NodeJS.Signals | null): number {
+  if (!signal) return 1;
+  const number = (osConstants.signals as Record<string, number>)[signal];
+  return typeof number === "number" ? 128 + number : 1;
+}
+
+async function waitForChild(child: ChildProcess): Promise<number> {
+  return await new Promise((resolveExit) => {
+    let settled = false;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      resolveExit(code);
+    };
+    child.once("error", (error) => {
+      console.error(`Error: ${error.message}`);
+      finish(1);
+    });
+    child.once("exit", (code, signal) => finish(code ?? signalExitCode(signal)));
+  });
 }
 
 async function runWithInheritedStdio(node: string, args: string[]): Promise<number> {
-  const child = Bun.spawn([node, runtimePath, ...args], {
+  const child = spawnChild(node, [runtimePath, ...args], {
     cwd: process.cwd(),
     env: runtimeEnvironment(),
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit"
+    stdio: "inherit"
   });
-  const forwardSignal = (signal: NodeJS.Signals) => child.kill(signal);
+  const forwardSignal = (signal: NodeJS.Signals) => {
+    if (!child.killed) child.kill(signal);
+  };
   const onSigint = () => forwardSignal("SIGINT");
   const onSigterm = () => forwardSignal("SIGTERM");
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
   try {
-    return await child.exited;
+    return await waitForChild(child);
   } finally {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
@@ -112,53 +140,54 @@ async function runWithInheritedStdio(node: string, args: string[]): Promise<numb
 }
 
 async function runInNativeTerminal(node: string, args: string[]): Promise<number> {
+  if (!hasNative) {
+    throw new Error("zigpty has no native binding for this platform. Reinstall zcode-app-cli on a supported target.");
+  }
   const wasRaw = process.stdin.isRaw ?? false;
-  let child: ReturnType<typeof Bun.spawn> | undefined;
-  const terminal = new Bun.Terminal({
+  const inputDecoder = new TextDecoder();
+  const pty = spawnPty(node, [runtimePath, ...args], {
     cols: process.stdout.columns ?? 80,
     rows: process.stdout.rows ?? 24,
+    cwd: process.cwd(),
+    env: {
+      ...runtimeEnvironment(),
+      TERM: process.env.TERM ?? "xterm-256color"
+    },
     name: process.env.TERM ?? "xterm-256color",
-    data(_terminal, data) {
-      process.stdout.write(data);
-    }
+    encoding: null
   });
+  const output = pty.onData((data) => process.stdout.write(data));
 
   const onInput = (data: Buffer | string) => {
-    if (!terminal.closed) terminal.write(data);
-  };
-  const onResize = () => {
-    if (!terminal.closed) {
-      terminal.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
+    if (pty.exitCode === null) {
+      pty.write(typeof data === "string" ? data : inputDecoder.decode(data, { stream: true }));
     }
   };
-  const onSigint = () => child?.kill("SIGINT");
-  const onSigterm = () => child?.kill("SIGTERM");
+  const onResize = () => {
+    if (pty.exitCode === null) {
+      pty.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
+    }
+  };
+  const onSigint = () => pty.kill("SIGINT");
+  const onSigterm = () => pty.kill("SIGTERM");
 
   try {
-    child = Bun.spawn([node, runtimePath, ...args], {
-      cwd: process.cwd(),
-      env: {
-        ...runtimeEnvironment(),
-        TERM: process.env.TERM ?? "xterm-256color"
-      },
-      terminal
-    });
-
     process.stdin.setRawMode?.(true);
     process.stdin.resume();
     process.stdin.on("data", onInput);
     process.stdout.on("resize", onResize);
     process.once("SIGINT", onSigint);
     process.once("SIGTERM", onSigterm);
-    return await child.exited;
+    return await pty.exited;
   } finally {
+    output.dispose();
     process.stdin.off("data", onInput);
     process.stdout.off("resize", onResize);
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     process.stdin.setRawMode?.(wasRaw);
     if (!wasRaw) process.stdin.pause();
-    if (!terminal.closed) terminal.close();
+    pty.close();
   }
 }
 
@@ -169,19 +198,16 @@ async function completeOfficialZaiLogin(
   abortSignal: AbortSignal
 ): Promise<number> {
   if (abortSignal.aborted) return 130;
-  const child = Bun.spawn([node, runtimePath, ...runtimeArgs], {
+  const child = spawnChild(node, [runtimePath, ...runtimeArgs], {
     cwd: process.cwd(),
     env: runtimeEnvironment({ ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" }),
-    stdin: "pipe",
-    stdout: "inherit",
-    stderr: "inherit"
+    stdio: ["pipe", "inherit", "inherit"]
   });
   const onAbort = () => child.kill("SIGINT");
   abortSignal.addEventListener("abort", onAbort, { once: true });
   try {
-    child.stdin.write(JSON.stringify(payload));
-    child.stdin.end();
-    return await child.exited;
+    child.stdin?.end(JSON.stringify(payload));
+    return await waitForChild(child);
   } finally {
     abortSignal.removeEventListener("abort", onAbort);
   }
@@ -217,12 +243,6 @@ export async function main(args: string[]): Promise<number> {
   }
 
   const node = resolveNodeExecutable();
-  if (!node) {
-    console.error(
-      "ZCode's official runtime requires Node.js >=22.19. Set ZCODE_NODE or install Node.js."
-    );
-    return 1;
-  }
 
 
   if (zaiOAuth) {
@@ -252,5 +272,10 @@ export async function main(args: string[]): Promise<number> {
   }
 
   const interactive = isTuiInvocation(login.args) && process.stdin.isTTY && process.stdout.isTTY;
-  return interactive ? runInNativeTerminal(node, login.args) : runWithInheritedStdio(node, login.args);
+  try {
+    return interactive ? await runInNativeTerminal(node, login.args) : await runWithInheritedStdio(node, login.args);
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
 }

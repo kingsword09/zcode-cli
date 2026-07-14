@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { extname, isAbsolute, join } from "node:path";
 
 import { readUserConfig, updateUserConfig } from "../../../src/model-access.ts";
 
@@ -50,6 +52,35 @@ interface TurnNotifierOptions {
   platform?: NodeJS.Platform;
   nativeNotify?: NativeNotificationSender;
   settings?: NotificationSettings;
+}
+
+function findExecutable(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string | null {
+  const separator = platform === "win32" ? ";" : ":";
+  const path = env.PATH ?? env.Path ?? env.path ?? "";
+  const extensions = platform === "win32" && !extname(name)
+    ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
+  const directories = isAbsolute(name) || name.includes("/") || name.includes("\\")
+    ? [""]
+    : path.split(separator).filter(Boolean);
+  const accessMode = platform === "win32" ? constants.F_OK : constants.X_OK;
+
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = directory ? join(directory.replace(/^"|"$/gu, ""), `${name}${extension}`) : `${name}${extension}`;
+      try {
+        accessSync(candidate, accessMode);
+        return candidate;
+      } catch {
+        // Continue searching PATH.
+      }
+    }
+  }
+  return null;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -178,7 +209,7 @@ export function terminalNotifierCommand(
   title: string,
   body: string,
   env: NodeJS.ProcessEnv = process.env,
-  which: ExecutableResolver = Bun.which
+  which: ExecutableResolver = (name) => findExecutable(name, env)
 ): NativeNotificationCommand | undefined {
   const command = which("terminal-notifier");
   if (!command) return undefined;
@@ -194,7 +225,7 @@ export function nativeNotificationCommand(
   title: string,
   body: string,
   env: NodeJS.ProcessEnv = process.env,
-  which: ExecutableResolver = Bun.which
+  which: ExecutableResolver = (name) => findExecutable(name, env, platform)
 ): NativeNotificationCommand | undefined {
   if (platform === "darwin") return terminalNotifierCommand(title, body, env, which);
   if (platform === "linux") {

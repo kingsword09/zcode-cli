@@ -1,5 +1,8 @@
+import { spawn } from "node:child_process";
+import { readFile, stat } from "node:fs/promises";
 import { parsePatch } from "diff";
 import { resolve, sep } from "node:path";
+import type { Readable } from "node:stream";
 
 import type { FileDiffData, FileDiffHunk } from "./file-diff-view.ts";
 
@@ -23,21 +26,20 @@ interface CommandOutput {
   truncated: boolean;
 }
 
-async function readLimited(stream: ReadableStream<Uint8Array>, maximum: number): Promise<{ text: string; truncated: boolean }> {
-  const reader = stream.getReader();
+async function readLimited(stream: Readable, maximum: number): Promise<{ text: string; truncated: boolean }> {
   const decoder = new TextDecoder();
   let bytes = 0;
   let text = "";
   let truncated = false;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  for await (const chunk of stream) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (truncated) continue;
     const remaining = Math.max(0, maximum - bytes);
     if (value.byteLength > remaining) {
       text += decoder.decode(value.subarray(0, remaining), { stream: true });
       truncated = true;
-      await reader.cancel();
-      break;
+      bytes = maximum;
+      continue;
     }
     bytes += value.byteLength;
     text += decoder.decode(value, { stream: true });
@@ -47,19 +49,27 @@ async function readLimited(stream: ReadableStream<Uint8Array>, maximum: number):
 }
 
 async function git(workspaceDirectory: string, args: string[], maximum: number): Promise<CommandOutput> {
-  const child = Bun.spawn(["git", ...args], {
+  const child = spawn("git", args, {
     cwd: workspaceDirectory,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }
   });
   const timeout = setTimeout(() => child.kill(), gitTimeoutMs);
+  const exited = new Promise<number>((resolveExit) => {
+    let settled = false;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      resolveExit(code);
+    };
+    child.once("error", () => finish(1));
+    child.once("close", (code) => finish(code ?? 1));
+  });
   try {
     const [stdout, stderr, exitCode] = await Promise.all([
       readLimited(child.stdout, maximum),
       readLimited(child.stderr, 128 * 1024),
-      child.exited
+      exited
     ]);
     return {
       stdout: stdout.text,
@@ -187,11 +197,11 @@ export async function enrichWorkspaceFiles(
   await Promise.all(snapshot.files.map(async (entry) => {
     const path = resolve(root, entry.filePath);
     if (path !== root && !path.startsWith(`${root}${sep}`)) return;
-    const file = Bun.file(path);
-    if (!await file.exists()) return;
-    entry.isLargeFile = file.size > largeFileThresholdBytes;
+    const metadata = await stat(path).catch(() => undefined);
+    if (!metadata?.isFile()) return;
+    entry.isLargeFile = metadata.size > largeFileThresholdBytes;
     if (!entry.isUntracked || entry.isLargeFile) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    const bytes = new Uint8Array(await readFile(path));
     if (bytes.includes(0)) {
       entry.isBinary = true;
       return;
