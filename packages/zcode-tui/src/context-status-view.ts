@@ -90,6 +90,7 @@ export class ContextDetailView implements Component {
 }
 
 export interface StatusDetailData {
+  cliVersion?: string;
   version?: string;
   model: string;
   mode: string;
@@ -117,13 +118,14 @@ export class StatusDetailView implements Component {
     const projection = this.data.projection;
     const metrics = this.data.metrics;
     const rows: Array<[string, string | undefined]> = [
-      ["Version", this.data.version],
+      ["CLI version", this.data.cliVersion],
+      ["Runtime version", this.data.version],
       ["Model", this.data.model],
       ["Mode", [this.data.mode, this.data.effort].filter(Boolean).join(" · ")],
       ["Workspace", this.data.workspace],
       ["Git branch", this.data.branch],
       ["Session", projection?.sessionId],
-      ["Runtime", projection?.status],
+      ["Runtime state", projection?.status],
       ["Last error", projection?.lastError
         ? [projection.lastError.code, projection.lastError.message].filter(Boolean).join(" · ")
         : undefined],

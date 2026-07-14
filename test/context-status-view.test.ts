@@ -26,6 +26,7 @@ describe("context and status detail views", () => {
 
   test("keeps status details separate from the compact statusline", () => {
     const output = new StatusDetailView(createTheme(false), {
+      cliVersion: "3.3.5-1",
       version: "1.0.0",
       model: "custom/glm",
       mode: "build",
@@ -37,6 +38,8 @@ describe("context and status detail views", () => {
       mcpSummary: "2 connected"
     }).render(80).join("\n");
     expect(output).toContain("ZCode Status");
+    expect(output).toContain("CLI version      3.3.5-1");
+    expect(output).toContain("Runtime version  1.0.0");
     expect(output).toContain("custom/glm");
     expect(output).toContain("2 connected");
   });

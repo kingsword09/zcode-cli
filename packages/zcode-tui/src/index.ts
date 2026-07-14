@@ -242,6 +242,7 @@ function restoredToolState(status: string): string {
 
 class ZCodeTui {
   private readonly colorsEnabled: boolean;
+  private readonly distributionVersion?: string;
   private readonly theme: ZCodeTheme;
   private readonly ui: TUI;
   private readonly transcript: Transcript;
@@ -316,6 +317,10 @@ class ZCodeTui {
 
   constructor(private readonly options: TuiOptions) {
     this.colorsEnabled = !options.noColor && !process.env.NO_COLOR;
+    this.distributionVersion = sanitizeTerminalText(
+      process.env.ZCODE_APP_CLI_VERSION?.trim() ?? "",
+      { preserveSgr: false }
+    ) || undefined;
     this.theme = createTheme(this.colorsEnabled, colorSchemeFromColorFgBg() ?? "dark");
     this.transcript = new Transcript(this.theme.searchMatch);
     this.mode = normalizedMode(options.initialMode);
@@ -399,7 +404,11 @@ class ZCodeTui {
   private buildLayout(): void {
     const branch = this.options.workspaceGitBranch ? ` · ${this.options.workspaceGitBranch}` : "";
     const workspace = this.options.workspaceDirectory ?? process.cwd();
-    const title = `${this.theme.accent(this.theme.bold("ZCode"))} ${this.theme.muted(`v${this.options.version ?? "unknown"}`)}`;
+    const runtimeVersion = sanitizeTerminalText(this.options.version ?? "unknown", { preserveSgr: false });
+    const versionLabel = this.distributionVersion
+      ? `v${this.distributionVersion} · runtime v${runtimeVersion}`
+      : `v${runtimeVersion}`;
+    const title = `${this.theme.accent(this.theme.bold("ZCode"))} ${this.theme.muted(versionLabel)}`;
     this.ui.addChild(new Text(title, 1, 0));
     this.ui.addChild(new Text(this.theme.muted(`${workspace}${branch}`), 1, 0));
     this.ui.addChild(this.loginWarning);
@@ -2538,6 +2547,7 @@ class ZCodeTui {
       title: "Status",
       prompt: "Detailed session information. The compact statusline remains intentionally minimal.",
       content: new StatusDetailView(this.theme, {
+        cliVersion: this.distributionVersion,
         version: this.options.version,
         model: this.model,
         mode: this.mode,
