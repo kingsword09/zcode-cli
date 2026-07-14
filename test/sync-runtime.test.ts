@@ -4,6 +4,7 @@ import {
   chooseArtifact,
   manifestUrl,
   parseArgs,
+  parseRuntimeLock,
   patchRuntimeOAuthHttpErrors,
   patchRuntimeTuiBridge,
   patchRuntimeZaiDesktopOAuth
@@ -53,6 +54,27 @@ describe("runtime synchronization", () => {
       platform: "win32",
       arch: "arm64"
     });
+    expect(parseArgs(["--lock", "zcode-runtime.lock.json"])).toEqual({
+      platform: "linux",
+      arch: "x64",
+      lock: "zcode-runtime.lock.json"
+    });
+    expect(() => parseArgs(["--app", "/tmp/ZCode.app", "--lock", "runtime.json"])).toThrow(/cannot/);
+    expect(() => parseArgs(["--version", "3.3.5"])).toThrow(/--app/);
+  });
+
+  test("validates locked runtime inputs before downloading", () => {
+    const lock = {
+      schemaVersion: 1,
+      appVersion: "3.3.5",
+      platform: "linux",
+      arch: "x64",
+      url: "https://example.com/zcode.deb",
+      sha512: Buffer.alloc(64, 7).toString("base64")
+    } as const;
+    expect(parseRuntimeLock(lock)).toEqual(lock);
+    expect(() => parseRuntimeLock({ ...lock, url: "http://example.com/zcode.deb" })).toThrow(/HTTPS/);
+    expect(() => parseRuntimeLock({ ...lock, sha512: `${lock.sha512.slice(0, -2)}!!` })).toThrow(/SHA-512/);
   });
 
   test("preserves the HTTP status when an OAuth error body is not JSON", () => {

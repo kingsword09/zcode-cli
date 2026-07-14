@@ -75,13 +75,8 @@ jobs:
           echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate source
-        run: |
-          bun run typecheck
-          bun test
-
-      - name: Rebuild official runtime
-        run: bun run sync -- --platform linux --arch x64
+      - name: Build committed release
+        run: bun run release:build
 
       - name: Verify release did not drift
         env:
@@ -89,16 +84,14 @@ jobs:
         run: |
           ACTUAL_VERSION=$(bun -e "console.log((await Bun.file('package.json').json()).version)")
           if [[ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]]; then
-            echo "The upstream App changed after the release PR was prepared: expected ${EXPECTED_VERSION}, resolved ${ACTUAL_VERSION}." >&2
-            echo "Run Prepare ZCode CLI release again before publishing." >&2
+            echo "The locked release changed while rebuilding: expected ${EXPECTED_VERSION}, resolved ${ACTUAL_VERSION}." >&2
             exit 1
           fi
           git diff --exit-code -- package.json zcode-runtime.lock.json
 
-      - name: Validate extracted CLI
-        run: |
-          bun run check
-          bun run check:tui
+      - name: Pack and install-test release
+        id: package
+        run: bun run release:pack
 
       - name: Inspect release state
         id: release

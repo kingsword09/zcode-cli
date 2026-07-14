@@ -46,11 +46,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Validate source
-        run: |
-          bun run typecheck
-          bun test
-
       - name: Capture base release
         id: base
         run: |
@@ -61,8 +56,8 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.kind == 'cli'
         run: bun run version:build
 
-      - name: Sync official runtime
-        run: bun run sync -- --platform linux --arch x64
+      - name: Build and validate release candidate
+        run: bun run release:prepare
 
       - name: Increment build for a repackaged upstream runtime
         if: >-
@@ -72,11 +67,6 @@ jobs:
           if git diff --quiet -- package.json && [[ -n "$(git status --porcelain -- zcode-runtime.lock.json)" ]]; then
             bun run version:build
           fi
-
-      - name: Validate extracted CLI
-        run: |
-          bun run check
-          bun run check:tui
 
       - name: Prepare release metadata
         id: release

@@ -36,6 +36,7 @@ describe("release workflows", () => {
     const steps = workflow.jobs.prepare!.steps;
     const checkout = steps.find((step) => step.uses === "actions/checkout@v6");
     const setupNode = steps.find((step) => step.uses === "actions/setup-node@v6");
+    const releaseBuild = steps.find((step) => step.name === "Build and validate release candidate");
     const releaseMetadata = steps.find((step) => step.name === "Prepare release metadata");
     const createPullRequest = steps.find((step) => step.name === "Create or update release pull request");
 
@@ -44,6 +45,7 @@ describe("release workflows", () => {
     expect(workflow.permissions).toEqual({ contents: "write", "pull-requests": "write" });
     expect(checkout?.with?.["persist-credentials"]).toBe(false);
     expect(setupNode?.with?.["package-manager-cache"]).toBe(false);
+    expect(releaseBuild?.run).toBe("bun run release:prepare");
     expect(releaseMetadata?.env?.BASE_VERSION).toBe("${{ steps.base.outputs.package_version }}");
     expect(releaseMetadata?.run).toContain("compareReleaseVersions(process.env.PACKAGE_VERSION, process.env.BASE_VERSION) > 0");
     expect(createPullRequest?.uses).toBe(
@@ -62,6 +64,8 @@ describe("release workflows", () => {
     const steps = job.steps;
     const checkout = steps.find((step) => step.uses === "actions/checkout@v6");
     const setupNode = steps.find((step) => step.uses === "actions/setup-node@v6");
+    const releaseBuild = steps.find((step) => step.name === "Build committed release");
+    const packageCheck = steps.find((step) => step.name === "Pack and install-test release");
     const driftCheck = steps.find((step) => step.name === "Verify release did not drift");
     const stateCheck = steps.find((step) => step.name === "Inspect release state");
     const publishIndex = steps.findIndex((step) => step.name === "Publish to npm with Trusted Publishing");
@@ -76,6 +80,8 @@ describe("release workflows", () => {
     expect(checkout?.with?.["fetch-tags"]).toBe(true);
     expect(setupNode?.with?.["node-version"]).toBe(24);
     expect(setupNode?.with?.["package-manager-cache"]).toBe(false);
+    expect(releaseBuild?.run).toBe("bun run release:build");
+    expect(packageCheck?.run).toBe("bun run release:pack");
     expect(job.if).toContain("github.event.pull_request.merged == true");
     expect(job.if).toContain("github.event.pull_request.head.repo.full_name == github.repository");
     expect(job.if).toContain("release/zcode-cli");

@@ -463,6 +463,13 @@ brew install sevenzip
 bun run sync -- --platform linux --arch x64
 ```
 
+Use the committed artifact instead of the latest updater manifest when
+rebuilding a reviewed release:
+
+```bash
+bun run sync:locked
+```
+
 The synchronization command:
 
 1. reads the official updater manifest;
@@ -476,6 +483,25 @@ The synchronization command:
    `zcode-runtime.lock.json`;
 9. aligns the npm version prefix with the ZCode App version while preserving
    the independently incremented CLI build revision.
+
+## npm package contents
+
+The published package is controlled by the `files` allowlist in `package.json`.
+It contains only:
+
+- `bin/zcode.ts`, the executable Bun launcher;
+- `src/`, the launcher, configuration and authentication bridge;
+- `vendor/`, the verified official `zcode.cjs` runtime, official bundled
+  plugins and the compiled local `@zcode/tui` adapter;
+- `config.example.json` and `zcode-runtime.lock.json`;
+- `README.md`, `LICENSE` and the required npm `package.json`.
+
+Tests, GitHub workflows, build scripts, TUI TypeScript sources, local config,
+`.release/` artifacts and development `node_modules` are not published. npm
+installs the declared runtime dependencies such as pi-tui separately. The small
+launcher remains TypeScript intentionally because the npm bin uses Bun's native
+TypeScript runtime; the TUI is the component compiled and injected into
+`vendor/` before publication.
 
 ## Automated npm publishing
 
@@ -502,15 +528,16 @@ Git tag and GitHub Release all describe the same release:
    official runtime, then opens or updates a Release PR containing the exact
    `package.json` version and `zcode-runtime.lock.json` build input;
 2. a maintainer reviews and merges that PR;
-3. `.github/workflows/publish.yml` checks out its merge commit, repeats the
-   extraction and validation, publishes through npm Trusted Publishing, then
-   creates `v<version>` and the corresponding GitHub Release.
+3. `.github/workflows/publish.yml` checks out its merge commit, rebuilds the
+   exact locked runtime, audits and install-tests the tarball, publishes through
+   npm Trusted Publishing, then creates `v<version>` and the corresponding
+   GitHub Release.
 
 The generated `vendor/` directory remains ignored by Git and is rebuilt in both
 workflows. Its updater URL and SHA-512 are committed in
-`zcode-runtime.lock.json`. The publish workflow refuses to continue if either
-the App version or artifact changes between PR preparation and merge. Run the
-preparation workflow again to refresh the PR.
+`zcode-runtime.lock.json`. Preparation resolves the latest manifest; publishing
+downloads the committed URL and verifies the locked SHA-512, so a later upstream
+update cannot silently change a reviewed release.
 
 The preparation workflow runs every day at 02:23 UTC in `upstream` mode. It
 creates a PR when the ZCode App version or the pinned installer changes. A
@@ -532,27 +559,50 @@ Git tags or GitHub Releases. Publication, tag creation and GitHub Release
 creation are independently idempotent, so a partially completed run can be
 retried safely.
 
-### Initial npm setup
+### Local release build
 
-If the package does not exist on npm yet, bootstrap it once from the exact
-committed `main` revision. First prepare and validate the runtime locally:
+Local packaging uses the same commands as the publishing workflow. Start from
+the exact clean commit whose version will be published:
 
 ```bash
 bun install --frozen-lockfile
-bun run sync -- --platform linux --arch x64
-bun run typecheck
-bun test
+bun run release:build
 git diff --exit-code -- package.json zcode-runtime.lock.json
+bun run release:pack
 ```
 
-If the final command reports a version change, do not publish from that working
-tree. Run **Prepare ZCode CLI release** in `upstream` mode, merge its PR, update
-the local checkout and validate again. Once the committed version matches:
+`release:build` runs TypeScript checking and all tests, downloads the artifact
+from `zcode-runtime.lock.json`, verifies its SHA-512, builds and injects the TUI,
+then runs runtime and PTY smoke tests. `release:pack` runs the offline
+`prepack` guard, creates `.release/zcode-app-cli-<version>.tgz`, audits every
+included path and executable mode, installs it into a temporary directory, and
+runs the installed `zcode --version`. Its final size, integrity and file count
+are written to `.release/release.json`.
+
+Inspect that manifest and then publish explicitly:
 
 ```bash
 npm login
 npm publish --access public --tag latest --provenance=false
 ```
+
+The final `npm publish` intentionally remains explicit to avoid an accidental
+registry mutation. It reruns the same offline `prepack` guard and fails if the
+compiled TUI, runtime provenance, lock file, launcher permissions or package
+allowlist are stale. `--provenance=false` applies only to this local bootstrap
+path; GitHub OIDC generates provenance automatically.
+
+Publish from the repository root as shown, rather than passing the `.tgz` to
+`npm publish`: directory publication lets npm record the current Git `gitHead`,
+which the recovery workflow later verifies. The tarball is the audited preview
+and install-test artifact.
+
+### Initial npm setup
+
+If the package does not exist on npm yet, bootstrap it once from the exact
+committed `main` revision using the local release build above. If its Git diff
+check fails, do not publish from that working tree; refresh the Release PR or
+restore the committed version and lock first.
 
 Synchronization preserves the build when the upstream App version changes. For
 example, syncing `3.3.5-12` against ZCode App `3.4.0` produces `3.4.0-12`.

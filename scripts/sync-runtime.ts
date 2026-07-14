@@ -17,6 +17,7 @@ export interface SyncOptions {
   platform: "darwin" | "linux" | "win32";
   arch: string;
   app?: string;
+  lock?: string;
   version?: string;
 }
 
@@ -54,6 +55,9 @@ export function parseArgs(argv: string[]): SyncOptions {
     if (key === "--app" && value) {
       result.app = value;
       index += 1;
+    } else if (key === "--lock" && value) {
+      result.lock = value;
+      index += 1;
     } else if (key === "--platform" && (value === "darwin" || value === "linux" || value === "win32")) {
       result.platform = value;
       index += 1;
@@ -67,7 +71,45 @@ export function parseArgs(argv: string[]): SyncOptions {
       throw new Error(`Unknown or incomplete argument: ${key}`);
     }
   }
+  if (result.app && result.lock) throw new Error("--app and --lock cannot be used together.");
+  if (result.version && !result.app) throw new Error("--version can only be used with --app.");
   return result;
+}
+
+export function parseRuntimeLock(value: unknown): RuntimeLock {
+  if (!value || typeof value !== "object") throw new Error("Runtime lock must be a JSON object.");
+  const candidate = value as Partial<RuntimeLock>;
+  if (candidate.schemaVersion !== 1) throw new Error("Unsupported runtime lock schema.");
+  if (typeof candidate.appVersion !== "string" || !/^\d+\.\d+\.\d+$/u.test(candidate.appVersion)) {
+    throw new Error("Runtime lock has an invalid App version.");
+  }
+  if (candidate.platform !== "darwin" && candidate.platform !== "linux" && candidate.platform !== "win32") {
+    throw new Error("Runtime lock has an invalid platform.");
+  }
+  if (typeof candidate.arch !== "string" || !candidate.arch.trim()) {
+    throw new Error("Runtime lock has an invalid architecture.");
+  }
+  if (typeof candidate.url !== "string") throw new Error("Runtime lock has no artifact URL.");
+  let url: URL;
+  try {
+    url = new URL(candidate.url);
+  } catch (error) {
+    throw new Error("Runtime lock has an invalid artifact URL.", { cause: error });
+  }
+  if (url.protocol !== "https:") throw new Error("Runtime lock artifact URL must use HTTPS.");
+  if (typeof candidate.sha512 !== "string"
+    || Buffer.from(candidate.sha512, "base64").length !== 64
+    || Buffer.from(candidate.sha512, "base64").toString("base64") !== candidate.sha512) {
+    throw new Error("Runtime lock has an invalid SHA-512 digest.");
+  }
+  return {
+    schemaVersion: 1,
+    appVersion: candidate.appVersion,
+    platform: candidate.platform,
+    arch: candidate.arch,
+    url: url.href,
+    sha512: candidate.sha512
+  };
 }
 
 export function manifestUrl(platform: SyncOptions["platform"], arch: string): string {
@@ -454,6 +496,26 @@ async function getLocalAppVersion(app: string): Promise<string> {
   );
 }
 
+async function resolveLockedSource(lock: RuntimeLock, temporaryDirectory: string): Promise<RuntimeSource> {
+  const archiveName = basename(new URL(lock.url).pathname) || "zcode-installer";
+  const archive = join(temporaryDirectory, archiveName);
+  console.log(`Downloading ${lock.url}`);
+  await download(lock.url, archive);
+  const actualHash = await sha512Base64(archive);
+  if (actualHash !== lock.sha512) throw new Error("Downloaded installer failed locked SHA-512 verification.");
+  const extracted = await extractWith7Zip(archive, join(temporaryDirectory, "extract"), lock.platform);
+  const runtime = await findFile(extracted, "zcode.cjs");
+  if (!runtime || basename(dirname(runtime)) !== "glm") {
+    throw new Error("Could not locate resources/glm/zcode.cjs.");
+  }
+  return {
+    appVersion: lock.appVersion,
+    glm: dirname(runtime),
+    lock,
+    source: lock.url
+  };
+}
+
 async function resolveSource(options: SyncOptions, temporaryDirectory: string): Promise<RuntimeSource> {
   if (options.app) {
     const app = resolve(options.app);
@@ -466,34 +528,26 @@ async function resolveSource(options: SyncOptions, temporaryDirectory: string): 
     };
   }
 
+  if (options.lock) {
+    const lockPath = resolve(root, options.lock);
+    const lock = parseRuntimeLock(JSON.parse(await readFile(lockPath, "utf8")));
+    return resolveLockedSource(lock, temporaryDirectory);
+  }
+
   const url = manifestUrl(options.platform, options.arch);
   const manifest = parse(await fetchText(url)) as UpdateManifest;
   const artifact = chooseArtifact(manifest, options.platform);
   const artifactUrl = `${url.slice(0, url.lastIndexOf("/") + 1)}${artifact.url}`;
-  const archive = join(temporaryDirectory, basename(artifact.url));
-  console.log(`Downloading ${artifactUrl}`);
-  await download(artifactUrl, archive);
-  const actualHash = await sha512Base64(archive);
-  if (actualHash !== artifact.sha512) throw new Error("Downloaded installer failed SHA-512 verification.");
-  const extracted = await extractWith7Zip(archive, join(temporaryDirectory, "extract"), options.platform);
-  const runtime = await findFile(extracted, "zcode.cjs");
-  if (!runtime || basename(dirname(runtime)) !== "glm") {
-    throw new Error("Could not locate resources/glm/zcode.cjs.");
-  }
   if (manifest.version === undefined) throw new Error("The update manifest does not contain a version.");
-  return {
+  const lock = parseRuntimeLock({
+    schemaVersion: 1,
     appVersion: String(manifest.version),
-    glm: dirname(runtime),
-    lock: {
-      schemaVersion: 1,
-      appVersion: String(manifest.version),
-      platform: options.platform,
-      arch: options.arch,
-      url: artifactUrl,
-      sha512: artifact.sha512
-    },
-    source: artifactUrl
-  };
+    platform: options.platform,
+    arch: options.arch,
+    url: artifactUrl,
+    sha512: artifact.sha512
+  });
+  return resolveLockedSource(lock, temporaryDirectory);
 }
 
 async function sync(options: SyncOptions): Promise<void> {
