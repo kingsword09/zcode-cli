@@ -115,14 +115,17 @@ try {
   await sendAndWait("/login\r", "failure login setup picker", /Set Up Coding Plan/i);
   await sendAndWait("\x1b[B\r", "restored OAuth failure", /Login failed: OAuth HTTP error 404 \(empty or non-JSON response\)/i);
   await sendAndWait("/help\r", "long help", /Use \/help <command> for details/i);
-  await sendAndWait("\x1b[Z", "plan shortcut", /alpha\/model · plan · low/i);
-  await sendAndWait("\x0c", "autonomy shortcut", /alpha\/model · build · low/i);
-  await sendAndWait("\x0e", "model shortcut", /beta\/model · build · low/i);
-  await sendAndWait("\t", "effort shortcut", /beta\/model · build · high/i);
+  await sendAndWait("\x1b[Z", "edit mode shortcut", /alpha\/model · edit · low/i);
+  await Bun.sleep(1_100);
+  await sendAndWait("\x1b[Z", "yolo mode shortcut", /alpha\/model · yolo · low/i);
+  await sendAndWait("\x1b[Z", "plan mode shortcut", /alpha\/model · plan · low/i);
+  await sendAndWait("\x0e", "model shortcut", /beta\/model · plan · low/i);
+  await sendAndWait("\t", "effort shortcut", /beta\/model · plan · high/i);
   await sendAndWait("/model\r", "model picker", /Select model/i);
-  await sendAndWait("alpha\r", "model picker selection", /alpha\/model · build · high/i);
+  await sendAndWait("alpha\r", "model picker selection", /alpha\/model · plan · high/i);
   await sendAndWait("/effort\r", "effort picker", /Select reasoning effort/i);
-  await sendAndWait("\x1b[B\r", "effort picker selection", /alpha\/model · build · low/i);
+  await sendAndWait("\x1b[B\r", "effort picker selection", /alpha\/model · plan · low/i);
+  await sendAndWait("\x1b[Z", "build mode shortcut", /alpha\/model · build · low/i);
   await sendAndWait("\x16", "clipboard image", /1 image attached/i);
   await sendAndWait("inspect @ind", "workspace path suggestions", /index\.ts[\s\S]*src\/index\.ts/i);
   await sendAndWait("\r", "workspace path completion", /inspect @src\/index\.ts/i);
@@ -278,12 +281,14 @@ if (plain.includes("feature-secret-api-key") || plain.includes("override-fixture
 
 let stateOffset = 0;
 for (const [label, pattern] of [
-  ["mode shortcut", /alpha\/model · plan · low/i],
-  ["autonomy shortcut", /alpha\/model · build · low/i],
-  ["model shortcut", /beta\/model · build · low/i],
-  ["effort shortcut", /beta\/model · build · high/i],
-  ["model picker switch", /alpha\/model · build · high/i],
-  ["effort picker switch", /alpha\/model · build · low/i]
+  ["edit mode shortcut", /alpha\/model · edit · low/i],
+  ["yolo mode shortcut", /alpha\/model · yolo · low/i],
+  ["plan mode shortcut", /alpha\/model · plan · low/i],
+  ["model shortcut preserving plan", /beta\/model · plan · low/i],
+  ["effort shortcut preserving plan", /beta\/model · plan · high/i],
+  ["model picker preserving plan", /alpha\/model · plan · high/i],
+  ["effort picker preserving plan", /alpha\/model · plan · low/i],
+  ["build mode shortcut", /alpha\/model · build · low/i]
 ] as const) {
   const match = pattern.exec(plain.slice(stateOffset));
   if (!match) throw new Error(`Missing ordered ${label} state in feature TUI smoke.\n${plain.slice(-6_000)}`);
@@ -292,7 +297,6 @@ for (const [label, pattern] of [
 
 for (const [label, pattern] of [
   ["mode transcript", /Mode: plan/i],
-  ["autonomy transcript", /Autonomy level:/i],
   ["model command transcript", /[›↪]\s*\/model\s+(?:alpha|beta)\/model/i],
   ["model response transcript", /Model switched to/i],
   ["effort command transcript", /[›↪]\s*\/effort\s+(?:low|high)/i],

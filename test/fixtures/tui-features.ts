@@ -495,6 +495,7 @@ await runTui({
       model = input.slice("/model ".length);
       return {
         response: `Model switched to ${model}.`,
+        mode: "build",
         model,
         thoughtLevel: effort,
         effortOptions: [{ id: "low", label: "Low" }, { id: "high", label: "High" }]
@@ -502,7 +503,7 @@ await runTui({
     }
     if (input.startsWith("/effort ")) {
       effort = input.slice("/effort ".length);
-      return { response: `Reasoning effort switched to ${effort}.`, model, thoughtLevel: effort };
+      return { response: `Reasoning effort switched to ${effort}.`, mode: "build", model, thoughtLevel: effort };
     }
     if (input === "/mcp connect docs") return { response: "MCP connected: docs." };
     if (input === "/workflows") return { response: "", workflowPanel: workflowPanel() };

@@ -123,10 +123,13 @@ import {
   type SessionMetrics
 } from "./session-status.ts";
 import {
-  executionMode,
-  nextAutonomyMode,
+  appliesToSetting,
+  nextMode,
   nextPickerCommand,
-  toggledWorkMode
+  normalizedMode,
+  settingTargetForCommand,
+  type Mode,
+  type SettingTarget
 } from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
@@ -271,8 +274,7 @@ class ZCodeTui {
   private currentToolGroupBlockId?: string;
   private currentToolGroupMessageId?: string;
   private pendingAttachments: PromptImageAttachment[] = [];
-  private mode: string;
-  private lastExecutionMode: string;
+  private mode: Mode;
   private model: string;
   private thoughtLevel?: string;
   private modelOptions: unknown[];
@@ -316,8 +318,7 @@ class ZCodeTui {
     this.colorsEnabled = !options.noColor && !process.env.NO_COLOR;
     this.theme = createTheme(this.colorsEnabled, colorSchemeFromColorFgBg() ?? "dark");
     this.transcript = new Transcript(this.theme.searchMatch);
-    this.mode = options.initialMode ?? "build";
-    this.lastExecutionMode = executionMode(this.mode);
+    this.mode = normalizedMode(options.initialMode);
     this.model = modelLabel(options.initialModel);
     this.thoughtLevel = options.initialThoughtLevel;
     this.modelOptions = [...(options.modelOptions ?? [])];
@@ -608,15 +609,11 @@ class ZCodeTui {
         return { consume: true };
       }
       if (matchesKey(data, "shift+tab")) {
-        void this.switchWorkMode();
+        void this.switchMode();
         return { consume: true };
       }
       if (matchesKey(data, "ctrl+n")) {
         void this.switchModel();
-        return { consume: true };
-      }
-      if (matchesKey(data, "ctrl+l")) {
-        void this.switchAutonomy();
         return { consume: true };
       }
       if (matchesKey(data, "tab") && !this.editor.getText()) {
@@ -746,7 +743,7 @@ class ZCodeTui {
       "Select model",
       `Current model: ${this.model}.`,
       modelPicker(this.modelOptions, this.model),
-      true
+      "model"
     )) {
       return;
     }
@@ -754,7 +751,7 @@ class ZCodeTui {
       "Select reasoning effort",
       `Current reasoning effort: ${this.thoughtLevel ?? "default"}.`,
       effortPicker(this.effortOptions, this.thoughtLevel),
-      true
+      "effort"
     )) {
       return;
     }
@@ -808,7 +805,7 @@ class ZCodeTui {
           input.startsWith("/") ? input : promptInput(input, attachments),
           callOptions
         );
-        await this.handleResult(result);
+        await this.handleResult(result, true, settingTargetForCommand(input));
         accepted = true;
       } else {
         const outcome = await this.options.sendInput(promptInput(input, attachments), callOptions);
@@ -863,7 +860,11 @@ class ZCodeTui {
     return true;
   }
 
-  private async handleResult(result: unknown, renderResponse = true): Promise<void> {
+  private async handleResult(
+    result: unknown,
+    renderResponse = true,
+    settingTarget?: SettingTarget
+  ): Promise<void> {
     if (!isRecord(result)) return;
     if (result.resetSessionProjection === true) {
       this.clearTranscriptProjection();
@@ -878,19 +879,24 @@ class ZCodeTui {
       this.completeThinking();
       this.recordAssistantText(this.assistantStream.reconcile(response));
     }
-    if (typeof result.mode === "string") {
-      this.mode = result.mode;
-      this.lastExecutionMode = executionMode(this.mode, this.lastExecutionMode);
+    if (appliesToSetting(settingTarget, "mode") && typeof result.mode === "string") {
+      this.mode = normalizedMode(result.mode, this.mode);
     }
-    if (result.model !== undefined) this.model = modelLabel(result.model);
+    if (appliesToSetting(settingTarget, "model") && result.model !== undefined) {
+      this.model = modelLabel(result.model);
+    }
     if (typeof result.loginRequired === "boolean") {
       this.setLoginRequired(result.loginRequired);
-      if (!result.loginRequired && result.model === undefined) {
+      if (!result.loginRequired
+        && result.model === undefined
+        && appliesToSetting(settingTarget, "model")) {
         const access = await readConfiguredModelAccess();
         if (access) this.model = access.model;
       }
     }
-    if (typeof result.thoughtLevel === "string") this.thoughtLevel = result.thoughtLevel;
+    if (appliesToSetting(settingTarget, "effort") && typeof result.thoughtLevel === "string") {
+      this.thoughtLevel = result.thoughtLevel;
+    }
     if (Array.isArray(result.modelOptions)) this.modelOptions = [...result.modelOptions];
     if (Array.isArray(result.effortOptions)) this.effortOptions = [...result.effortOptions];
     this.sessionMetrics = mergeMetrics(this.sessionMetrics, projectionMetrics(result.projection));
@@ -1938,7 +1944,7 @@ class ZCodeTui {
     title: string,
     prompt: string,
     picker: PickerSpec,
-    silent = false
+    settingTarget?: SettingTarget
   ): Promise<boolean> {
     if (picker.items.length === 0) return false;
     const selected = await this.showChoice({
@@ -1948,7 +1954,7 @@ class ZCodeTui {
       selectedIndex: picker.selectedIndex
     });
     if (typeof selected?.payload === "string") {
-      if (silent) await this.applySettingCommand(selected.payload);
+      if (settingTarget) await this.applySettingCommand(selected.payload, settingTarget);
       else await this.submit(selected.payload);
     }
     return true;
@@ -2269,17 +2275,12 @@ class ZCodeTui {
     return false;
   }
 
-  private async switchWorkMode(): Promise<void> {
+  private async switchMode(): Promise<void> {
     if (!this.shortcutAvailable()) return;
-    await this.applyModeShortcut(toggledWorkMode(this.mode, this.lastExecutionMode));
+    await this.applyModeShortcut(nextMode(this.mode));
   }
 
-  private async switchAutonomy(): Promise<void> {
-    if (!this.shortcutAvailable()) return;
-    await this.applyModeShortcut(nextAutonomyMode(this.mode, this.lastExecutionMode));
-  }
-
-  private async applyModeShortcut(nextMode: string): Promise<void> {
+  private async applyModeShortcut(requestedMode: Mode): Promise<void> {
     if (this.settingSwitchInFlight) return;
     if (!this.options.setMode) {
       this.addNotice("Mode switching is unavailable in this runtime.", "warning");
@@ -2287,9 +2288,9 @@ class ZCodeTui {
     }
     this.settingSwitchInFlight = true;
     try {
-      const result = await this.options.setMode(nextMode);
-      this.mode = isRecord(result) ? asString(result.mode) ?? nextMode : asString(result) ?? nextMode;
-      this.lastExecutionMode = executionMode(this.mode, this.lastExecutionMode);
+      const result = await this.options.setMode(requestedMode);
+      const returnedMode = isRecord(result) ? asString(result.mode) : asString(result);
+      this.mode = normalizedMode(returnedMode, requestedMode);
       this.updateMetadata();
     } catch (error) {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
@@ -2305,7 +2306,7 @@ class ZCodeTui {
       this.addNotice("No alternate model is available.", "muted");
       return;
     }
-    await this.applySettingCommand(command);
+    await this.applySettingCommand(command, "model");
   }
 
   private async switchEffort(): Promise<void> {
@@ -2315,10 +2316,10 @@ class ZCodeTui {
       this.addNotice("No alternate reasoning effort is available.", "muted");
       return;
     }
-    await this.applySettingCommand(command);
+    await this.applySettingCommand(command, "effort");
   }
 
-  private async applySettingCommand(command: string): Promise<void> {
+  private async applySettingCommand(command: string, target: SettingTarget): Promise<void> {
     if (this.settingSwitchInFlight) return;
     this.settingSwitchInFlight = true;
     try {
@@ -2326,7 +2327,7 @@ class ZCodeTui {
         inputId: `input_${crypto.randomUUID()}`,
         queryId: `query_${crypto.randomUUID()}`
       });
-      await this.handleResult(result, false);
+      await this.handleResult(result, false, target);
     } catch (error) {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
     } finally {
@@ -2841,10 +2842,6 @@ class ZCodeTui {
     if (!projection) return;
     this.runtimeProjection = projection;
     if (projection.sessionId) this.sessionId = projection.sessionId;
-    if (projection.mode) {
-      this.mode = projection.mode;
-      this.lastExecutionMode = executionMode(this.mode, this.lastExecutionMode);
-    }
     this.sessionMetrics = mergeMetrics(this.sessionMetrics, {
       contextUsed: projection.contextUsage?.used,
       contextWindow: projection.contextUsage?.size,

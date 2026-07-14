@@ -2,22 +2,33 @@ import { describe, expect, test } from "bun:test";
 
 import type { PickerSpec } from "../packages/zcode-tui/src/selectors.ts";
 import {
-  executionMode,
-  nextAutonomyMode,
+  appliesToSetting,
+  nextMode,
   nextPickerCommand,
-  toggledWorkMode
+  normalizedMode,
+  settingTargetForCommand
 } from "../packages/zcode-tui/src/shortcuts.ts";
 
 describe("TUI shortcuts", () => {
-  test("toggles plan mode and cycles official autonomy modes", () => {
-    expect(executionMode("plan")).toBe("build");
-    expect(executionMode("yolo")).toBe("yolo");
-    expect(toggledWorkMode("build", "edit")).toBe("plan");
-    expect(toggledWorkMode("plan", "edit")).toBe("edit");
-    expect(nextAutonomyMode("plan", "edit")).toBe("edit");
-    expect(nextAutonomyMode("build", "build")).toBe("edit");
-    expect(nextAutonomyMode("edit", "edit")).toBe("yolo");
-    expect(nextAutonomyMode("yolo", "yolo")).toBe("build");
+  test("cycles every official mode through one Shift+Tab state", () => {
+    expect(normalizedMode("invalid")).toBe("build");
+    expect(nextMode("build")).toBe("edit");
+    expect(nextMode("edit")).toBe("yolo");
+    expect(nextMode("yolo")).toBe("plan");
+    expect(nextMode("plan")).toBe("build");
+  });
+
+  test("isolates mode, model, and effort command results", () => {
+    expect(settingTargetForCommand("/mode plan")).toBe("mode");
+    expect(settingTargetForCommand(" /model local/glm ")).toBe("model");
+    expect(settingTargetForCommand("/effort max")).toBe("effort");
+    expect(settingTargetForCommand("/variant high")).toBe("effort");
+    expect(settingTargetForCommand("/help")).toBeUndefined();
+
+    expect(appliesToSetting("model", "model")).toBe(true);
+    expect(appliesToSetting("model", "mode")).toBe(false);
+    expect(appliesToSetting("effort", "model")).toBe(false);
+    expect(appliesToSetting(undefined, "mode")).toBe(true);
   });
 
   test("cycles picker commands and wraps at the final item", () => {
