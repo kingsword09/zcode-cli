@@ -28,4 +28,14 @@ describe("TUI code highlighter", () => {
     const plain = lines.join("\n").replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "");
     expect(plain).toBe("const answer: number = 42;");
   });
+
+  test("switches to a high-contrast light-terminal palette", () => {
+    const highlighter = new CodeHighlighter(true, "dark");
+    const dark = highlighter.highlight("const answer = 42;", "typescript").join("\n");
+    highlighter.setColorScheme("light");
+    const light = highlighter.highlight("const answer = 42;", "typescript").join("\n");
+
+    expect(dark).toContain("\x1b[1;38;5;75mconst");
+    expect(light).toContain("\x1b[1;38;5;25mconst");
+  });
 });

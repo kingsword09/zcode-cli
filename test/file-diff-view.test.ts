@@ -106,6 +106,19 @@ describe("TUI file diff view", () => {
     expect(rendered).toContain("\x1b[38;5;117;48;5;24m");
   });
 
+  test("uses readable pastel diff colors on light terminals", () => {
+    const view = new FileDiffView(createTheme(true, "light"), {
+      toolName: "Edit",
+      state: "complete",
+      diffs: [officialDisplay]
+    });
+    const rendered = view.render(72).join("\n");
+
+    expect(rendered).toContain("\x1b[38;5;22;48;5;194m");
+    expect(rendered).toContain("\x1b[38;5;88;48;5;224m");
+    expect(rendered).toContain("\x1b[38;5;24;48;5;189m");
+  });
+
   test("wraps CJK changes within narrow terminals", () => {
     const view = new FileDiffView(createTheme(false), {
       toolName: "Edit",
