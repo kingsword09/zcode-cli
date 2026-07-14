@@ -8,6 +8,8 @@ import { join, resolve } from "node:path";
 const root = join(import.meta.dir, "..");
 const runtime = join(root, "vendor", "zcode.cjs");
 if (!existsSync(runtime)) throw new Error("vendor/zcode.cjs is missing; run `bun run sync:local` first.");
+const node = process.env.ZCODE_NODE || Bun.which("node");
+if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode runtime.");
 
 const decoder = new TextDecoder();
 let output = "";
@@ -16,7 +18,7 @@ const configPath = join(temporaryHome, ".zcode", "cli", "config.json");
 const smokeApiKey = "smoke-api-key-not-real";
 const command = process.argv[2]
   ? [resolve(process.argv[2])]
-  : [process.execPath, join(root, "bin", "zcode.ts")];
+  : [node, join(root, "bin", "zcode.js")];
 const terminal = new Bun.Terminal({
   cols: 100,
   rows: 32,
@@ -160,4 +162,4 @@ if (!/mode switched to plan|current mode: plan|default · plan/i.test(plain)) {
   throw new Error(`The /mode command did not update the TUI.\n${plain.slice(-4_000)}`);
 }
 
-console.log("Bun.Terminal + pi-tui smoke test passed.");
+console.log("zigpty + pi-tui smoke test passed.");

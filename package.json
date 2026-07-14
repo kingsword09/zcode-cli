@@ -1,19 +1,21 @@
 {
   "name": "zcode-app-cli",
   "version": "3.3.5-1",
-  "description": "Unofficial Bun and pi-tui terminal client for the ZCode agent runtime",
+  "description": "Unofficial terminal client for the ZCode agent runtime",
   "keywords": [
     "agent",
     "ai",
-    "bun",
     "cli",
     "coding-agent",
     "glm",
+    "node",
     "pi-tui",
+    "pty",
     "terminal",
     "tui",
     "z-ai",
-    "zcode"
+    "zcode",
+    "zigpty"
   ],
   "homepage": "https://github.com/kingsword09/zcode-cli#readme",
   "bugs": {
@@ -27,11 +29,10 @@
   },
   "type": "module",
   "bin": {
-    "zcode": "bin/zcode.ts"
+    "zcode": "bin/zcode.js"
   },
   "files": [
-    "bin",
-    "src",
+    "bin/zcode.js",
     "vendor",
     "config.example.json",
     "zcode-runtime.lock.json",
@@ -39,11 +40,13 @@
     "LICENSE"
   ],
   "scripts": {
-    "build:tui": "bun build packages/zcode-tui/src/index.ts --target=node --format=esm --outdir=packages/zcode-tui/dist --external=@earendil-works/pi-tui",
-    "sync": "bun run build:tui && bun scripts/sync-runtime.ts",
-    "sync:locked": "bun run build:tui && bun scripts/sync-runtime.ts --lock zcode-runtime.lock.json",
-    "sync:local": "bun run build:tui && bun scripts/sync-runtime.ts --app /Applications/ZCode.app",
-    "check": "bun run build:tui && bun scripts/check-runtime.ts",
+    "build": "tsdown",
+    "build:launcher": "tsdown --filter launcher",
+    "build:tui": "tsdown --filter tui",
+    "sync": "bun run build && bun scripts/sync-runtime.ts",
+    "sync:locked": "bun run build && bun scripts/sync-runtime.ts --lock zcode-runtime.lock.json",
+    "sync:local": "bun run build && bun scripts/sync-runtime.ts --app /Applications/ZCode.app",
+    "check": "bun run build && bun scripts/check-runtime.ts",
     "check:oauth-callback": "bun scripts/smoke-oauth-callback.ts",
     "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts",
     "test": "bun test",
@@ -55,7 +58,6 @@
     "prepack": "bun scripts/check-package.ts --prepack"
   },
   "engines": {
-    "bun": ">=1.3.0",
     "node": ">=22.19.0"
   },
   "packageManager": "bun@1.3.12",
@@ -65,12 +67,14 @@
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.80.6",
-    "cli-highlight": "^2.1.11",
-    "diff": "^9.0.0"
+    "zigpty": "^0.2.1"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14",
     "beautiful-mermaid": "^1.1.3",
+    "bun-types": "^1.3.14",
+    "cli-highlight": "^2.1.11",
+    "diff": "^9.0.0",
+    "tsdown": "^0.22.7",
     "typescript": "^7.0.2",
     "yaml": "^2.8.1"
   }

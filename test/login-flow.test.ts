@@ -21,13 +21,13 @@ describe("TUI external login routing", () => {
     expect(shouldUseNoBrowserForLogin({}, "darwin")).toBe(false);
   });
 
-  test("re-enters the Bun launcher instead of passing --oauth to the official runtime", () => {
+  test("re-enters the CLI launcher instead of passing --oauth to the official runtime", () => {
     expect(suspendedZaiLoginCommand({
-      ZCODE_APP_CLI_BUN: "/opt/bun",
-      ZCODE_APP_CLI_ENTRY: "/package/bin/zcode.ts"
+      ZCODE_APP_CLI_EXECUTABLE: "/opt/node",
+      ZCODE_APP_CLI_ENTRY: "/package/bin/zcode.js"
     }, "/opt/node", "/package/vendor/zcode.cjs")).toEqual({
-      args: ["/package/bin/zcode.ts", "login", "--oauth"],
-      program: "/opt/bun"
+      args: ["/package/bin/zcode.js", "login", "--oauth"],
+      program: "/opt/node"
     });
     expect(suspendedZaiLoginCommand({}, "/opt/node", "/package/vendor/zcode.cjs")).toEqual({
       args: ["/package/vendor/zcode.cjs", "login"],

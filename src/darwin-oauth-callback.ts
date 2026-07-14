@@ -2,6 +2,8 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 
+import { captureCommand, type CommandResult } from "./command.ts";
+
 const launchServicesRegister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const managedBundlePrefix = "dev.zcode.cli.oauth-callback.";
 const managedAppPrefix = "ZCode CLI OAuth Callback ";
@@ -25,12 +27,6 @@ function run(argv) {
 }
 `;
 
-interface CommandResult {
-  code: number;
-  stderr: string;
-  stdout: string;
-}
-
 export type CommandRunner = (command: string, args: string[]) => Promise<CommandResult>;
 
 interface RecoveryRecord {
@@ -53,17 +49,7 @@ export interface DarwinUrlCallbackOptions {
 }
 
 async function runCommand(command: string, args: string[]): Promise<CommandResult> {
-  const child = Bun.spawn([command, ...args], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe"
-  });
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text()
-  ]);
-  return { code, stdout, stderr };
+  return await captureCommand(command, args);
 }
 
 async function checkedRun(

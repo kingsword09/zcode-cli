@@ -11,8 +11,7 @@ import { parseRuntimeLock } from "./sync-runtime.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const publishedFiles = [
-  "bin",
-  "src",
+  "bin/zcode.js",
   "vendor",
   "config.example.json",
   "zcode-runtime.lock.json",
@@ -76,13 +75,16 @@ export async function validatePackageTree(base = root): Promise<void> {
   const required = [
     "LICENSE",
     "README.md",
+    "bin/zcode.js",
     "bin/zcode.ts",
     "config.example.json",
     "package.json",
+    "src/command.ts",
     "src/darwin-oauth-callback.ts",
     "src/launcher.ts",
     "src/model-access.ts",
     "src/zai-oauth.ts",
+    "tsdown.config.ts",
     "vendor/extraction.json",
     "vendor/node_modules/@zcode/tui/dist/index.js",
     "vendor/node_modules/@zcode/tui/package.json",
@@ -101,7 +103,7 @@ export async function validatePackageTree(base = root): Promise<void> {
   }
   const keywords = Array.isArray(packageJson.keywords) ? packageJson.keywords : [];
   if (!keywords.every((keyword) => typeof keyword === "string")
-    || !["bun", "cli", "tui", "zcode"].every((keyword) => keywords.includes(keyword))) {
+    || !["cli", "node", "pty", "tui", "zcode", "zigpty"].every((keyword) => keywords.includes(keyword))) {
     throw new Error("The npm package keywords are incomplete.");
   }
   if (packageJson.homepage !== "https://github.com/kingsword09/zcode-cli#readme"
@@ -113,12 +115,17 @@ export async function validatePackageTree(base = root): Promise<void> {
   if (packageJson.license !== "MIT" || typeof packageJson.author !== "string" || !packageJson.author.trim()) {
     throw new Error("The npm package license or author metadata is missing.");
   }
-  if (packageJson.bin?.zcode !== "bin/zcode.ts") throw new Error("The zcode npm bin entry is invalid.");
+  if (packageJson.bin?.zcode !== "bin/zcode.js") throw new Error("The zcode npm bin entry is invalid.");
   if (!sameStringArray(packageJson.files, publishedFiles)) {
     throw new Error("The package.json files allowlist does not match the reviewed release contents.");
   }
   if (packageJson.publishConfig?.access !== "public" || packageJson.publishConfig?.provenance !== true) {
     throw new Error("npm public access and provenance must remain enabled.");
+  }
+  if (typeof packageJson.dependencies?.zigpty !== "string"
+    || !packageJson.dependencies.zigpty.startsWith("^")
+    || packageJson.dependencies.bun !== undefined) {
+    throw new Error("The zigpty runtime dependency is missing or Bun is still a runtime dependency.");
   }
 
   const lock = parseRuntimeLock(JSON.parse(await readFile(join(base, "zcode-runtime.lock.json"), "utf8")));
@@ -156,11 +163,16 @@ export async function validatePackageTree(base = root): Promise<void> {
     throw new Error("Packaged @zcode/tui metadata or pi-tui dependency is inconsistent.");
   }
 
-  const launcher = await stat(join(base, "bin", "zcode.ts"));
-  const launcherSource = await readFile(join(base, "bin", "zcode.ts"), "utf8");
-  if (!launcherSource.startsWith("#!/usr/bin/env bun\n")) throw new Error("The zcode launcher has no Bun shebang.");
-  if (process.platform !== "win32" && (launcher.mode & 0o111) === 0) {
-    throw new Error("The zcode launcher is not executable.");
+  const nodeLauncher = await stat(join(base, "bin", "zcode.js"));
+  const nodeLauncherSource = await readFile(join(base, "bin", "zcode.js"), "utf8");
+  if (!nodeLauncherSource.startsWith("#!/usr/bin/env node\n")) {
+    throw new Error("The public zcode launcher has no Node.js shebang.");
+  }
+  if (nodeLauncherSource.includes("Bun.") || !nodeLauncherSource.includes('from "zigpty"')) {
+    throw new Error("The published launcher is not the reviewed Node.js + zigpty bundle.");
+  }
+  if (process.platform !== "win32" && (nodeLauncher.mode & 0o111) === 0) {
+    throw new Error("The public zcode launcher is not executable.");
   }
 
   console.log(`Package tree checks passed for ${String(packageJson.name)}@${String(packageJson.version)}.`);
@@ -172,7 +184,7 @@ if (invokedDirectly) {
     const args = process.argv.slice(2);
     if (args.some((arg) => arg !== "--prepack")) throw new Error(`Unknown argument: ${args.join(" ")}`);
     if (args.includes("--prepack")) {
-      await run(process.execPath, ["run", "build:tui"]);
+      await run(process.execPath, ["run", "build"]);
       await run(process.execPath, ["scripts/check-runtime.ts"]);
     }
     await validatePackageTree();

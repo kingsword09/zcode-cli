@@ -4,7 +4,7 @@ import { isTuiInvocation, normalizeLoginArgs } from "../src/launcher.ts";
 import { classifyZaiOAuthInvocation } from "../src/zai-oauth.ts";
 
 describe("launcher routing", () => {
-  test("routes full-screen invocations through Bun.Terminal", () => {
+  test("routes full-screen invocations through the zigpty terminal", () => {
     expect(isTuiInvocation([])).toBe(true);
     expect(isTuiInvocation(["tui"])).toBe(true);
     expect(isTuiInvocation(["--cwd", "/tmp", "--mode", "plan"])).toBe(true);

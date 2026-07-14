@@ -5,7 +5,8 @@ Unofficial terminal client for the official agent runtime shipped with ZCode Des
 The project extracts the upstream `resources/glm` runtime, injects a local
 `@zcode/tui` implementation based on
 [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi/tree/main/packages/tui),
-and starts it through Bun's native `Bun.Terminal` PTY API.
+and starts it through the native [`zigpty`](https://github.com/pithings/zigpty)
+PTY binding for Node.js.
 
 This project is not affiliated with or endorsed by Z.ai. ZCode and its bundled
 runtime remain subject to their upstream terms. Confirm that you are allowed to
@@ -16,20 +17,24 @@ redistribute the extracted runtime before publishing the npm package.
 Install or update the CLI through the `latest` dist-tag:
 
 ```bash
-bun add -g zcode-app-cli@latest
-# or
 npm install -g zcode-app-cli@latest
+# or
+bun add -g zcode-app-cli@latest
 ```
 
 Using `@latest` is intentional because the App-aligned release format uses a
 SemVer prerelease segment such as `3.3.5-2`. The tag always points to the
 newest validated App-plus-build release.
 
+A normal installation requires only Node.js. `zigpty` ships small prebuilt
+native bindings for each supported platform, with no compiler or postinstall
+step required.
+
 ## Architecture
 
 ```text
-Bun launcher
-  └─ Bun.Terminal (PTY / resize / input forwarding)
+Node.js npm launcher
+  └─ zigpty (PTY / resize / input forwarding)
       └─ Node.js
           └─ official zcode.cjs agent runtime
               └─ local @zcode/tui adapter
@@ -41,13 +46,13 @@ provider-configuration logic remains in the extracted runtime. The local
 package supplies the missing terminal interface and a narrow macOS callback
 bridge for Z.AI's registered Desktop OAuth flow.
 
-Node.js remains necessary because ZCode CLI 0.15.x imports `node:sea`, which Bun
-does not currently implement. Bun owns the outer CLI and native terminal; Node
-is the compatibility host for the extracted upstream kernel. Synchronization
-adds the local TUI/data bridge, OAuth compatibility handoff and clearer HTTP
-diagnostics. OAuth callbacks are passed to the official runtime over stdin; its
-encrypted credential store, Coding Plan key resolver and config writer remain
-the only persistence path.
+Node.js starts the public npm command and remains the compatibility host for the
+extracted upstream kernel. `zigpty` owns the native terminal while the official
+runtime stays in a separate PTY child process. Synchronization adds the local
+TUI/data bridge, OAuth compatibility handoff and clearer HTTP diagnostics. OAuth
+callbacks are passed to the official runtime over stdin; its encrypted credential
+store, Coding Plan key resolver and config writer remain the only persistence
+path.
 
 ## Current TUI functionality
 
@@ -148,7 +153,7 @@ temporary per-shell setting:
 ```bash
 export ZCODE_TUI_NOTIFICATION_METHOD=auto       # auto|osc9|bel|native|off
 export ZCODE_TUI_NOTIFICATION_CONDITION=always  # unfocused|always
-bun bin/zcode.ts
+node bin/zcode.js
 ```
 
 ### Conversation rewind
@@ -192,10 +197,13 @@ an oversized selected block without rendering the entire message at once.
 
 ## Requirements
 
-- Bun 1.3 or newer;
 - Node.js 22.19 or newer;
-- macOS, Linux or Windows for `Bun.Terminal`;
-- `7z` when downloading and extracting a remote installer.
+- macOS, Linux or Windows on x64 or ARM64.
+
+Developing or publishing from source additionally requires Bun 1.3 or newer.
+`7z` is needed only when downloading and extracting a remote installer. npm
+installs the approximately 422 KB `zigpty` package containing all supported
+prebuilt PTY bindings.
 
 Z.AI browser OAuth currently requires macOS because the registered provider
 callback is `zcode://zai-auth/callback`; API-key and custom-provider access work
@@ -335,7 +343,7 @@ gate. Never commit the populated file, and keep its mode at `600`.
 After saving the config, no login command is required. Start the client:
 
 ```bash
-bun bin/zcode.ts
+node bin/zcode.js
 ```
 
 Or, after `bun link` or an npm installation:
@@ -397,20 +405,20 @@ of fixed timers and do not make model API calls.
 Start the client directly:
 
 ```bash
-bun bin/zcode.ts
+node bin/zcode.js
 ```
 
 For the OAuth path:
 
 ```bash
-bun bin/zcode.ts login --oauth
-bun bin/zcode.ts
+node bin/zcode.js login --oauth
+node bin/zcode.js
 ```
 
 To print the authorization URL without launching the browser:
 
 ```bash
-bun bin/zcode.ts login --oauth --no-browser
+node bin/zcode.js login --oauth --no-browser
 ```
 
 The URL must still be opened on the same Mac so its `zcode://` callback reaches
@@ -489,19 +497,18 @@ The synchronization command:
 The published package is controlled by the `files` allowlist in `package.json`.
 It contains only:
 
-- `bin/zcode.ts`, the executable Bun launcher;
-- `src/`, the launcher, configuration and authentication bridge;
+- `bin/zcode.js`, the bundled executable Node.js launcher;
 - `vendor/`, the verified official `zcode.cjs` runtime, official bundled
   plugins and the compiled local `@zcode/tui` adapter;
 - `config.example.json` and `zcode-runtime.lock.json`;
 - `README.md`, `LICENSE` and the required npm `package.json`.
 
-Tests, GitHub workflows, build scripts, TUI TypeScript sources, local config,
-`.release/` artifacts and development `node_modules` are not published. npm
-installs the declared runtime dependencies such as pi-tui separately. The small
-launcher remains TypeScript intentionally because the npm bin uses Bun's native
-TypeScript runtime; the TUI is the component compiled and injected into
-`vendor/` before publication.
+Tests, GitHub workflows, build scripts, launcher/TUI TypeScript sources, local
+config, `.release/` artifacts and development `node_modules` are not published.
+npm installs only the declared pi-tui and zigpty runtime dependencies. The
+launcher and TUI are compiled to JavaScript with `tsdown`; its launcher banner
+adds the Node.js shebang directly, with no post-build rewrite. The compiled TUI
+is injected into `vendor/` before publication.
 
 ## Automated npm publishing
 

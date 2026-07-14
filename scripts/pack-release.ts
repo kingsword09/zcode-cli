@@ -34,35 +34,32 @@ interface PackageIdentity {
 const requiredFiles = [
   "LICENSE",
   "README.md",
-  "bin/zcode.ts",
+  "bin/zcode.js",
   "config.example.json",
   "package.json",
-  "src/darwin-oauth-callback.ts",
-  "src/launcher.ts",
-  "src/model-access.ts",
-  "src/zai-oauth.ts",
   "vendor/extraction.json",
   "vendor/node_modules/@zcode/tui/dist/index.js",
   "vendor/node_modules/@zcode/tui/package.json",
   "vendor/zcode.cjs",
   "zcode-runtime.lock.json"
 ];
-const allowedRoots = new Set(["LICENSE", "README.md", "config.example.json", "package.json", "zcode-runtime.lock.json"]);
-const allowedPrefixes = ["bin/", "src/", "vendor/"];
+const allowedRoots = new Set([
+  "LICENSE",
+  "README.md",
+  "bin/zcode.js",
+  "config.example.json",
+  "package.json",
+  "zcode-runtime.lock.json"
+]);
+const allowedPrefixes = ["vendor/"];
 
-function parsePackResult(stdout: string): PackResult {
+export function parsePackResult(stdout: string): PackResult {
   const trimmed = stdout.trim();
+  const start = trimmed.lastIndexOf("\n[") + 1;
   try {
-    const parsed = JSON.parse(trimmed) as PackResult[];
+    const parsed = JSON.parse(trimmed.slice(start)) as PackResult[];
     if (parsed.length === 1) return parsed[0]!;
-  } catch {
-    const start = trimmed.indexOf("[");
-    const end = trimmed.lastIndexOf("]");
-    if (start >= 0 && end > start) {
-      const parsed = JSON.parse(trimmed.slice(start, end + 1)) as PackResult[];
-      if (parsed.length === 1) return parsed[0]!;
-    }
-  }
+  } catch {}
   throw new Error("npm pack did not return one JSON package result.");
 }
 
@@ -79,7 +76,7 @@ export function validatePackResult(result: PackResult, packageJson: PackageIdent
       throw new Error(`npm tarball contains an unreviewed path: ${path}`);
     }
   }
-  const bin = result.files.find((file) => file.path === "bin/zcode.ts");
+  const bin = result.files.find((file) => file.path === "bin/zcode.js");
   if (!bin || (bin.mode & 0o111) === 0) throw new Error("npm tarball zcode bin is not executable.");
 }
 

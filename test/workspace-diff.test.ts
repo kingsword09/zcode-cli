@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   enrichWorkspaceFiles,
-  parseWorkspaceDiff
+  parseWorkspaceDiff,
+  readWorkspaceDiff
 } from "../packages/zcode-tui/src/workspace-diff.ts";
 
 const temporaryDirectories: string[] = [];
@@ -75,5 +77,26 @@ describe("workspace diff reader", () => {
       structuredPatch: [{ lines: ["+first", "+second"] }]
     });
     expect(snapshot.files.find((file) => file.filePath === "image.bin")?.isBinary).toBe(true);
+  });
+
+  test("reads a real Git worktree through Node child processes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-diff-git-"));
+    temporaryDirectories.push(directory);
+    const runGit = (...args: string[]) => spawnSync("git", args, { cwd: directory, encoding: "utf8" });
+
+    expect(runGit("init", "--quiet").status).toBe(0);
+    await writeFile(join(directory, "tracked.txt"), "before\n");
+    expect(runGit("add", "tracked.txt").status).toBe(0);
+    expect(runGit(
+      "-c", "user.name=ZCode Test",
+      "-c", "user.email=zcode@example.invalid",
+      "commit", "--quiet", "-m", "initial"
+    ).status).toBe(0);
+    await writeFile(join(directory, "tracked.txt"), "after\n");
+    await writeFile(join(directory, "untracked.txt"), "new\n");
+
+    const snapshot = await readWorkspaceDiff(directory);
+    expect(snapshot.error).toBeUndefined();
+    expect(snapshot.files.map((file) => file.filePath)).toEqual(["tracked.txt", "untracked.txt"]);
   });
 });

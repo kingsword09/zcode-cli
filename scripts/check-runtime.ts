@@ -12,7 +12,6 @@ const node = process.env.ZCODE_NODE || Bun.which("node");
 if (!existsSync(runtime)) throw new Error("vendor/zcode.cjs is missing; run `bun run sync` first.");
 if (!existsSync(tui)) throw new Error("The local @zcode/tui adapter is missing; run `bun run sync` first.");
 if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode runtime.");
-if (typeof Bun.Terminal !== "function") throw new Error("This Bun build does not provide Bun.Terminal.");
 
 const runtimeSource = await Bun.file(runtime).text();
 if (runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')
@@ -91,11 +90,18 @@ const tuiImport = await execute(node, [
 ]);
 if (tuiImport.code !== 0) throw new Error(`TUI import failed: ${tuiImport.stderr}`);
 
-const launcher = await execute(process.execPath, [join(root, "bin", "zcode.ts"), "--version"]);
+const zigptyImport = await execute(node, [
+  "--input-type=module",
+  "--eval",
+  "const module = await import('zigpty'); if (!module.hasNative) process.exit(2);"
+]);
+if (zigptyImport.code !== 0) throw new Error(`zigpty native import failed: ${zigptyImport.stderr}`);
+
+const launcher = await execute(node, [join(root, "bin", "zcode.js"), "--version"]);
 if (launcher.code !== 0 || launcher.stdout.trim() !== version.stdout.trim()) {
-  throw new Error(`Bun launcher check failed: ${launcher.stderr || launcher.stdout}`);
+  throw new Error(`Node.js launcher check failed: ${launcher.stderr || launcher.stdout}`);
 }
 
 console.log(
-  `Runtime checks passed for ZCode CLI ${version.stdout.trim()} with Bun ${Bun.version}, Node ${nodeVersion.stdout.trim()}, and pi-tui.`
+  `Runtime checks passed for ZCode CLI ${version.stdout.trim()} with Node ${nodeVersion.stdout.trim()}, zigpty, and pi-tui.`
 );

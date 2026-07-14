@@ -8,19 +8,16 @@ import { validatePackageTree } from "../scripts/check-package.ts";
 import {
   type PackFile,
   type PackResult,
+  parsePackResult,
   validatePackResult
 } from "../scripts/pack-release.ts";
 
 const requiredPaths = [
   "LICENSE",
   "README.md",
-  "bin/zcode.ts",
+  "bin/zcode.js",
   "config.example.json",
   "package.json",
-  "src/darwin-oauth-callback.ts",
-  "src/launcher.ts",
-  "src/model-access.ts",
-  "src/zai-oauth.ts",
   "vendor/extraction.json",
   "vendor/node_modules/@zcode/tui/dist/index.js",
   "vendor/node_modules/@zcode/tui/package.json",
@@ -29,7 +26,7 @@ const requiredPaths = [
 ];
 
 function packFile(path: string): PackFile {
-  return { path, mode: path === "bin/zcode.ts" ? 0o755 : 0o644, size: 1 };
+  return { path, mode: path === "bin/zcode.js" ? 0o755 : 0o644, size: 1 };
 }
 
 function result(files = requiredPaths.map(packFile)): PackResult {
@@ -46,6 +43,14 @@ function result(files = requiredPaths.map(packFile)): PackResult {
 }
 
 describe("release package", () => {
+  test("parses npm JSON after named tsdown build logs", () => {
+    const expected = result();
+    const output = `$ tsdown\nℹ [launcher] Build complete\nℹ [tui] Build complete\n${JSON.stringify([expected])}`;
+
+    expect(parsePackResult(output)).toEqual(expected);
+    expect(() => parsePackResult("ℹ [launcher] Build complete")).toThrow(/JSON package result/);
+  });
+
   test("defines one locked build, pack, and offline prepack path", async () => {
     const packageJson = await Bun.file(new URL("../package.json", import.meta.url)).json();
 
@@ -53,13 +58,20 @@ describe("release package", () => {
     expect(packageJson.scripts["release:build"]).toBe("bun scripts/build-release.ts");
     expect(packageJson.scripts["release:pack"]).toBe("bun scripts/pack-release.ts");
     expect(packageJson.scripts.prepack).toBe("bun scripts/check-package.ts --prepack");
+    expect(packageJson.scripts.build).toBe("tsdown");
+    expect(packageJson.scripts["build:launcher"]).toContain("--filter launcher");
+    expect(packageJson.scripts["build:tui"]).toContain("--filter tui");
+    expect(packageJson.bin.zcode).toBe("bin/zcode.js");
+    expect(packageJson.engines).toEqual({ node: ">=22.19.0" });
+    expect(packageJson.dependencies.zigpty).toMatch(/^\^/u);
+    expect(packageJson.dependencies.bun).toBeUndefined();
     expect(packageJson.homepage).toBe("https://github.com/kingsword09/zcode-cli#readme");
     expect(packageJson.bugs.url).toBe("https://github.com/kingsword09/zcode-cli/issues");
     expect(packageJson.repository).toEqual({
       type: "git",
       url: "git+https://github.com/kingsword09/zcode-cli.git"
     });
-    expect(packageJson.keywords).toEqual(expect.arrayContaining(["bun", "cli", "tui", "zcode"]));
+    expect(packageJson.keywords).toEqual(expect.arrayContaining(["cli", "node", "pty", "tui", "zcode", "zigpty"]));
   });
 
   test("accepts reviewed paths and rejects omissions or development files", () => {
@@ -70,7 +82,7 @@ describe("release package", () => {
     expect(() => validatePackResult(result([...requiredPaths.map(packFile), packFile("scripts/private.ts")]), packageJson))
       .toThrow(/unreviewed/);
     expect(() => validatePackResult(
-      result(requiredPaths.map((path) => ({ ...packFile(path), mode: path === "bin/zcode.ts" ? 0o644 : 0o644 }))),
+      result(requiredPaths.map((path) => ({ ...packFile(path), mode: 0o644 }))),
       packageJson
     )).toThrow(/not executable/);
   });
@@ -89,7 +101,7 @@ describe("release package", () => {
       name: "zcode-app-cli",
       version: "3.3.5-1",
       description: "Unofficial terminal client",
-      keywords: ["bun", "cli", "tui", "zcode"],
+      keywords: ["cli", "node", "pty", "tui", "zcode", "zigpty"],
       homepage: "https://github.com/kingsword09/zcode-cli#readme",
       bugs: { url: "https://github.com/kingsword09/zcode-cli/issues" },
       license: "MIT",
@@ -98,10 +110,10 @@ describe("release package", () => {
         type: "git",
         url: "git+https://github.com/kingsword09/zcode-cli.git"
       },
-      bin: { zcode: "bin/zcode.ts" },
-      files: ["bin", "src", "vendor", "config.example.json", "zcode-runtime.lock.json", "README.md", "LICENSE"],
+      bin: { zcode: "bin/zcode.js" },
+      files: ["bin/zcode.js", "vendor", "config.example.json", "zcode-runtime.lock.json", "README.md", "LICENSE"],
       publishConfig: { access: "public", provenance: true },
-      dependencies: { "@earendil-works/pi-tui": "^0.80.6" }
+      dependencies: { "@earendil-works/pi-tui": "^0.80.6", zigpty: "^0.2.1" }
     };
     const tuiPackage = {
       name: "@zcode/tui",
@@ -111,13 +123,16 @@ describe("release package", () => {
     const files: Record<string, string> = {
       "LICENSE": "license",
       "README.md": "readme",
-      "bin/zcode.ts": "#!/usr/bin/env bun\n",
+      "bin/zcode.js": "#!/usr/bin/env node\nimport { spawn } from \"zigpty\";\n",
+      "bin/zcode.ts": "export {};\n",
       "config.example.json": "{}\n",
       "package.json": `${JSON.stringify(packageJson)}\n`,
+      "src/command.ts": "export {};\n",
       "src/darwin-oauth-callback.ts": "export {};\n",
       "src/launcher.ts": "export {};\n",
       "src/model-access.ts": "export {};\n",
       "src/zai-oauth.ts": "export {};\n",
+      "tsdown.config.ts": "export default [];\n",
       "packages/zcode-tui/dist/index.js": "export const value = 1;\n",
       "packages/zcode-tui/package.json": `${JSON.stringify(tuiPackage)}\n`,
       "vendor/extraction.json": `${JSON.stringify({
@@ -138,7 +153,7 @@ describe("release package", () => {
         await mkdir(join(destination, ".."), { recursive: true });
         await writeFile(destination, content);
       }
-      await chmod(join(directory, "bin", "zcode.ts"), 0o755);
+      await chmod(join(directory, "bin", "zcode.js"), 0o755);
       await expect(validatePackageTree(directory)).resolves.toBeUndefined();
       await writeFile(join(directory, "vendor", "node_modules", "@zcode", "tui", "dist", "index.js"), "stale\n");
       await expect(validatePackageTree(directory)).rejects.toThrow(/stale/);
