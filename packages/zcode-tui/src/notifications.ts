@@ -16,37 +16,41 @@ const nativeNotificationTimeoutMs = 3_000;
 export type NotificationMethod = "auto" | "osc9" | "bel" | "native" | "off";
 export type NotificationCondition = "unfocused" | "always";
 export type TurnNotificationKind = "completed" | "failed";
+export type NotificationBackend = "osc9" | "bel" | "native" | "off";
+export type TerminalFocusState = "focused" | "unfocused" | "unknown";
 
 export interface NotificationSettings {
   method: NotificationMethod;
   condition: NotificationCondition;
 }
 
-export interface NotificationCommand {
+export interface NotificationDiagnostics {
+  configuredMethod: NotificationMethod;
+  backend: NotificationBackend;
+  focus: TerminalFocusState;
+  terminal: string;
+}
+
+export type NativeNotificationSender = (
+  platform: NodeJS.Platform,
+  title: string,
+  body: string
+) => Promise<boolean>;
+
+export interface NativeNotificationCommand {
   command: string;
   args: string[];
 }
 
-export type NotificationCommandRunner = (command: NotificationCommand) => Promise<boolean>;
+type ExecutableResolver = (name: string) => string | null;
 
 interface TurnNotifierOptions {
   writeTerminal: (data: string) => void;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
-  runCommand?: NotificationCommandRunner;
+  nativeNotify?: NativeNotificationSender;
   settings?: NotificationSettings;
 }
-
-const windowsToastScript = [
-  "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null",
-  "$template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02",
-  "$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)",
-  "$text = $xml.GetElementsByTagName('text')",
-  "$text.Item(0).AppendChild($xml.CreateTextNode($args[0])) > $null",
-  "$text.Item(1).AppendChild($xml.CreateTextNode($args[1])) > $null",
-  "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)",
-  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('ZCode').Show($toast)"
-].join("; ");
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -124,6 +128,45 @@ export function supportsOsc9(env: NodeJS.ProcessEnv = process.env): boolean {
   );
 }
 
+export function detectedTerminal(env: NodeJS.ProcessEnv = process.env): string {
+  const termProgram = env.TERM_PROGRAM?.trim();
+  if (termProgram) return termProgram;
+  if (env.GHOSTTY_RESOURCES_DIR) return "Ghostty";
+  if (env.KITTY_WINDOW_ID) return "Kitty";
+  if (env.WEZTERM_PANE) return "WezTerm";
+  return env.TERM?.trim() || "unknown terminal";
+}
+
+export function resolveNotificationBackend(
+  method: NotificationMethod,
+  env: NodeJS.ProcessEnv = process.env
+): NotificationBackend {
+  if (method === "off" || method === "bel" || method === "native") return method;
+  return supportsOsc9(env) ? "osc9" : "bel";
+}
+
+export function notificationDeliveryLabel(
+  method: NotificationMethod,
+  backend: NotificationBackend
+): string {
+  if (method === "auto") return `${method} → ${backend}`;
+  return method === backend ? method : `${method} → ${backend} fallback`;
+}
+
+export function terminalBundleIdentifier(
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  const terminal = env.TERM_PROGRAM?.trim().toLowerCase() ?? "";
+  if (terminal === "apple_terminal") return "com.apple.Terminal";
+  if (terminal.includes("iterm")) return "com.googlecode.iterm2";
+  if (terminal.includes("ghostty") || env.GHOSTTY_RESOURCES_DIR) return "com.mitchellh.ghostty";
+  if (terminal.includes("kitty") || env.KITTY_WINDOW_ID) return "net.kovidgoyal.kitty";
+  if (terminal.includes("warp")) return "dev.warp.Warp-Stable";
+  if (terminal.includes("wezterm") || env.WEZTERM_PANE) return "com.github.wez.wezterm";
+  if (terminal.includes("vscode")) return "com.microsoft.VSCode";
+  return undefined;
+}
+
 export function osc9NotificationSequence(message: string, tmux = false): string {
   const safeMessage = notificationPreview(message) ?? "ZCode";
   return tmux
@@ -131,47 +174,50 @@ export function osc9NotificationSequence(message: string, tmux = false): string 
     : `${ESC}]9;${safeMessage}${BEL}`;
 }
 
+export function terminalNotifierCommand(
+  title: string,
+  body: string,
+  env: NodeJS.ProcessEnv = process.env,
+  which: ExecutableResolver = Bun.which
+): NativeNotificationCommand | undefined {
+  const command = which("terminal-notifier");
+  if (!command) return undefined;
+
+  const args = ["-title", title, "-message", body, "-group", "zcode-cli-turn"];
+  const terminalBundle = terminalBundleIdentifier(env);
+  if (terminalBundle) args.push("-sender", terminalBundle, "-activate", terminalBundle);
+  return { command, args };
+}
+
 export function nativeNotificationCommand(
   platform: NodeJS.Platform,
   title: string,
-  body: string
-): NotificationCommand | undefined {
-  if (platform === "darwin") {
-    return {
-      command: "osascript",
-      args: [
-        "-e", "on run argv",
-        "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
-        "-e", "end run",
-        "--", title, body
-      ]
-    };
-  }
+  body: string,
+  env: NodeJS.ProcessEnv = process.env,
+  which: ExecutableResolver = Bun.which
+): NativeNotificationCommand | undefined {
+  if (platform === "darwin") return terminalNotifierCommand(title, body, env, which);
   if (platform === "linux") {
-    return {
-      command: "notify-send",
-      args: ["--app-name=ZCode", title, body]
-    };
+    const command = which("notify-send");
+    return command ? { command, args: ["--app-name=ZCode", title, body] } : undefined;
   }
   if (platform === "win32") {
-    return {
-      command: "powershell.exe",
-      args: ["-NoProfile", "-NonInteractive", "-Command", windowsToastScript, title, body]
-    };
+    const command = which("SnoreToast.exe") ?? which("snoretoast");
+    return command ? { command, args: ["-t", title, "-m", body, "-appID", "ZCode CLI"] } : undefined;
   }
   return undefined;
 }
 
-async function runNotificationCommand({ command, args }: NotificationCommand): Promise<boolean> {
+async function runNativeNotification(command: NativeNotificationCommand | undefined): Promise<boolean> {
+  if (!command) return false;
   return await new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+      child = spawn(command.command, command.args, { stdio: "ignore", windowsHide: true });
     } catch {
       resolve(false);
       return;
     }
-
     let settled = false;
     const finish = (success: boolean) => {
       if (settled) return;
@@ -189,25 +235,36 @@ async function runNotificationCommand({ command, args }: NotificationCommand): P
   });
 }
 
+export async function sendNativeNotification(
+  platform: NodeJS.Platform,
+  title: string,
+  body: string,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<boolean> {
+  return await runNativeNotification(nativeNotificationCommand(platform, title, body, env));
+}
+
 export class TurnNotifier {
   private readonly env: NodeJS.ProcessEnv;
   private readonly platform: NodeJS.Platform;
-  private readonly runCommand: NotificationCommandRunner;
+  private readonly nativeNotify: NativeNotificationSender;
   private settings: NotificationSettings;
   private active = false;
   private focusReporting = false;
-  private terminalFocused = true;
+  private terminalFocus: TerminalFocusState = "unknown";
 
   constructor(private readonly options: TurnNotifierOptions) {
     this.env = options.env ?? process.env;
     this.platform = options.platform ?? process.platform;
-    this.runCommand = options.runCommand ?? runNotificationCommand;
+    this.nativeNotify = options.nativeNotify ?? ((platform, title, body) => (
+      sendNativeNotification(platform, title, body, this.env)
+    ));
     this.settings = options.settings ?? notificationSettings(this.env);
   }
 
   start(): void {
     this.active = true;
-    this.terminalFocused = true;
+    this.terminalFocus = "unknown";
     this.syncFocusReporting();
   }
 
@@ -220,18 +277,28 @@ export class TurnNotifier {
     return { ...this.settings };
   }
 
+  diagnostics(): NotificationDiagnostics {
+    return {
+      configuredMethod: this.settings.method,
+      backend: resolveNotificationBackend(this.settings.method, this.env),
+      focus: this.terminalFocus,
+      terminal: detectedTerminal(this.env)
+    };
+  }
+
   setSettings(settings: NotificationSettings): void {
+    if (this.settings.condition !== settings.condition) this.terminalFocus = "unknown";
     this.settings = { ...settings };
     this.syncFocusReporting();
   }
 
   handleInput(data: string): boolean {
     if (data === focusIn) {
-      this.terminalFocused = true;
+      this.terminalFocus = "focused";
       return true;
     }
     if (data === focusOut) {
-      this.terminalFocused = false;
+      this.terminalFocus = "unfocused";
       return true;
     }
     return false;
@@ -240,7 +307,7 @@ export class TurnNotifier {
   async notify(kind: TurnNotificationKind, detail = ""): Promise<boolean> {
     if (
       this.settings.method === "off" ||
-      (this.settings.condition === "unfocused" && this.terminalFocused)
+      (this.settings.condition === "unfocused" && this.terminalFocus === "focused")
     ) {
       return false;
     }
@@ -249,15 +316,10 @@ export class TurnNotifier {
     const body = notificationPreview(detail) ?? fallback;
     const title = kind === "completed" ? "ZCode · Task complete" : "ZCode · Task failed";
 
-    if (this.settings.method === "osc9") return this.writeOsc9(body);
-    if (this.settings.method === "bel") return this.writeTerminal(BEL);
-    if (this.settings.method === "native") return await this.writeNative(title, body);
-
-    if (supportsOsc9(this.env)) return this.writeOsc9(body);
-    if (!this.env.SSH_CONNECTION && !this.env.SSH_TTY && await this.writeNative(title, body)) {
-      return true;
-    }
-    return this.writeTerminal(BEL);
+    const backend = resolveNotificationBackend(this.settings.method, this.env);
+    if (backend === "osc9") return this.writeOsc9(body);
+    if (backend === "native" && await this.writeNative(title, body)) return true;
+    return backend === "off" ? false : this.writeTerminal(BEL);
   }
 
   private writeOsc9(body: string): boolean {
@@ -265,10 +327,8 @@ export class TurnNotifier {
   }
 
   private async writeNative(title: string, body: string): Promise<boolean> {
-    const command = nativeNotificationCommand(this.platform, title, body);
-    if (!command) return false;
     try {
-      return await this.runCommand(command);
+      return await this.nativeNotify(this.platform, title, body);
     } catch {
       return false;
     }
@@ -284,7 +344,11 @@ export class TurnNotifier {
   }
 
   private syncFocusReporting(): void {
-    if (!this.active || this.settings.method === "off") {
+    if (
+      !this.active ||
+      this.settings.method === "off" ||
+      this.settings.condition !== "unfocused"
+    ) {
       this.disableFocusReporting();
       return;
     }
@@ -297,5 +361,6 @@ export class TurnNotifier {
     if (!this.focusReporting) return;
     this.writeTerminal(focusReportingDisable);
     this.focusReporting = false;
+    this.terminalFocus = "unknown";
   }
 }

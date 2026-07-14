@@ -66,6 +66,7 @@ import {
   workflowStatus
 } from "./panels.ts";
 import {
+  notificationDeliveryLabel,
   notificationSettings,
   readNotificationSettings,
   readStoredNotificationSettings,
@@ -1963,9 +1964,9 @@ class ZCodeTui {
     }
 
     const methods: Array<{ value: NotificationMethod; label: string; description: string }> = [
-      { value: "auto", label: "Automatic", description: "Use OSC 9, native desktop notification, then BEL fallback" },
-      { value: "osc9", label: "Terminal notification", description: "Send an OSC 9 notification through the terminal" },
-      { value: "native", label: "Desktop notification", description: "Use the operating system notification service" },
+      { value: "auto", label: "Automatic", description: "Use a supported terminal notification protocol, otherwise BEL" },
+      { value: "osc9", label: "Terminal notification", description: "Use OSC 9 when supported, otherwise BEL" },
+      { value: "native", label: "Desktop notification", description: "Use an installed platform notifier, otherwise BEL" },
       { value: "bel", label: "Terminal bell", description: "Emit BEL when the turn finishes" },
       { value: "off", label: "Off", description: "Do not send turn notifications" }
     ];
@@ -1978,6 +1979,8 @@ class ZCodeTui {
 
     while (!this.stopped) {
       const effective = this.notifications.currentSettings();
+      const diagnostics = this.notifications.diagnostics();
+      const backend = notificationDeliveryLabel(effective.method, diagnostics.backend);
       const methodOverride = Boolean(process.env.ZCODE_TUI_NOTIFICATION_METHOD?.trim());
       const conditionOverride = Boolean(process.env.ZCODE_TUI_NOTIFICATION_CONDITION?.trim());
       const setting = await this.showChoice({
@@ -1989,8 +1992,8 @@ class ZCodeTui {
             value: "notification-method",
             label: "Notification delivery",
             description: methodOverride
-              ? `Current: ${effective.method} · Saved: ${stored.method} (environment override)`
-              : `Current: ${stored.method}`
+              ? `Current: ${backend} · Saved: ${stored.method} (environment override)`
+              : `Current: ${backend}`
           },
           {
             value: "notification-condition",

@@ -62,7 +62,7 @@ the only persistence path.
 - searchable transcript navigation with per-block expansion, selected-block copying and `n`/`N` match traversal;
 - persistent active-tool, background-task and open-plan activity between the transcript and editor;
 - active-turn steering, cancellation and error reporting;
-- unfocused turn-completion notifications through OSC 9, native desktop APIs or BEL fallback;
+- unfocused turn-completion notifications through terminal-native OSC 9 or BEL, with optional desktop commands;
 - double-Esc rewind with input-point selection and safe conversation/workspace scopes;
 - `/copy`, `/clear`, `/exit`, Ctrl+C and Ctrl+D handling with token usage and resume guidance on exit;
 - `--no-color` and `NO_COLOR` support.
@@ -86,10 +86,22 @@ Paths containing spaces are inserted in the quoted `@"..."` form.
 ### Turn completion notifications
 
 Notifications are enabled by default and emitted after a normal agent turn
-completes or fails while the terminal is unfocused. `auto` delivery uses OSC 9
-in Ghostty, iTerm2, Kitty, Warp and WezTerm; otherwise it tries the native
-desktop notifier (`osascript` on macOS, `notify-send` on Linux, PowerShell Toast
-on Windows) and falls back to BEL. SSH sessions skip remote desktop commands.
+completes or fails while the terminal is unfocused. Following Codex's terminal
+capability fallback, `auto` uses OSC 9 in Ghostty, iTerm2, Kitty, Warp and
+WezTerm, and BEL in terminals such as Apple Terminal. Selecting OSC 9 in an
+unsupported terminal also falls back to BEL instead of silently emitting an
+ignored sequence.
+
+The `unfocused` condition uses DEC focus reporting when the terminal provides
+it. Until focus support is confirmed, ZCode sends the notification instead of
+permanently suppressing it as focused. `native` is an explicit opt-in that uses
+an existing system command: `terminal-notifier` on macOS, `notify-send` on
+Linux, or `SnoreToast` on Windows. These tools are not bundled, keeping the
+default terminal notification path dependency-free. If the selected command is
+unavailable or delivery fails, ZCode falls back to BEL. On macOS, the detected
+terminal application is used as both the sender and click target. Exact tab or
+pane restoration remains terminal-dependent; use the default `auto` setting so
+OSC-capable terminals can preserve their native session behavior.
 
 Open the interactive settings picker inside the TUI (both commands are
 equivalent):
