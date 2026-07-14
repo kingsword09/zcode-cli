@@ -153,6 +153,7 @@ import { Transcript } from "./transcript.ts";
 import { turnStatusText } from "./turn-status.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
 import { UpdateAvailableView, updateCommand } from "./update-available-view.ts";
+import { Divider, WelcomeBanner } from "./welcome-banner.ts";
 import { WorkspaceAutocompleteProvider } from "./workspace-autocomplete.ts";
 import { readWorkspaceDiff } from "./workspace-diff.ts";
 
@@ -416,15 +417,15 @@ class ZCodeTui {
   }
 
   private buildLayout(): void {
-    const branch = this.options.workspaceGitBranch ? ` · ${this.options.workspaceGitBranch}` : "";
     const workspace = this.options.workspaceDirectory ?? process.cwd();
     const runtimeVersion = sanitizeTerminalText(this.options.version ?? "unknown", { preserveSgr: false });
-    const versionLabel = this.distributionVersion
-      ? `v${this.distributionVersion} · runtime v${runtimeVersion}`
-      : `v${runtimeVersion}`;
-    const title = `${this.theme.accent(this.theme.bold("ZCode"))} ${this.theme.muted(versionLabel)}`;
-    this.ui.addChild(new Text(title, 1, 0));
-    this.ui.addChild(new Text(this.theme.muted(`${workspace}${branch}`), 1, 0));
+    this.ui.addChild(new WelcomeBanner(this.theme, {
+      branch: this.options.workspaceGitBranch,
+      distributionVersion: this.distributionVersion,
+      runtimeVersion,
+      workspace
+    }));
+    this.ui.addChild(new Divider("─", this.theme.muted));
     this.ui.addChild(this.loginWarning);
     this.ui.addChild(this.loginHelp);
     this.updateLoginWarning();
