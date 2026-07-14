@@ -43,6 +43,7 @@
     "build": "tsdown",
     "build:launcher": "tsdown --filter launcher",
     "build:tui": "tsdown --filter tui",
+    "dev": "bun run sync:local && ZCODE_NODE=node bun bin/zcode.ts",
     "sync": "bun run build && bun scripts/sync-runtime.ts",
     "sync:locked": "bun run build && bun scripts/sync-runtime.ts --lock zcode-runtime.lock.json",
     "sync:local": "bun run build && bun scripts/sync-runtime.ts --app /Applications/ZCode.app",

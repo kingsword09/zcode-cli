@@ -1,9 +1,26 @@
 import { describe, expect, test } from "bun:test";
 
-import { isTuiInvocation, normalizeLoginArgs } from "../src/launcher.ts";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { isTuiInvocation, normalizeLoginArgs, readDistributionVersion } from "../src/launcher.ts";
 import { classifyZaiOAuthInvocation } from "../src/zai-oauth.ts";
 
 describe("launcher routing", () => {
+  test("reads a safe npm distribution version", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-version-"));
+    const manifest = join(directory, "package.json");
+    try {
+      await writeFile(manifest, JSON.stringify({ version: "3.3.5-1" }));
+      expect(readDistributionVersion(manifest)).toBe("3.3.5-1");
+      await writeFile(manifest, JSON.stringify({ version: "bad\u001b[2J" }));
+      expect(readDistributionVersion(manifest)).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("routes full-screen invocations through the zigpty terminal", () => {
     expect(isTuiInvocation([])).toBe(true);
     expect(isTuiInvocation(["tui"])).toBe(true);

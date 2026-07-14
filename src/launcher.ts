@@ -1,5 +1,5 @@
 import { spawn as spawnChild, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import {
 } from "./zai-oauth.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const packageManifestPath = join(packageRoot, "package.json");
 const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
 const launcherPath = join(packageRoot, "bin", "zcode.js");
 const NON_TUI_COMMANDS = new Set([
@@ -72,6 +73,16 @@ export function resolveNodeExecutable(): string {
   return process.env.ZCODE_NODE?.trim() || process.execPath;
 }
 
+export function readDistributionVersion(manifestPath = packageManifestPath): string | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { version?: unknown };
+    const version = typeof manifest.version === "string" ? manifest.version.trim() : "";
+    return /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/u.test(version) ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function normalizeLoginArgs(args: string[]): { args: string[]; checkConfiguredAccess: boolean } {
   if (args.length === 1 && args[0] === "login") {
     return { args, checkConfiguredAccess: true };
@@ -85,11 +96,13 @@ export function normalizeLoginArgs(args: string[]): { args: string[]; checkConfi
 function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, string> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.ZCODE_CLI_OAUTH_CALLBACK_STDIN;
+  const distributionVersion = readDistributionVersion();
   const merged: NodeJS.ProcessEnv = {
     ...env,
     ...extra,
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,
-    ZCODE_APP_CLI_ENTRY: launcherPath
+    ZCODE_APP_CLI_ENTRY: launcherPath,
+    ...(distributionVersion ? { ZCODE_APP_CLI_VERSION: distributionVersion } : {})
   };
   return Object.fromEntries(
     Object.entries(merged).filter((entry): entry is [string, string] => typeof entry[1] === "string")

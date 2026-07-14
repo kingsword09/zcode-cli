@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 const root = join(import.meta.dir, "..");
 const runtime = join(root, "vendor", "zcode.cjs");
 if (!existsSync(runtime)) throw new Error("vendor/zcode.cjs is missing; run `bun run sync:local` first.");
+const packageVersion = String((await Bun.file(join(root, "package.json")).json() as { version?: unknown }).version ?? "");
 const node = process.env.ZCODE_NODE || Bun.which("node");
 if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode runtime.");
 
@@ -137,6 +138,9 @@ if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 
 if (code !== 0) throw new Error(`TUI smoke test exited with ${code}.\n${plain.slice(-4_000)}`);
 if (!plain.includes("ZCode")) throw new Error(`TUI welcome screen was not rendered.\n${plain.slice(-4_000)}`);
+if (!plain.includes(`v${packageVersion} · runtime v`)) {
+  throw new Error(`The TUI did not render the npm and runtime versions separately.\n${plain.slice(-4_000)}`);
+}
 if (!/custom provider/i.test(plain)) {
   throw new Error(`The custom-provider configuration hint was not rendered.\n${plain.slice(-4_000)}`);
 }
