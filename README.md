@@ -115,6 +115,8 @@ Paths containing spaces are inserted in the quoted `@"..."` form.
 
 Press `Ctrl+V` or run `/paste-image` to attach an image from the clipboard.
 Pending images appear above the editor as complete `[Image #N]` tokens.
+Submitting a prompt moves those images into that user turn immediately, so they
+are removed from the pending row and cannot leak into the next prompt.
 
 Move the editor cursor to the start of its first line and press `Up`, or run
 `/attachments`, to focus the attachment row. While it is focused:

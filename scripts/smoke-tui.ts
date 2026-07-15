@@ -116,7 +116,7 @@ try {
   );
   await waitFor(
     "API key turn completion",
-    /(?:Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan)[\s\S]*\n \[ 🕛 0s \]/i,
+    /(?:Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan)[\s\S]*◈ zai\/glm-5\.1/i,
     apiKeySetupStart
   );
   await sendAndWait("/help\r", "help output", /Slash commands:|Usage:/i);

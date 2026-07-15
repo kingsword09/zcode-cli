@@ -169,7 +169,17 @@ try {
   await sendAndWait("\x1b[3~", "removed attachment", /Images › \[Image #1\]/i);
   await sendAndWait("\x1b[B", "returned from attachments", /Images · \[Image #1\][\s\S]*↑ manage/i);
   await sendAndSettle("\x05");
-  await sendAndWait("\r", "feature turn", /Feature prompt complete\./i, 12_000);
+  const featureTurnStart = await sendAndWait(
+    "\r",
+    "submitted image turn",
+    /[›↪]\s*inspect @src\/index\.ts\s+\[1 image\][\s\S]*◇ Thought/i,
+    4_000
+  );
+  const activeTurnProjection = plainText(output.slice(featureTurnStart));
+  if (/Images\s+·\s+\[Image #1\]/i.test(activeTurnProjection)) {
+    throw new Error("Submitted images remained in the pending attachment row during the active turn.");
+  }
+  await waitFor("feature turn", /Feature prompt complete\./i, featureTurnStart, 12_000);
   await waitFor("feature turn completion", /Feature background audit · turn complete/i, 0, 4_000);
   await sendAndWait("\x0f", "expanded Agent transcript", /Response:\s*Nested rendering inspected\./i);
 
