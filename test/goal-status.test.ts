@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   formatTokens,
+  goalStatusLabel,
   goalStatusText,
   normalizeGoal
 } from "../packages/zcode-tui/src/goal-status.ts";
@@ -21,10 +22,12 @@ describe("TUI goal status", () => {
   });
 
   test("formats goal lifecycle states without repeating the active turn timer", () => {
-    expect(goalStatusText(active)).toBe("Pursuing goal (40K / 50K)");
-    expect(goalStatusText({ ...active, status: "paused" })).toBe("Goal paused (/goal resume)");
-    expect(goalStatusText({ ...active, status: "budget_limited" })).toBe("Goal unmet (40K / 50K)");
-    expect(goalStatusText({ ...active, status: "complete", timeUsedSeconds: 7_200 })).toBe("Goal achieved (2h)");
+    expect(goalStatusText(active)).toBe("Active (40K / 50K)");
+    expect(goalStatusText({ ...active, status: "paused" })).toBe("Paused (/goal resume)");
+    expect(goalStatusText({ ...active, status: "budget_limited" })).toBe("Unmet (40K / 50K)");
+    expect(goalStatusText({ ...active, status: "complete", timeUsedSeconds: 7_200 })).toBe("Achieved (2h)");
+    expect(goalStatusLabel(active)).toBe("Active");
+    expect(goalStatusLabel({ ...active, status: "budget_limited", tokenBudget: null })).toBe("Abandoned");
     expect(formatTokens(1_250_000)).toBe("1.3M");
   });
 });

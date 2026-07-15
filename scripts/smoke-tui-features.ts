@@ -8,6 +8,7 @@ const root = join(import.meta.dir, "..");
 const fixture = join(root, "test", "fixtures", "tui-features.ts");
 const temporaryHome = await mkdtemp(join(tmpdir(), "zcode-tui-features-"));
 const decoder = new TextDecoder();
+const renderSettleMilliseconds = 25;
 let output = "";
 const terminal = new Bun.Terminal({
   cols: 110,
@@ -48,7 +49,7 @@ async function waitFor(label: string, pattern: RegExp, start = 0, timeoutMs = 8_
   while (Date.now() - startedAt < timeoutMs) {
     if (pattern.test(plainText(output.slice(start)))) return;
     if (child.exitCode !== null) break;
-    await Bun.sleep(25);
+    await Bun.sleep(renderSettleMilliseconds);
   }
   throw new Error(`Timed out waiting for ${label}.\n${plainText(output).slice(-6_000)}`);
 }
@@ -57,6 +58,7 @@ async function sendAndWait(input: string, label: string, pattern: RegExp, timeou
   const start = output.length;
   terminal.write(input);
   await waitFor(label, pattern, start, timeoutMs);
+  await Bun.sleep(renderSettleMilliseconds);
   return start;
 }
 
@@ -65,7 +67,7 @@ async function sendAndSettle(input: string): Promise<void> {
   terminal.write(input);
   const startedAt = Date.now();
   while (output.length === start && Date.now() - startedAt < 2_000) await Bun.sleep(20);
-  await Bun.sleep(25);
+  await Bun.sleep(renderSettleMilliseconds);
 }
 
 const timeout = setTimeout(() => child.kill("SIGKILL"), 45_000);
@@ -74,6 +76,7 @@ let interactionError: unknown;
 try {
   await waitFor("welcome screen", /ZCode/i);
   await waitFor("restored startup transcript", /Restored startup response\./i);
+  await waitFor("interactive editor", /◈ alpha\/model ─ ◉ build/i);
   await sendAndWait("\x1b", "double-Esc rewind hint", /Esc again to rewind conversation/i);
   await sendAndWait("\x1b", "rewind target picker", /Rewind conversation[\s\S]*Restored later prompt/i);
   await sendAndWait("\x1b[B\r", "selected older rewind target", /Return to before: Restored startup prompt/i);
@@ -115,17 +118,17 @@ try {
   await sendAndWait("/login\r", "failure login setup picker", /Set Up Coding Plan/i);
   await sendAndWait("\x1b[B\r", "restored OAuth failure", /Login failed: OAuth HTTP error 404 \(empty or non-JSON response\)/i);
   await sendAndWait("/help\r", "long help", /Use \/help <command> for details/i);
-  await sendAndWait("\x1b[Z", "edit mode shortcut", /alpha\/model · edit · low/i);
+  await sendAndWait("\x1b[Z", "edit mode shortcut", /◈ alpha\/model ─ ◉ edit ─ ⚡ low/i);
   await Bun.sleep(1_100);
-  await sendAndWait("\x1b[Z", "yolo mode shortcut", /alpha\/model · yolo · low/i);
-  await sendAndWait("\x1b[Z", "plan mode shortcut", /alpha\/model · plan · low/i);
-  await sendAndWait("\x0e", "model shortcut", /beta\/model · plan · low/i);
-  await sendAndWait("\t", "effort shortcut", /beta\/model · plan · high/i);
+  await sendAndWait("\x1b[Z", "yolo mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i);
+  await sendAndWait("\x1b[Z", "plan mode shortcut", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i);
+  await sendAndWait("\x0e", "model shortcut", /◈ beta\/model ─ ◉ plan ─ ⚡ low/i);
+  await sendAndWait("\t", "effort shortcut", /◈ beta\/model ─ ◉ plan ─ ⚡ high/i);
   await sendAndWait("/model\r", "model picker", /Select model/i);
-  await sendAndWait("alpha\r", "model picker selection", /alpha\/model · plan · high/i);
+  await sendAndWait("alpha\r", "model picker selection", /◈ alpha\/model ─ ◉ plan ─ ⚡ high/i);
   await sendAndWait("/effort\r", "effort picker", /Select reasoning effort/i);
-  await sendAndWait("\x1b[B\r", "effort picker selection", /alpha\/model · plan · low/i);
-  await sendAndWait("\x1b[Z", "build mode shortcut", /alpha\/model · build · low/i);
+  await sendAndWait("\x1b[B\r", "effort picker selection", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i);
+  await sendAndWait("\x1b[Z", "build mode shortcut", /◈ alpha\/model ─ ◉ build ─ ⚡ low/i);
   await sendAndWait(
     "review long plan\r",
     "plan approval choices",
@@ -189,7 +192,7 @@ try {
   await sendAndWait("/tasks\r", "background task picker", /Background tasks/i);
   await sendAndWait("\r", "background task detail", /Background task · bg_feature/i);
   await sendAndSettle("\r");
-  await sendAndWait("/goal pause\r", "paused goal", /Goal paused \(\/goal resume\)/i);
+  await sendAndWait("/goal pause\r", "paused goal", /Goal: Paused \(\/goal resume\)/i);
   await sendAndWait("/resume\r", "resume picker", /Resume Session/i);
   await sendAndWait("\r", "selected session transcript", /Restored selected response\./i);
   terminal.write("\x03");
@@ -240,14 +243,16 @@ for (const [label, pattern] of [
   ["OAuth HTTP diagnostic", /Login failed: OAuth HTTP error 404 \(empty or non-JSON response\)/i],
   ["resume picker", /Resume Session/i],
   ["long help output", /Use \/help <command> for details/i],
-  ["turn timer tick", /\[1s\]/i],
-  ["context remaining", /75% context left/i],
+  ["quarter-turn clock frame", /🕒 0s/i],
+  ["half-turn clock frame", /🕕 0s/i],
+  ["turn timer tick", /🕗 1s/i],
+  ["context remaining", /ctx 75% left/i],
   ["session tokens", /18\.5K tokens/i],
-    ["active goal footer", /Pursuing goal \(40K \/ 50K\)/i],
-    ["persistent runtime activity", /Activity · 1 in background · 1 open task · \/tasks/i],
-    ["background task summary", /Feature background audit · bg_feature/i],
-    ["background task dialog", /Background task · bg_feature/i],
-  ["paused goal footer", /Goal paused \(\/goal resume\)/i],
+  ["active goal footer", /Goal: Active \(40K \/ 50K\)/i],
+  ["persistent runtime activity", /Activity · 1 in background · 1 open task · \/tasks/i],
+  ["background task summary", /Feature background audit · bg_feature/i],
+  ["background task dialog", /Background task · bg_feature/i],
+  ["paused goal footer", /Goal: Paused \(\/goal resume\)/i],
   ["model picker", /Select model/i],
   ["effort picker", /Select reasoning effort/i],
   ["image attachment", /1 image attached/i],
@@ -311,14 +316,14 @@ if (plain.includes("feature-secret-api-key") || plain.includes("override-fixture
 
 let stateOffset = 0;
 for (const [label, pattern] of [
-  ["edit mode shortcut", /alpha\/model · edit · low/i],
-  ["yolo mode shortcut", /alpha\/model · yolo · low/i],
-  ["plan mode shortcut", /alpha\/model · plan · low/i],
-  ["model shortcut preserving plan", /beta\/model · plan · low/i],
-  ["effort shortcut preserving plan", /beta\/model · plan · high/i],
-  ["model picker preserving plan", /alpha\/model · plan · high/i],
-  ["effort picker preserving plan", /alpha\/model · plan · low/i],
-  ["build mode shortcut", /alpha\/model · build · low/i],
+  ["edit mode shortcut", /◈ alpha\/model ─ ◉ edit ─ ⚡ low/i],
+  ["yolo mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i],
+  ["plan mode shortcut", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i],
+  ["model shortcut preserving plan", /◈ beta\/model ─ ◉ plan ─ ⚡ low/i],
+  ["effort shortcut preserving plan", /◈ beta\/model ─ ◉ plan ─ ⚡ high/i],
+  ["model picker preserving plan", /◈ alpha\/model ─ ◉ plan ─ ⚡ high/i],
+  ["effort picker preserving plan", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i],
+  ["build mode shortcut", /◈ alpha\/model ─ ◉ build ─ ⚡ low/i],
   ["scrollable plan approval", /Plan approval fixture complete: allow\./i],
   ["plan feedback continuation", /Plan approval fixture complete: deny · plan_approval_feedback\./i]
 ] as const) {

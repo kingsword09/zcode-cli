@@ -15,7 +15,7 @@ function banner(width: number, color = false): string[] {
     branch: "main",
     distributionVersion: "3.3.5-2",
     runtimeVersion: "0.15.2",
-    workspace: "/Users/alice/Documents/code/ai/zcode-cli"
+    workspace: "/home/alice/work/zcode-cli"
   }).render(width);
 }
 
@@ -29,15 +29,33 @@ describe("welcome banner", () => {
   });
 
   test("integrates identity, versions and workspace into the wide header", () => {
-    const lines = banner(80);
-    const output = lines.join("\n");
+    for (const width of [48, 80, 120]) {
+      const lines = banner(width);
+      const output = lines.join("\n");
 
-    expect(lines).toHaveLength(4);
-    expect(output).toContain("ZCODE  v3.3.5-2");
-    expect(output).toContain("runtime v0.15.2");
-    expect(output).toContain("/Users/alice/Documents/code/ai/zcode-cli");
-    expect(output).toContain("branch main");
-    expect(lines.every((line) => visibleWidth(line) <= 80)).toBe(true);
+      expect(lines).toHaveLength(4);
+      expect(output).toContain("SYSTEM INITIATED");
+      expect(output).toContain("ZCODE  v3.3.5-2");
+      expect(output).toMatch(/(?:runtime|rt) v0\.15\.2/u);
+      expect(output).toContain("zcode-cli");
+      expect(output).toContain("branch main");
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    }
+  });
+
+  test("does not change layouts for fixture-looking workspace paths", () => {
+    for (const workspace of ["/Users/alice/Documents/code/ai/zcode-cli", "/tmp/project"]) {
+      const output = new WelcomeBanner(createTheme(false), {
+        branch: "main",
+        distributionVersion: "3.3.5-2",
+        runtimeVersion: "0.15.2",
+        workspace
+      }).render(80).join("\n");
+
+      expect(output).toContain("SYSTEM INITIATED");
+      expect(output).toContain("runtime v0.15.2");
+      expect(output).toContain("branch main");
+    }
   });
 
   test("switches to a compact two-line identity below the wide breakpoint", () => {
@@ -79,7 +97,7 @@ describe("Divider component", () => {
     const lines = divider.render(40);
     expect(lines).toHaveLength(1);
     expect(visibleWidth(lines[0] ?? "")).toBe(40);
-    expect(lines[0]).toContain("─");
+    expect(lines[0]).toContain("───◆");
   });
 
   test("renders an empty line for non-positive widths", () => {
