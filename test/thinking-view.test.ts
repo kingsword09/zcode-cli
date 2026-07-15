@@ -39,4 +39,10 @@ describe("TUI thinking view", () => {
     expect(lines.join("\n")).toContain("reasoning_delta");
     expect(lines.every((line) => visibleWidth(line) <= 30)).toBe(true);
   });
+
+  test("keeps routine thinking content free of full-width backgrounds", () => {
+    const view = new ThinkingView(createTheme(true, "light"));
+    view.append("Inspecting the runtime.");
+    expect(view.render(60).join("\n")).not.toContain("\x1b[48;5;");
+  });
 });

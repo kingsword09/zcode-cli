@@ -2,6 +2,7 @@ import {
   decodeKittyPrintable,
   getKeybindings,
   Input,
+  matchesKey,
   SelectList,
   truncateToWidth,
   type Component,
@@ -11,7 +12,13 @@ import {
 } from "@earendil-works/pi-tui";
 
 import type { ZCodeTheme } from "./theme.ts";
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import { isWindowedComponent } from "./renderable.ts";
+import {
+  sanitizeTerminalText,
+  removeLastGrapheme,
+  truncateTerminalText,
+  wrapTerminalText
+} from "./terminal-text.ts";
 
 export interface ChoiceItem extends SelectItem {
   payload?: unknown;
@@ -21,6 +28,10 @@ export interface ChoiceItem extends SelectItem {
 class ChoiceDialog implements Component {
   private filter = "";
   private selectionPreview?: Component;
+  private contentExpanded = false;
+  private contentOffset = 0;
+  private contentLineCount = 0;
+  private contentPageSize = 1;
 
   constructor(
     private readonly title: string,
@@ -29,44 +40,120 @@ class ChoiceDialog implements Component {
     private readonly list: SelectList,
     private readonly theme: ZCodeTheme,
     private readonly content?: Component,
-    private readonly maxContentLines = 0
+    private readonly contentLabel = "Details",
+    private readonly maxContentLines = 0,
+    private readonly maxExpandedContentLines = 0
   ) {}
 
   setSelectionPreview(preview: Component | undefined): void {
+    if (this.selectionPreview !== preview) this.contentOffset = 0;
     this.selectionPreview = preview;
   }
 
   render(width: number): string[] {
-    const content = [
-      ...(this.content?.render(width) ?? []),
+    const safeWidth = Math.max(1, width);
+    const windowedContent = this.content && !this.selectionPreview && isWindowedComponent(this.content)
+      ? this.content
+      : undefined;
+    const content = windowedContent ? undefined : [
+      ...(this.content?.render(safeWidth) ?? []),
       ...(this.content && this.selectionPreview ? [""] : []),
-      ...(this.selectionPreview?.render(width) ?? [])
+      ...(this.selectionPreview?.render(safeWidth) ?? [])
     ];
-    const hidden = Math.max(0, content.length - this.maxContentLines);
-    const visibleContent = this.maxContentLines > 0 ? content.slice(0, this.maxContentLines) : [];
-    if (hidden > 0 && visibleContent.length > 0) {
-      visibleContent[visibleContent.length - 1] = this.theme.muted(`… ${hidden} preview lines hidden`);
+    const totalContentLines = windowedContent
+      ? windowedContent.renderWindow(safeWidth, 0, 0).totalLines
+      : content?.length ?? 0;
+    const visibleContent = this.renderContentViewport(
+      totalContentLines,
+      this.contentExpanded ? this.maxExpandedContentLines : this.maxContentLines,
+      safeWidth,
+      (start, count) => windowedContent
+        ? windowedContent.renderWindow(safeWidth, start, count).lines
+        : content?.slice(start, start + count) ?? []
+    );
+    if (this.contentExpanded && totalContentLines > 0) {
+      return [
+        ...wrapTerminalText(
+          `${this.theme.bold(this.title)} ${this.theme.accent(`· ${this.contentLabel}`)}`,
+          safeWidth
+        ),
+        ...wrapTerminalText(this.theme.muted(this.prompt), safeWidth),
+        "",
+        ...visibleContent,
+        "",
+        ...wrapTerminalText(
+          this.theme.muted("Up/Down scroll · PgUp/PgDn page · Home/End jump · Ctrl+O or Esc return"),
+          safeWidth
+        )
+      ];
     }
     return [
-      this.theme.bold(this.title),
-      this.theme.muted(this.prompt),
+      ...wrapTerminalText(this.theme.bold(this.title), safeWidth),
+      ...wrapTerminalText(this.theme.muted(this.prompt), safeWidth),
       ...(visibleContent.length > 0 ? ["", ...visibleContent] : []),
-      `${this.theme.muted("Filter:")} ${this.filter || this.theme.muted("type to search")}`,
+      truncateTerminalText(
+        `${this.theme.muted("Filter:")} ${this.filter || this.theme.muted("type to search")}`,
+        safeWidth
+      ),
       "",
-      ...this.list.render(width),
+      ...this.list.render(safeWidth),
       "",
-      this.theme.muted(this.help)
+      ...wrapTerminalText(this.theme.muted(this.help), safeWidth)
     ];
   }
 
   handleInput(data: string): void {
     const keybindings = getKeybindings();
+    if (matchesKey(data, "ctrl+o") && this.contentLineCount > 0) {
+      this.contentExpanded = !this.contentExpanded;
+      return;
+    }
+    if (this.contentExpanded) {
+      if (matchesKey(data, "escape")) {
+        this.contentExpanded = false;
+        return;
+      }
+      if (keybindings.matches(data, "tui.select.up")) {
+        this.scrollContent(-1);
+        return;
+      }
+      if (keybindings.matches(data, "tui.select.down")) {
+        this.scrollContent(1);
+        return;
+      }
+      if (keybindings.matches(data, "tui.select.pageUp")) {
+        this.scrollContent(-Math.max(1, this.contentPageSize - 1));
+        return;
+      }
+      if (keybindings.matches(data, "tui.select.pageDown")) {
+        this.scrollContent(Math.max(1, this.contentPageSize - 1));
+        return;
+      }
+      if (matchesKey(data, "home")) {
+        this.contentOffset = 0;
+        return;
+      }
+      if (matchesKey(data, "end")) {
+        this.contentOffset = Math.max(0, this.contentLineCount - this.contentPageSize);
+        return;
+      }
+      if (keybindings.matches(data, "tui.select.cancel")) this.list.handleInput(data);
+      return;
+    }
+    if (keybindings.matches(data, "tui.select.pageUp")) {
+      this.scrollContent(-Math.max(1, this.contentPageSize - 1));
+      return;
+    }
+    if (keybindings.matches(data, "tui.select.pageDown")) {
+      this.scrollContent(Math.max(1, this.contentPageSize - 1));
+      return;
+    }
     if (keybindings.matches(data, "tui.editor.deleteToLineStart")) {
       this.updateFilter("");
       return;
     }
     if (keybindings.matches(data, "tui.editor.deleteCharBackward")) {
-      this.updateFilter(Array.from(this.filter).slice(0, -1).join(""));
+      this.updateFilter(removeLastGrapheme(this.filter));
       return;
     }
 
@@ -83,10 +170,60 @@ class ChoiceDialog implements Component {
   private updateFilter(filter: string): void {
     this.filter = filter;
     this.list.setFilter(filter);
+    const selected = this.list.getSelectedItem();
+    if (selected) this.list.onSelectionChange?.(selected);
+    else this.setSelectionPreview(undefined);
+  }
+
+  private renderContentViewport(
+    totalLines: number,
+    maxLines: number,
+    width: number,
+    read: (start: number, count: number) => string[]
+  ): string[] {
+    this.contentLineCount = totalLines;
+    if (totalLines === 0 || maxLines <= 0) {
+      this.contentOffset = 0;
+      this.contentPageSize = 1;
+      return [];
+    }
+    if (totalLines <= maxLines) {
+      this.contentOffset = 0;
+      this.contentPageSize = totalLines;
+      return read(0, totalLines).map((line) => truncateToWidth(line, width, ""));
+    }
+
+    const bodyLines = Math.max(1, maxLines - 1);
+    this.contentPageSize = bodyLines;
+    this.contentOffset = Math.max(0, Math.min(
+      this.contentOffset,
+      totalLines - bodyLines
+    ));
+    const end = Math.min(totalLines, this.contentOffset + bodyLines);
+    const above = this.contentOffset;
+    const below = totalLines - end;
+    const position = [
+      `${this.contentLabel} ${this.contentOffset + 1}–${end} of ${totalLines}`,
+      above > 0 ? `↑ ${above}` : undefined,
+      below > 0 ? `↓ ${below}` : undefined,
+      "PgUp/PgDn scroll"
+    ].filter((value): value is string => Boolean(value)).join(" · ");
+    return [
+      ...read(this.contentOffset, end - this.contentOffset)
+        .map((line) => truncateToWidth(line, width, "")),
+      truncateToWidth(this.theme.muted(position), width, "")
+    ];
+  }
+
+  private scrollContent(delta: number): void {
+    const maximum = Math.max(0, this.contentLineCount - this.contentPageSize);
+    this.contentOffset = Math.max(0, Math.min(maximum, this.contentOffset + delta));
   }
 
   invalidate(): void {
     this.list.invalidate();
+    this.content?.invalidate?.();
+    this.selectionPreview?.invalidate?.();
   }
 }
 
@@ -100,6 +237,7 @@ export function choose(
     help?: string;
     items: ChoiceItem[];
     content?: Component;
+    contentLabel?: string;
     selectedIndex?: number;
     signal?: AbortSignal;
   }
@@ -128,17 +266,23 @@ export function choose(
     const list = new SelectList(searchableItems, maxVisible, theme.select);
     list.setSelectedIndex(options.selectedIndex ?? 0);
     const maxContentLines = Math.max(0, ui.terminal.rows - maxVisible - 9);
+    const maxExpandedContentLines = Math.max(2, maxContentLines, ui.terminal.rows - 8);
+    const hasDetails = Boolean(options.content || options.items.some((item) => item.preview));
     const dialog = new ChoiceDialog(
       sanitizeTerminalText(options.title, { preserveSgr: false }),
       sanitizeTerminalText(options.prompt, { preserveSgr: false }),
       sanitizeTerminalText(
-        options.help ?? "Type to filter · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear",
+        options.help ?? (hasDetails
+          ? "Type to filter · Up/Down choose · Ctrl+O details · PgUp/PgDn scroll · Enter confirm · Esc cancel"
+          : "Type to filter · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear"),
         { preserveSgr: false }
       ),
       list,
       theme,
       options.content,
-      maxContentLines
+      sanitizeTerminalText(options.contentLabel ?? "Details", { preserveSgr: false }),
+      maxContentLines,
+      maxExpandedContentLines
     );
     const previewFor = (item: SelectItem | null): Component | undefined => {
       return item ? choicesByValue.get(item.value)?.preview : undefined;
@@ -175,13 +319,14 @@ class TextPromptDialog implements Component {
   ) {}
 
   render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
     return [
-      this.theme.bold(this.title),
-      this.theme.muted(this.prompt),
+      ...wrapTerminalText(this.theme.bold(this.title), safeWidth),
+      ...wrapTerminalText(this.theme.muted(this.prompt), safeWidth),
       "",
-      ...this.input.render(width),
+      ...this.input.render(safeWidth),
       "",
-      this.theme.muted(this.help)
+      ...wrapTerminalText(this.theme.muted(this.help), safeWidth)
     ];
   }
 

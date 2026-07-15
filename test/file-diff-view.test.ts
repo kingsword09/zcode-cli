@@ -103,7 +103,7 @@ describe("TUI file diff view", () => {
 
     expect(rendered).toContain("\x1b[38;5;120;48;5;22m");
     expect(rendered).toContain("\x1b[38;5;210;48;5;52m");
-    expect(rendered).toContain("\x1b[38;5;117;48;5;24m");
+    expect(rendered).toContain("\x1b[38;5;159;48;5;24m");
   });
 
   test("uses readable pastel diff colors on light terminals", () => {
@@ -117,6 +117,18 @@ describe("TUI file diff view", () => {
     expect(rendered).toContain("\x1b[38;5;22;48;5;194m");
     expect(rendered).toContain("\x1b[38;5;88;48;5;224m");
     expect(rendered).toContain("\x1b[38;5;24;48;5;189m");
+  });
+
+  test("uses an explicit readable foreground for diff headers on light terminals", () => {
+    const view = new FileDiffView(createTheme(true, "light"), {
+      toolName: "Edit",
+      state: "complete",
+      diffs: [officialDisplay]
+    });
+    const rendered = view.render(120).join("\n");
+
+    expect(rendered).toContain("\x1b[1;38;5;236mEdit");
+    expect(rendered).toContain("\x1b[1;38;5;236mpackages/zcode-tui/src/events.ts");
   });
 
   test("wraps CJK changes within narrow terminals", () => {

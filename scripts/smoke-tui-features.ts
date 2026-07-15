@@ -126,6 +126,30 @@ try {
   await sendAndWait("/effort\r", "effort picker", /Select reasoning effort/i);
   await sendAndWait("\x1b[B\r", "effort picker selection", /alpha\/model · plan · low/i);
   await sendAndWait("\x1b[Z", "build mode shortcut", /alpha\/model · build · low/i);
+  await sendAndWait(
+    "review long plan\r",
+    "plan approval choices",
+    /Ready to implement\?[\s\S]*Plan 1–\d+ of \d+[\s\S]*Approve and continue/i
+  );
+  await sendAndWait(
+    "\x0f",
+    "expanded plan review",
+    /Ready to implement\? · Plan[\s\S]*Ctrl\+O or Esc return/i
+  );
+  await sendAndWait(
+    "\x1b[6~",
+    "scrolled plan review",
+    /Plan (?:[2-9]|[1-9]\d+)–\d+ of \d+/i
+  );
+  await sendAndWait("\x1b", "returned to plan choices", /Approve and continue/i);
+  await sendAndWait("\r", "approved reviewed plan", /Plan approval fixture complete: allow\./i);
+  await sendAndWait("review plan feedback\r", "plan feedback choices", /Ready to implement\?/i);
+  await sendAndWait("\x1b[B\r", "implementation instructions prompt", /What should ZCode keep in mind while implementing\?/i);
+  await sendAndWait(
+    "Preserve the verified terminal layout.\r",
+    "queued plan feedback",
+    /Plan approval fixture complete: deny · plan_approval_feedback\./i
+  );
   await sendAndWait("\x16", "clipboard image", /1 image attached/i);
   await sendAndWait("inspect @ind", "workspace path suggestions", /index\.ts[\s\S]*src\/index\.ts/i);
   await sendAndWait("\r", "workspace path completion", /inspect @src\/index\.ts/i);
@@ -160,6 +184,8 @@ try {
   await sendAndWait("\r", "workflow detail", /Workflow · run_feature/i);
   await sendAndWait("\x1b[B\r", "workflow stop", /Status: cancelled/i);
   await sendAndSettle("\x1b");
+  await sendAndWait("/activity\r", "complete activity view", /Current activity[\s\S]*Verify the TUI/i);
+  await sendAndSettle("\r");
   await sendAndWait("/tasks\r", "background task picker", /Background tasks/i);
   await sendAndWait("\r", "background task detail", /Background task · bg_feature/i);
   await sendAndSettle("\r");
@@ -186,8 +212,11 @@ if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain.slice(-6_000)}`);
 
 const turnNotifications = output.match(/\x1b\]9;ZCode ·/gu) ?? [];
-if (turnNotifications.length !== 1 || !output.includes("\x1b]9;ZCode · Feature prompt complete.")) {
-  throw new Error(`Expected one unfocused agent-turn notification, received ${turnNotifications.length}.`);
+if (turnNotifications.length !== 3
+  || !output.includes("\x1b]9;ZCode · Plan approval fixture complete: allow.")
+  || !output.includes("\x1b]9;ZCode · Plan approval fixture complete: deny · plan_approval_feedback.")
+  || !output.includes("\x1b]9;ZCode · Feature prompt complete.")) {
+  throw new Error(`Expected three unfocused agent-turn notifications, received ${turnNotifications.length}.`);
 }
 
 for (const [label, pattern] of [
@@ -250,7 +279,8 @@ for (const [label, pattern] of [
   ["MCP action", /MCP connected: docs/i],
   ["workflow picker", /Workflow runs/i],
   ["workflow detail", /Feature workflow/i],
-  ["workflow stop", /Status: cancelled/i]
+  ["workflow stop", /Status: cancelled/i],
+  ["complete activity view", /Current activity[\s\S]*Verify the TUI/i]
 ] as const) {
   if (!pattern.test(plain)) throw new Error(`Missing ${label} in feature TUI smoke.\n${plain.slice(-6_000)}`);
 }
@@ -267,7 +297,7 @@ if (/Shift\+Tab mode · Ctrl\+N model/i.test(plain)) {
   throw new Error(`Unexpected shortcut legend below the editor.\n${plain.slice(-6_000)}`);
 }
 
-if (/\b(?:ready|switching)\b/i.test(plain)) {
+if (/(?:^|\n)[ \t]*(?:ready|switching(?:…|\.\.\.)?)[ \t]*(?:\n|$)/imu.test(plain)) {
   throw new Error(`Unexpected transient state log in feature TUI smoke.\n${plain.slice(-6_000)}`);
 }
 
@@ -288,7 +318,9 @@ for (const [label, pattern] of [
   ["effort shortcut preserving plan", /beta\/model · plan · high/i],
   ["model picker preserving plan", /alpha\/model · plan · high/i],
   ["effort picker preserving plan", /alpha\/model · plan · low/i],
-  ["build mode shortcut", /alpha\/model · build · low/i]
+  ["build mode shortcut", /alpha\/model · build · low/i],
+  ["scrollable plan approval", /Plan approval fixture complete: allow\./i],
+  ["plan feedback continuation", /Plan approval fixture complete: deny · plan_approval_feedback\./i]
 ] as const) {
   const match = pattern.exec(plain.slice(stateOffset));
   if (!match) throw new Error(`Missing ordered ${label} state in feature TUI smoke.\n${plain.slice(-6_000)}`);

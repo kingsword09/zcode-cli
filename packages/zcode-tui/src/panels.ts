@@ -1,5 +1,6 @@
 import { asString, isRecord } from "./types.ts";
 import type { PickerSpec } from "./selectors.ts";
+import { truncateGraphemes } from "./terminal-text.ts";
 
 function listRequest(input: string, command: string): boolean {
   const match = /^\/([^\s]+)(?:\s+(.*))?$/u.exec(input.trim());
@@ -47,7 +48,7 @@ export function workflowRunPicker(value: unknown): PickerSpec {
     const kind = asString(runValue.kind);
     return [{
       value: runId,
-      label: task.length > 72 ? `${task.slice(0, 69)}…` : task,
+      label: truncateGraphemes(task, 72),
       description: [status, kind, runId === selectedRunId ? "selected" : runId]
         .filter((part): part is string => Boolean(part))
         .join(" · "),

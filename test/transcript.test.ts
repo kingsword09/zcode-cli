@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 
 import { Transcript } from "../packages/zcode-tui/src/transcript.ts";
+import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
 describe("TUI transcript", () => {
   test("separates top-level conversation blocks by one line", () => {
@@ -71,6 +72,17 @@ describe("TUI transcript", () => {
     expect(transcript.selectedText()).toBe("alpha again");
   });
 
+  test("marks no-color matches without exceeding the terminal width", () => {
+    const transcript = new Transcript(createTheme(false).searchMatch);
+    transcript.addBlock(new Text("Alpha result on a narrow line", 0, 0), {
+      searchText: "Alpha result on a narrow line"
+    });
+    transcript.searchFor("Alpha");
+    const lines = transcript.render(18);
+    expect(lines.join("\n")).toContain("⟦Alpha⟧");
+    expect(lines.every((line) => visibleWidth(line) <= 18)).toBe(true);
+  });
+
   test("pages oversized selected blocks without rendering every line", () => {
     const transcript = new Transcript();
     transcript.setNavigationViewportRows(4);
@@ -89,5 +101,33 @@ describe("TUI transcript", () => {
     expect(second).toContain("Page 2/3");
     expect(second).toContain("line 5");
     expect(second).not.toContain("line 1\n");
+  });
+
+  test("uses the windowed component path without materializing a full block", () => {
+    let fullRenders = 0;
+    const component: Component & {
+      renderWindow(width: number, start: number, count: number): { lines: string[]; totalLines: number };
+    } = {
+      invalidate() {},
+      render() {
+        fullRenders += 1;
+        throw new Error("full render should not run while paging");
+      },
+      renderWindow(_width, start, count) {
+        return {
+          lines: Array.from({ length: Math.min(count, Math.max(0, 50_000 - start)) }, (_, index) => `line ${start + index + 1}`),
+          totalLines: 50_000
+        };
+      }
+    };
+    const transcript = new Transcript();
+    transcript.setNavigationViewportRows(20);
+    transcript.addBlock(component, { kind: "assistant", searchText: "large output" });
+    transcript.selectLatest();
+
+    expect(transcript.render(80).join("\n")).toContain("Page 1/2500");
+    expect(transcript.movePage(1, 80)).toEqual({ current: 2, total: 2_500 });
+    expect(transcript.render(80).join("\n")).toContain("line 21");
+    expect(fullRenders).toBe(0);
   });
 });

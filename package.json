@@ -49,7 +49,7 @@
     "sync:local": "bun run build && bun scripts/sync-runtime.ts --app /Applications/ZCode.app",
     "check": "bun run build && bun scripts/check-runtime.ts",
     "check:oauth-callback": "bun scripts/smoke-oauth-callback.ts",
-    "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts",
+    "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts && bun scripts/smoke-tui-widths.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "version:build": "bun scripts/bump-build.ts",

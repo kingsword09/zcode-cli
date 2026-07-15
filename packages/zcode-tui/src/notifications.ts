@@ -4,7 +4,7 @@ import { extname, isAbsolute, join } from "node:path";
 
 import { readUserConfig, updateUserConfig } from "../../../src/model-access.ts";
 
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
 
 const ESC = "\x1b";
 const BEL = "\x07";
@@ -136,13 +136,7 @@ export function notificationPreview(value: string, maximum = notificationPreview
   if (!normalized) return undefined;
   if (maximum <= 0) return "";
 
-  const segments = Array.from(
-    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(normalized),
-    (entry) => entry.segment
-  );
-  return segments.length <= maximum
-    ? normalized
-    : `${segments.slice(0, Math.max(1, maximum - 1)).join("")}…`;
+  return truncateGraphemes(normalized, maximum);
 }
 
 export function supportsOsc9(env: NodeJS.ProcessEnv = process.env): boolean {

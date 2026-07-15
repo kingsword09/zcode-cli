@@ -7,7 +7,8 @@ import {
 } from "@earendil-works/pi-tui";
 
 import type { ZCodeTheme } from "./theme.ts";
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
+import type { WindowedRenderResult } from "./renderable.ts";
 
 export type MarkdownSegment =
   | { kind: "markdown"; text: string }
@@ -18,7 +19,21 @@ interface RenderedMarkdownSegment {
   component: Component;
 }
 
+interface MarkdownWindowPart {
+  component?: Component;
+  lineCount: number;
+  start: number;
+}
+
+interface MarkdownWindowLayout {
+  parts: MarkdownWindowPart[];
+  text: string;
+  totalLines: number;
+  width: number;
+}
+
 const maxMermaidSourceCharacters = 20_000;
+const markdownWindowChunkLines = 80;
 const terminalWidthPlaceholder = "\u200b";
 
 export function normalizeMermaidTerminalWidth(source: string): string {
@@ -173,7 +188,7 @@ export function renderMermaidPreview(source: string, width: number): { lines?: s
       : { reason: "too wide for terminal" };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { reason: message.split("\n", 1)[0]?.slice(0, 120) || "invalid Mermaid syntax" };
+    return { reason: truncateGraphemes(message.split("\n", 1)[0] ?? "", 120) || "invalid Mermaid syntax" };
   }
 }
 
@@ -219,6 +234,7 @@ export class RichMarkdown implements Component {
   private cachedWidth?: number;
   private cachedLines?: string[];
   private renderedSegments: RenderedMarkdownSegment[] = [];
+  private windowLayout?: MarkdownWindowLayout;
 
   constructor(
     private text: string,
@@ -239,6 +255,7 @@ export class RichMarkdown implements Component {
     this.cachedText = undefined;
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
+    this.windowLayout = undefined;
     for (const rendered of this.renderedSegments) rendered.component.invalidate();
   }
 
@@ -251,6 +268,47 @@ export class RichMarkdown implements Component {
       return this.cachedLines;
     }
 
+    this.syncRenderedSegments();
+
+    const lines: string[] = [];
+    for (const { component } of this.renderedSegments) {
+      const rendered = component.render(width);
+      if (rendered.length === 0) continue;
+      if (lines.length > 0 && lines.at(-1)?.trim() !== "") lines.push("");
+      lines.push(...rendered);
+    }
+
+    this.cachedText = this.text;
+    this.cachedWidth = width;
+    this.cachedLines = lines;
+    return lines;
+  }
+
+  renderWindow(width: number, start: number, count: number): WindowedRenderResult {
+    const layout = this.measureWindowLayout(width);
+    const first = Math.max(0, Math.floor(start));
+    const size = Math.max(0, Math.floor(count));
+    const end = Math.min(layout.totalLines, first + size);
+    if (size === 0 || first >= end) return { lines: [], totalLines: layout.totalLines };
+
+    const lines: string[] = [];
+    for (const part of layout.parts) {
+      const partEnd = part.start + part.lineCount;
+      if (partEnd <= first || part.start >= end) continue;
+      const localStart = Math.max(0, first - part.start);
+      const localEnd = Math.min(part.lineCount, end - part.start);
+      if (!part.component) {
+        lines.push("");
+        continue;
+      }
+      const rendered = part.component.render(width);
+      lines.push(...rendered.slice(localStart, localEnd));
+      part.component.invalidate();
+    }
+    return { lines, totalLines: layout.totalLines };
+  }
+
+  private syncRenderedSegments(): void {
     const segments = splitStreamingMarkdownSegments(this.text);
     this.renderedSegments = segments.map((segment, index): RenderedMarkdownSegment => {
       const previous = this.renderedSegments[index];
@@ -267,19 +325,56 @@ export class RichMarkdown implements Component {
           : new Markdown(segment.text, this.paddingX, 0, this.theme.markdown)
       };
     });
+  }
 
-    const lines: string[] = [];
-    for (const { component } of this.renderedSegments) {
-      const rendered = component.render(width);
-      if (rendered.length === 0) continue;
-      if (lines.length > 0 && lines.at(-1)?.trim() !== "") lines.push("");
-      lines.push(...rendered);
+  private measureWindowLayout(width: number): MarkdownWindowLayout {
+    if (this.windowLayout?.text === this.text && this.windowLayout.width === width) {
+      return this.windowLayout;
     }
+    this.cachedText = undefined;
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
+    this.syncRenderedSegments();
+    const parts: MarkdownWindowPart[] = [];
+    let totalLines = 0;
+    let previousLastLine: string | undefined;
+    for (const segment of this.renderedSegments) {
+      let firstChunk = true;
+      for (const component of this.windowComponents(segment)) {
+        const rendered = component.render(width);
+        if (rendered.length === 0) continue;
+        if (firstChunk && totalLines > 0 && previousLastLine?.trim() !== "") {
+          parts.push({ lineCount: 1, start: totalLines });
+          totalLines += 1;
+        }
+        parts.push({ component, lineCount: rendered.length, start: totalLines });
+        totalLines += rendered.length;
+        previousLastLine = rendered.at(-1);
+        component.invalidate();
+        firstChunk = false;
+      }
+    }
+    this.windowLayout = { parts, text: this.text, totalLines, width };
+    return this.windowLayout;
+  }
 
-    this.cachedText = this.text;
-    this.cachedWidth = width;
-    this.cachedLines = lines;
-    return lines;
+  private windowComponents(rendered: RenderedMarkdownSegment): Component[] {
+    if (rendered.segment.kind !== "markdown") return [rendered.component];
+    const lines = rendered.segment.text.split("\n");
+    if (lines.length <= markdownWindowChunkLines
+      || lines.some((line) => openingFence(line) || /^\s*\|.*\|\s*$/u.test(line))) {
+      return [rendered.component];
+    }
+    const components: Component[] = [];
+    for (let start = 0; start < lines.length; start += markdownWindowChunkLines) {
+      components.push(new Markdown(
+        lines.slice(start, start + markdownWindowChunkLines).join("\n"),
+        this.paddingX,
+        0,
+        this.theme.markdown
+      ));
+    }
+    return components;
   }
 }
 

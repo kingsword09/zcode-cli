@@ -31,7 +31,7 @@ describe("TUI tool execution view", () => {
     expect(card.length).toBeLessThan(2_500);
 
     const larger = toolCard({ name: "Bash", state: "complete", result: "x".repeat(4_000) });
-    expect(larger).toContain("more characters");
+    expect(larger).toContain("output truncated");
     expect(larger.length).toBeLessThan(2_700);
   });
 
@@ -58,31 +58,72 @@ describe("TUI tool execution view", () => {
     expect(output).toContain("│+ new");
   });
 
-  test("uses a quiet full-width background that recedes after completion", () => {
+  test("reserves full-width backgrounds for permission and failure states", () => {
     const view = new ToolExecutionView(createTheme(true), {
       name: "Bash",
       state: "running",
       input: { command: "bun test" }
     });
 
-    expect(view.render(72).join("\n")).toContain("\x1b[38;5;252;48;5;236m");
+    expect(view.render(72).join("\n")).not.toContain("\x1b[48;5;");
     view.update({ name: "Bash", state: "complete", input: { command: "bun test" } });
-    expect(view.render(72).join("\n")).toContain("\x1b[38;5;252;48;5;234m");
+    expect(view.render(72).join("\n")).not.toContain("\x1b[48;5;");
+    view.update({ name: "Bash", state: "waiting_permission", input: { command: "bun test" } });
+    expect(view.render(72).join("\n")).toContain("\x1b[38;5;252;48;5;236m");
     view.update({ name: "Bash", state: "failed", input: { command: "bun test" } });
     expect(view.render(72).join("\n")).toContain("\x1b[38;5;252;48;5;52m");
   });
 
-  test("uses dark text on light cards and restores it after child ANSI resets", () => {
+  test("strips external background, inverse and hidden SGR from tool output", () => {
     const view = new ToolExecutionView(createTheme(true, "light"), {
       name: "Bash",
       state: "complete",
       input: { command: "printf color" },
-      result: "\x1b[31mred\x1b[0m plain output"
+      result: "\x1b[47;8;7mvisible output\x1b[0m plain output"
     });
     const rendered = view.render(72).join("\n");
 
-    expect(rendered).toContain("\x1b[38;5;236;48;5;254m");
-    expect(rendered).toContain("\x1b[0m\x1b[38;5;236;48;5;254m plain output");
+    expect(rendered).toContain("visible output plain output");
+    expect(rendered).not.toContain("\x1b[47;8;7m");
+    expect(rendered).not.toContain("\x1b[48;5;");
+  });
+
+  test("uses an explicit readable foreground for tool names on light terminals", () => {
+    const view = new ToolExecutionView(createTheme(true, "light"), {
+      name: "Bash",
+      state: "complete",
+      input: { command: "bun test" },
+      result: "212 pass"
+    });
+
+    expect(view.render(72).join("\n")).toContain("\x1b[1;38;5;236mBash");
+  });
+
+  test("falls back to JSON for unknown structured arrays and reports hidden images", () => {
+    const structured = toolCard({
+      name: "\x1b[47;8mUnknownTool\x1b[0m",
+      state: "complete",
+      result: [{ foo: "bar" }, { count: 2 }]
+    });
+    expect(structured).toContain("UnknownTool");
+    expect(structured).not.toContain("\x1b[");
+    expect(structured).toContain('"foo": "bar"');
+    expect(structured).toContain('"count": 2');
+
+    const image = {
+      type: "image",
+      source: { data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB", media_type: "image/png" }
+    };
+    const view = new ToolExecutionView(createTheme(false), {
+      name: "UnknownTool",
+      state: "complete",
+      result: Array.from({ length: 6 }, () => image)
+    });
+    expect(view.render(80).join("\n")).toContain("4 of 6 images shown · Ctrl+O to show all");
+    expect(view.hasHiddenContent()).toBe(true);
+    view.setExpanded(true);
+    expect(view.render(80).join("\n")).toContain("6 images");
+    expect(view.hasHiddenContent()).toBe(false);
   });
 
   test("hides metadata-only success results and surfaces embedded errors", () => {

@@ -1,5 +1,5 @@
 import type { ZCodeTheme } from "./theme.ts";
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
 import { asString, isRecord } from "./types.ts";
 
 export interface ToolProgressData {
@@ -137,7 +137,7 @@ export function recordString(record: Record<string, unknown> | undefined, keys: 
 
 export function oneLine(value: string, limit = 100): string {
   const compact = sanitizeTerminalText(value, { preserveSgr: false }).replace(/\s+/gu, " ").trim();
-  return compact.length <= limit ? compact : `${compact.slice(0, Math.max(1, limit - 1))}…`;
+  return truncateGraphemes(compact, limit);
 }
 
 function quoted(value: string): string {
@@ -199,7 +199,7 @@ function safeJson(value: unknown): string | undefined {
   try {
     return JSON.stringify(value, null, 2);
   } catch {
-    return String(value);
+    return sanitizeTerminalText(String(value), { preserveSgr: false });
   }
 }
 

@@ -17,6 +17,7 @@ interface ConfigTemplate {
     lite: string;
   };
   ui: {
+    theme: string;
     notifications: {
       method: string;
       condition: string;
@@ -37,5 +38,6 @@ test("custom-provider config template is internally consistent", async () => {
   expect(config.provider[providerId]?.models[liteModelId]).toBeDefined();
   expect(config.provider[providerId]?.options.apiKey).toBeUndefined();
   expect(config.provider[providerId]?.options.baseURL).toBe("https://api.z.ai/api/anthropic");
+  expect(config.ui.theme).toBe("auto");
   expect(config.ui.notifications).toEqual({ method: "auto", condition: "unfocused" });
 });

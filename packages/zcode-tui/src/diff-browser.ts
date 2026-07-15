@@ -4,6 +4,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { FileDiffView, type FileDiffData } from "./file-diff-view.ts";
+import { truncateGraphemes } from "./terminal-text.ts";
 import type { ZCodeTheme } from "./theme.ts";
 import type { TurnDiffSnapshot } from "./turn-diff-store.ts";
 import type { WorkspaceDiffSnapshot } from "./workspace-diff.ts";
@@ -24,7 +25,7 @@ function totals(files: FileDiffData[]): { additions: number; deletions: number }
 
 function oneLine(value: string, maximum = 72): string {
   const compact = value.replace(/\s+/gu, " ").trim();
-  return compact.length <= maximum ? compact : `${compact.slice(0, maximum - 1)}…`;
+  return truncateGraphemes(compact, maximum);
 }
 
 export function diffBrowserSources(

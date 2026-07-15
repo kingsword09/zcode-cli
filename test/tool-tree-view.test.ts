@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 import { ToolTreeView } from "../packages/zcode-tui/src/tool-tree-view.ts";
@@ -38,5 +39,13 @@ describe("TUI tool tree", () => {
     second.setExpanded(true);
     expect(first.getChildren()).toHaveLength(0);
     expect(second.render(80).join("\n")).toContain("Bash");
+  });
+
+  test("keeps collapsed descendant hints inside very narrow terminals", () => {
+    const parent = tree("Agent");
+    parent.addChild(tree("Read"));
+    for (const width of [8, 20, 36]) {
+      expect(parent.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
+    }
   });
 });
