@@ -10,6 +10,11 @@ import {
 } from "../packages/zcode-tui/src/rich-markdown.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
+function terminalColumn(line: string, marker: string): number {
+  const index = line.indexOf(marker);
+  return index < 0 ? -1 : visibleWidth(line.slice(0, index));
+}
+
 describe("TUI rich Markdown", () => {
   test("extracts only complete Mermaid fences", () => {
     expect(splitMarkdownSegments([
@@ -65,6 +70,36 @@ describe("TUI rich Markdown", () => {
     component.setText("first\n\nsecond");
     expect(component.getSearchText()).toBe("first\n\nsecond");
     expect(component.render(80).join("\n")).toContain("second");
+  });
+
+  test("uses an explicit readable foreground for strong text on light terminals", () => {
+    const component = new RichMarkdown(
+      "### 说明\n\n- **类型** feat\n- **范围** tui\n- **描述** summary",
+      1,
+      createTheme(true, "light")
+    );
+    const rendered = component.render(80).join("\n");
+
+    expect(rendered).toContain("\x1b[1;38;5;236m类型");
+    expect(rendered).toContain("\x1b[1;38;5;236m范围");
+    expect(rendered).toContain("\x1b[1;38;5;236m描述");
+    expect(rendered).toContain("\x1b[38;5;25m\x1b[1m### ");
+  });
+
+  test("pages very long Markdown across internal chunk boundaries", () => {
+    const component = new RichMarkdown(
+      Array.from({ length: 500 }, (_, index) => `${index + 1}. task ${index + 1}`).join("\n"),
+      1,
+      createTheme(false)
+    );
+    const page = component.renderWindow(80, 79, 4);
+    expect(page.totalLines).toBe(500);
+    expect(page.lines.map((line) => line.trim())).toEqual([
+      "80. task 80",
+      "81. task 81",
+      "82. task 82",
+      "83. task 83"
+    ]);
   });
 
   test("renders Mermaid flowcharts as terminal diagrams", () => {
@@ -124,6 +159,14 @@ describe("TUI rich Markdown", () => {
     expect(editorLabel).toBeDefined();
     expect(visibleWidth(inputLabel ?? "")).toBe(visibleWidth(topBorder ?? ""));
     expect(visibleWidth(editorLabel ?? "")).toBe(visibleWidth(topBorder ?? ""));
+
+    const junctionRows = lines.flatMap((line, index) => line.includes("┬") ? [index] : []);
+    expect(junctionRows).toHaveLength(2);
+    for (const row of junctionRows) {
+      const column = terminalColumn(lines[row] ?? "", "┬");
+      expect(terminalColumn(lines[row + 1] ?? "", "│")).toBe(column);
+      expect(terminalColumn(lines[row + 2] ?? "", "▼")).toBe(column);
+    }
   });
 
   test("preserves Mermaid source when the terminal cannot fit the diagram", () => {

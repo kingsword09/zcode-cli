@@ -23,12 +23,10 @@ interface ThemePalette {
   warning: string;
   error: string;
   muted: string;
+  strong: string;
   code: string;
   quote: string;
-  userSurface: string;
-  thinkingSurface: string;
   toolPendingSurface: string;
-  toolSuccessSurface: string;
   toolErrorSurface: string;
   diffAddedLine: string;
   diffRemovedLine: string;
@@ -44,16 +42,14 @@ const palettes: Record<ZCodeColorScheme, ThemePalette> = {
     warning: "38;5;221",
     error: "38;5;203",
     muted: "38;5;247",
+    strong: "1;38;5;252",
     code: "38;5;117",
     quote: "38;5;109",
-    userSurface: "38;5;252;48;5;236",
-    thinkingSurface: "38;5;252;48;5;235",
     toolPendingSurface: "38;5;252;48;5;236",
-    toolSuccessSurface: "38;5;252;48;5;234",
     toolErrorSurface: "38;5;252;48;5;52",
     diffAddedLine: "38;5;120;48;5;22",
     diffRemovedLine: "38;5;210;48;5;52",
-    diffHunkLine: "38;5;117;48;5;24",
+    diffHunkLine: "38;5;159;48;5;24",
     diffAddedWord: "1;38;5;231;48;5;28",
     diffRemovedWord: "1;38;5;231;48;5;88"
   },
@@ -63,12 +59,10 @@ const palettes: Record<ZCodeColorScheme, ThemePalette> = {
     warning: "38;5;94",
     error: "38;5;160",
     muted: "38;5;242",
+    strong: "1;38;5;236",
     code: "38;5;25",
     quote: "38;5;24",
-    userSurface: "38;5;236;48;5;255",
-    thinkingSurface: "38;5;236;48;5;254",
-    toolPendingSurface: "38;5;236;48;5;255",
-    toolSuccessSurface: "38;5;236;48;5;254",
+    toolPendingSurface: "38;5;58;48;5;230",
     toolErrorSurface: "38;5;236;48;5;224",
     diffAddedLine: "38;5;22;48;5;194",
     diffRemovedLine: "38;5;88;48;5;224",
@@ -95,10 +89,7 @@ export interface ZCodeTheme {
   error: (text: string) => string;
   muted: (text: string) => string;
   bold: (text: string) => string;
-  userBackground: (text: string) => string;
-  thinkingBackground: (text: string) => string;
   toolPendingBackground: (text: string) => string;
-  toolSuccessBackground: (text: string) => string;
   toolErrorBackground: (text: string) => string;
   diffAddedLine: (text: string) => string;
   diffRemovedLine: (text: string) => string;
@@ -121,27 +112,34 @@ export function createTheme(enabled: boolean, initialColorScheme: ZCodeColorSche
   const warning = paletteStyle(state, "warning", enabled);
   const error = paletteStyle(state, "error", enabled);
   const muted = paletteStyle(state, "muted", enabled);
-  const bold = ansi(() => "1", enabled);
+  const bold = paletteStyle(state, "strong", enabled);
   const italic = ansi(() => "3", enabled);
   const underline = ansi(() => "4", enabled);
   const strikethrough = ansi(() => "9", enabled);
   const code = paletteStyle(state, "code", enabled);
   const quote = paletteStyle(state, "quote", enabled);
-  const userBackground = paletteStyle(state, "userSurface", enabled);
-  const thinkingBackground = paletteStyle(state, "thinkingSurface", enabled);
   const toolPendingBackground = paletteStyle(state, "toolPendingSurface", enabled);
-  const toolSuccessBackground = paletteStyle(state, "toolSuccessSurface", enabled);
   const toolErrorBackground = paletteStyle(state, "toolErrorSurface", enabled);
   const diffAddedLine = paletteStyle(state, "diffAddedLine", enabled);
   const diffRemovedLine = paletteStyle(state, "diffRemovedLine", enabled);
   const diffHunkLine = paletteStyle(state, "diffHunkLine", enabled);
   const diffAddedWord = paletteStyle(state, "diffAddedWord", enabled);
   const diffRemovedWord = paletteStyle(state, "diffRemovedWord", enabled);
-  const searchMatch = enabled ? (text: string) => `\x1b[7m${text}\x1b[27m` : (text: string) => text;
+  const searchMatch = enabled
+    ? (text: string) => `\x1b[7m${text}\x1b[27m`
+    : (text: string) => `⟦${text}⟧`;
+  const accentBold = (text: string): string => bold(accent(text));
+  const markdownHeading = (text: string): string => {
+    if (!enabled) return text;
+    // pi-tui applies bold before heading. Remove only bold's neutral foreground
+    // so the semantic heading color remains active while retaining SGR 1.
+    const strongOpen = `\x1b[${palettes[state.colorScheme].strong}m`;
+    return accent(text.replaceAll(strongOpen, "\x1b[1m"));
+  };
 
   const select: SelectListTheme = {
     selectedPrefix: accent,
-    selectedText: bold,
+    selectedText: accentBold,
     description: muted,
     scrollInfo: muted,
     noMatch: muted
@@ -154,10 +152,7 @@ export function createTheme(enabled: boolean, initialColorScheme: ZCodeColorSche
     error,
     muted,
     bold,
-    userBackground,
-    thinkingBackground,
     toolPendingBackground,
-    toolSuccessBackground,
     toolErrorBackground,
     diffAddedLine,
     diffRemovedLine,
@@ -177,7 +172,7 @@ export function createTheme(enabled: boolean, initialColorScheme: ZCodeColorSche
       selectList: select
     },
     markdown: {
-      heading: (text) => accent(bold(text)),
+      heading: markdownHeading,
       link: underline,
       linkUrl: muted,
       code,

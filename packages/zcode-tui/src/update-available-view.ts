@@ -11,7 +11,7 @@ export const releaseNotesUrl = "https://github.com/kingsword09/zcode-cli/release
 
 export class UpdateAvailableView extends Box {
   constructor(theme: ZCodeTheme, currentVersion: string, latestVersion: string) {
-    super(1, 0, theme.toolPendingBackground);
+    super(1, 0);
     const current = sanitizeTerminalText(currentVersion, { preserveSgr: false });
     const latest = sanitizeTerminalText(latestVersion, { preserveSgr: false });
     this.addChild(new Text([

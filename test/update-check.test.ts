@@ -149,4 +149,11 @@ describe("update available view", () => {
     expect(output).toContain(updateCommand);
     expect(output).toContain(releaseNotesUrl);
   });
+
+  test("keeps the routine update notice free of a full-width background", () => {
+    const output = new UpdateAvailableView(createTheme(true, "light"), "3.3.5-1", "3.3.5-2")
+      .render(90)
+      .join("\n");
+    expect(output).not.toContain("\x1b[48;5;");
+  });
 });

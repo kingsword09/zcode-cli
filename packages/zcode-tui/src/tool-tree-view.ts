@@ -65,7 +65,10 @@ export class ToolTreeView implements Component {
     if (this.children.length === 0) return lines;
     if (!this.expanded && this.tool.isTerminal()) {
       const count = this.descendantCount();
-      lines.push(this.theme.muted(`  └─ ${count} child ${count === 1 ? "tool" : "tools"} · Ctrl+O to expand`));
+      lines.push(truncateToWidth(
+        this.theme.muted(`  └─ ${count} child ${count === 1 ? "tool" : "tools"} · Ctrl+O to expand`),
+        Math.max(1, width)
+      ));
       return lines;
     }
 

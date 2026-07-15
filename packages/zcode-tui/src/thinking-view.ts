@@ -13,7 +13,7 @@ export class ThinkingView extends Box {
   private expanded = false;
 
   constructor(private readonly theme: ZCodeTheme) {
-    super(1, 0, theme.thinkingBackground);
+    super(1, 0);
   }
 
   append(delta: string): void {

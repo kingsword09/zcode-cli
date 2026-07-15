@@ -5,8 +5,10 @@ import {
 
 import {
   isExpandableComponent,
-  isSearchableComponent
+  isSearchableComponent,
+  isWindowedComponent
 } from "./renderable.ts";
+import { truncateGraphemes } from "./terminal-text.ts";
 
 const renderWindowSize = 240;
 const renderWindowStep = 60;
@@ -178,7 +180,10 @@ export class Transcript implements Component {
     const index = this.focusedBlockIndex();
     const block = index === undefined ? undefined : this.blocks[index];
     if (!block) return undefined;
-    const lineCount = block.component.render(Math.max(1, width - 2)).length;
+    const contentWidth = Math.max(1, width - 2);
+    const lineCount = isWindowedComponent(block.component)
+      ? block.component.renderWindow(contentWidth, 0, 0).totalLines
+      : block.component.render(contentWidth).length;
     const total = Math.max(1, Math.ceil(lineCount / this.navigationViewportRows));
     this.page = Math.max(0, Math.min(total - 1, this.page + direction));
     return { current: this.page + 1, total };
@@ -254,22 +259,43 @@ export class Transcript implements Component {
       if (visibleIndex > 0) lines.push("");
       const absoluteIndex = selection.startIndex + visibleIndex;
       const focused = absoluteIndex === this.focusedBlockIndex();
-      let rendered = block.component.render(focused ? Math.max(1, width - 2) : width);
+      const contentWidth = focused ? Math.max(1, width - 2) : width;
+      let rendered: string[];
       if (focused && (this.cursor !== undefined || this.search)) {
-        const pages = Math.max(1, Math.ceil(rendered.length / this.navigationViewportRows));
+        const requestedStart = this.page * this.navigationViewportRows;
+        const windowedComponent = isWindowedComponent(block.component) ? block.component : undefined;
+        const windowed = windowedComponent
+          ? windowedComponent.renderWindow(
+            contentWidth,
+            requestedStart,
+            this.navigationViewportRows
+          )
+          : undefined;
+        const fullRendered = windowed ? undefined : block.component.render(contentWidth);
+        const totalLines = windowed?.totalLines ?? fullRendered?.length ?? 0;
+        const pages = Math.max(1, Math.ceil(totalLines / this.navigationViewportRows));
         this.page = Math.min(this.page, pages - 1);
         if (pages > 1) {
           lines.push(truncateToWidth(`── Page ${this.page + 1}/${pages} · PageUp/PageDown scroll ──`, width));
         }
         const start = this.page * this.navigationViewportRows;
-        rendered = rendered.slice(start, start + this.navigationViewportRows);
+        if (windowed) {
+          rendered = start === requestedStart
+            ? windowed.lines
+            : windowedComponent!.renderWindow(contentWidth, start, this.navigationViewportRows).lines;
+        } else {
+          rendered = (fullRendered ?? []).slice(start, start + this.navigationViewportRows);
+        }
+      } else {
+        rendered = block.component.render(contentWidth);
       }
       const decorated = focused
         ? rendered.map((line, lineIndex) => `${lineIndex === 0 ? "› " : "  "}${line}`)
         : rendered;
-      lines.push(...(selection.query
+      const presented = selection.query
         ? decorated.map((line) => highlightMatches(line, selection.query!, this.highlightMatch))
-        : decorated));
+        : decorated;
+      lines.push(...presented.map((line) => truncateToWidth(line, width)));
     }
     return lines.length > 0 ? [...lines, ""] : lines;
   }
@@ -332,7 +358,7 @@ export class Transcript implements Component {
       const block = this.blocks[index];
       if (block?.kind !== "user") continue;
       const text = this.blockSearchText(block).replace(/\s+/gu, " ").trim();
-      return text.length > 120 ? `${text.slice(0, 119)}…` : text;
+      return truncateGraphemes(text, 120);
     }
     return undefined;
   }

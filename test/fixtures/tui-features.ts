@@ -43,6 +43,13 @@ const planTodos = [
   { content: "Render plan updates", status: "completed", priority: "high" },
   { content: "Verify the TUI", status: "in_progress", priority: "medium" }
 ];
+const approvalPlan = [
+  "# Implementation Plan",
+  "",
+  ...Array.from({ length: 36 }, (_, index) => (
+    `${index + 1}. Complete detailed implementation step ${index + 1}.`
+  ))
+].join("\n");
 
 let sessionTranscript = [
   { messageId: "message_startup", role: "user", content: "Restored startup prompt." },
@@ -85,6 +92,7 @@ async function emitRuntime(options: PromptCallOptions, type: string, payload: un
 
 await runTui({
   version: "feature-smoke",
+  theme: process.env.ZCODE_TUI_TEST_THEME,
   workspaceDirectory: process.cwd(),
   initialMode: "build",
   initialModel: model,
@@ -191,10 +199,33 @@ await runTui({
   }),
   sendInput: async (input, options) => {
     const prompt = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
+    const promptText = typeof input === "string" ? input : prompt.text;
+    if (promptText === "review long plan" || promptText === "review plan feedback") {
+      if (!options.requestPermission) throw new Error("Plan approval callback is unavailable.");
+      const approval = await options.requestPermission({
+        input: { plan: approvalPlan },
+        toolCallId: "call_exit_plan",
+        toolName: "ExitPlanMode"
+      }, { abortSignal: options.abortSignal });
+      const decision = typeof approval === "object" && approval !== null
+        ? String((approval as Record<string, unknown>).decision ?? "unknown")
+        : "unknown";
+      const reasonSource = typeof approval === "object" && approval !== null
+        ? (approval as Record<string, unknown>).reasonSource
+        : undefined;
+      return {
+        kind: "started_turn",
+        result: {
+          response: `Plan approval fixture complete: ${decision}${reasonSource ? ` · ${String(reasonSource)}` : ""}.`,
+          model,
+          thoughtLevel: effort
+        }
+      };
+    }
     const attachments = Array.isArray(prompt.attachments) ? prompt.attachments : [];
     const image = attachments[0] as Record<string, unknown> | undefined;
     if (
-      prompt.text !== "inspect @src/index.ts" ||
+      promptText !== "inspect @src/index.ts" ||
       image?.type !== "image" ||
       typeof image.content !== "string"
     ) {

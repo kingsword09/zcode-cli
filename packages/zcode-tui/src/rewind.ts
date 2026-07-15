@@ -1,5 +1,5 @@
 import { restoredMessages } from "./events.ts";
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
 import { asString, isRecord } from "./types.ts";
 
 export type RewindScope = "conversation" | "workspace" | "both";
@@ -86,13 +86,7 @@ export function fileRewindPreview(value: unknown): FileRewindPreview {
 
 export function rewindTargetLabel(text: string, maximum = 100): string {
   const normalized = sanitizeTerminalText(text, { preserveSgr: false }).replace(/\s+/gu, " ").trim();
-  const graphemes = Array.from(
-    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(normalized),
-    (entry) => entry.segment
-  );
-  return graphemes.length <= maximum
-    ? normalized
-    : `${graphemes.slice(0, Math.max(1, maximum - 1)).join("")}…`;
+  return truncateGraphemes(normalized, maximum);
 }
 
 export function rewindCommand(scope: "conversation", messageId: string): string {

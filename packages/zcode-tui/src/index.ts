@@ -29,7 +29,12 @@ import {
 } from "./attachments.ts";
 import { AssistantStream } from "./assistant-stream.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
-import { colorSchemeFromColorFgBg, colorSchemeFromRgb } from "./color-scheme.ts";
+import {
+  colorSchemeFromRgb,
+  initialColorScheme,
+  themePreference,
+  type ZCodeThemePreference
+} from "./color-scheme.ts";
 import {
   historyText,
   modelLabel,
@@ -250,6 +255,7 @@ function restoredToolState(status: string): string {
 class ZCodeTui {
   private readonly colorsEnabled: boolean;
   private readonly distributionVersion?: string;
+  private readonly themePreference: ZCodeThemePreference;
   private readonly theme: ZCodeTheme;
   private readonly ui: TUI;
   private readonly transcript: Transcript;
@@ -325,11 +331,12 @@ class ZCodeTui {
 
   constructor(private readonly options: TuiOptions) {
     this.colorsEnabled = !options.noColor && !process.env.NO_COLOR;
+    this.themePreference = themePreference(options.theme);
     this.distributionVersion = sanitizeTerminalText(
       process.env.ZCODE_APP_CLI_VERSION?.trim() ?? "",
       { preserveSgr: false }
     ) || undefined;
-    this.theme = createTheme(this.colorsEnabled, colorSchemeFromColorFgBg() ?? "dark");
+    this.theme = createTheme(this.colorsEnabled, initialColorScheme(this.themePreference));
     this.transcript = new Transcript(this.theme.searchMatch);
     this.mode = normalizedMode(options.initialMode);
     this.model = modelLabel(options.initialModel);
@@ -403,7 +410,7 @@ class ZCodeTui {
   }
 
   private async resolveTerminalColorScheme(): Promise<void> {
-    if (!this.colorsEnabled) return;
+    if (!this.colorsEnabled || this.themePreference !== "auto") return;
     try {
       const [background, reportedScheme] = await Promise.all([
         this.ui.queryTerminalBackgroundColor({ timeoutMs: terminalThemeQueryTimeoutMs }),
@@ -572,6 +579,7 @@ class ZCodeTui {
       { name: "copy", description: "Copy the latest assistant response" },
       { name: "paste-image", description: "Attach an image from the system clipboard" },
       { name: "attachments", description: "Show or clear pending attachments", argumentHint: "[clear]" },
+      { name: "activity", description: "Inspect every active tool and open task" },
       { name: "tasks", description: "Inspect or stop background tasks", argumentHint: "[stop <task-id>]" },
       { name: "diff", description: "Browse current and per-turn file changes" },
       { name: "context", description: "Inspect context usage and prompt composition" },
@@ -730,6 +738,10 @@ class ZCodeTui {
       this.pendingAttachments = [];
       this.updateAttachmentStatus();
       this.addNotice("Pending attachments cleared.", "muted");
+      return;
+    }
+    if (input === "/activity") {
+      await this.showActivityDetails();
       return;
     }
     if (input === "/tasks" || input === "/tasks list") {
@@ -1264,7 +1276,7 @@ class ZCodeTui {
     const suffix = attachmentCount > 0 ? `  [${attachmentCount} image${attachmentCount === 1 ? "" : "s"}]` : "";
     this.currentToolGroup = undefined;
     this.transcript.addBlock(
-      new Text(`${this.theme.accent(prefix)} ${safeText}${this.theme.muted(suffix)}`, 1, 0, this.theme.userBackground),
+      new Text(`${this.theme.accent(prefix)} ${safeText}${this.theme.muted(suffix)}`, 1, 0),
       { kind: "user", messageId, searchText: safeText }
     );
     this.ui.requestRender();
@@ -1893,11 +1905,17 @@ class ZCodeTui {
       prompt: "Review the plan and choose how ZCode should continue.",
       items: [
         { value: "approve", label: "Approve and continue", description: "Exit plan mode and start implementation" },
-        { value: "approve_feedback", label: "Approve with instructions", description: "Add implementation guidance before continuing" },
+        {
+          value: "approve_feedback",
+          label: "Continue with instructions",
+          description: "Send implementation guidance, then review the updated plan"
+        },
         { value: "refine", label: "Keep planning", description: "Tell ZCode what to revise" },
         { value: "deny", label: "Cancel", description: "Stay in plan mode without feedback" }
       ],
       signal,
+      contentLabel: "Plan",
+      help: "Up/Down choose · Ctrl+O full plan · PgUp/PgDn scroll · Enter confirm · Esc cancel",
       content: plan ? new RichMarkdown(plan, 1, this.theme) : this.permissionPreview("ExitPlanMode", input)
     });
     if (!selected || selected.value === "deny") return { decision: "deny", reason: "Plan approval cancelled" };
@@ -1911,9 +1929,15 @@ class ZCodeTui {
       signal
     });
     if (!feedback?.trim()) return { decision: "deny", reason: "Plan approval cancelled" };
-    return selected.value === "refine"
-      ? { decision: "deny", reason: feedback.trim() }
-      : { decision: "allow", reason: `Plan approved with instructions: ${feedback.trim()}` };
+    const reason = selected.value === "refine"
+      ? feedback.trim()
+      : `The plan is approved with these implementation instructions: ${feedback.trim()}`;
+    // ExitPlanMode only queues a follow-up model turn when this source is present.
+    return {
+      decision: "deny",
+      reason,
+      reasonSource: "plan_approval_feedback"
+    };
   }
 
   private permissionPreview(toolName: string, input: unknown, riskLevel?: string): Component {
@@ -2657,21 +2681,49 @@ class ZCodeTui {
     if (action?.value === "stop") await this.stopBackgroundTask(job.taskId);
   }
 
+  private async showActivityDetails(): Promise<void> {
+    await this.refreshRuntimeState();
+    const state = {
+      projection: this.runtimeProjection,
+      todos: this.todos,
+      todoGroups: this.todoGroups
+    };
+    const detail = new RuntimeActivityView(this.theme, true);
+    detail.update(state);
+    if (detail.render(Math.max(1, this.ui.terminal.columns)).length <= 1) {
+      this.addNotice("No active tools or open tasks.", "muted");
+      return;
+    }
+    await this.showChoice({
+      title: "Current activity",
+      prompt: "Review active tools, background work and open tasks.",
+      contentLabel: "Activity",
+      content: detail,
+      items: [{ value: "close", label: "Close" }]
+    });
+  }
+
   private backgroundTaskDetail(job: RuntimeBackgroundJob): string {
+    const safe = (value: string | undefined): string | undefined => value
+      ? sanitizeTerminalText(value, { preserveSgr: false })
+      : undefined;
+    const stderr = safe(job.stderrTail);
+    const terminalId = safe(job.terminalId);
+    const outputPath = safe(job.outputPath);
     const lines = [
-      job.description,
-      job.command,
+      safe(job.description),
+      safe(job.command),
       [
-        job.toolName,
+        safe(job.toolName),
         job.pid ? `pid ${job.pid}` : undefined,
-        job.terminalId ? `terminal ${job.terminalId}` : undefined,
+        terminalId ? `terminal ${terminalId}` : undefined,
         job.outputBytes !== undefined ? `${job.outputBytes.toLocaleString()} output bytes` : undefined
       ].filter(Boolean).join(" · "),
-      job.outputPath ? `Output: ${job.outputPath}` : undefined,
+      outputPath ? `Output: ${outputPath}` : undefined,
       job.outputTruncated ? "Output is truncated" : undefined,
-      job.stdoutTail,
-      job.stderrTail ? this.theme.error(job.stderrTail) : undefined,
-      job.outputTail
+      safe(job.stdoutTail),
+      stderr ? this.theme.error(stderr) : undefined,
+      safe(job.outputTail)
     ].filter((line): line is string => Boolean(line));
     return sanitizeTerminalText(lines.join("\n"), { preserveSgr: true });
   }

@@ -1,5 +1,11 @@
+import {
+  truncateToWidth,
+  wrapTextWithAnsi
+} from "@earendil-works/pi-tui";
+
 const ESC = "\x1b";
 const BEL = "\x07";
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function isFinalByte(value: string | undefined): boolean {
   if (!value) return false;
@@ -32,13 +38,14 @@ export interface SanitizeTerminalTextOptions {
 
 /**
  * Keep printable content while preventing untrusted model or tool output from
- * issuing terminal commands. Only SGR styling is optionally preserved.
+ * issuing terminal commands. SGR is stripped by default and may be preserved
+ * only for styling produced by trusted application code.
  */
 export function sanitizeTerminalText(
   value: string,
   options: SanitizeTerminalTextOptions = {}
 ): string {
-  const preserveSgr = options.preserveSgr ?? true;
+  const preserveSgr = options.preserveSgr ?? false;
   let output = "";
 
   for (let index = 0; index < value.length;) {
@@ -91,4 +98,45 @@ export function sanitizeTerminalText(
   }
 
   return output;
+}
+
+/** Wrap styled application text without splitting ANSI sequences or graphemes. */
+export function wrapTerminalText(value: string, width: number): string[] {
+  const safeWidth = Math.max(1, Math.floor(width));
+  const lines = wrapTextWithAnsi(value, safeWidth);
+  return lines.length > 0 ? lines : [""];
+}
+
+/** Truncate printable text by terminal columns, preserving complete graphemes. */
+export function truncateTerminalText(
+  value: string,
+  width: number,
+  ellipsis = "…"
+): string {
+  return truncateToWidth(value, Math.max(1, Math.floor(width)), ellipsis);
+}
+
+/** Bound labels by user-perceived characters without splitting emoji clusters. */
+export function truncateGraphemes(
+  value: string,
+  maximum: number,
+  ellipsis = "…"
+): string {
+  const limit = Math.max(0, Math.floor(maximum));
+  if (limit === 0) return "";
+  const segments: string[] = [];
+  for (const entry of graphemeSegmenter.segment(value)) {
+    if (segments.length === limit) {
+      const keep = Math.max(0, limit - (ellipsis ? 1 : 0));
+      return `${segments.slice(0, keep).join("")}${ellipsis}`;
+    }
+    segments.push(entry.segment);
+  }
+  return value;
+}
+
+export function removeLastGrapheme(value: string): string {
+  const segments = Array.from(graphemeSegmenter.segment(value), (entry) => entry.segment);
+  segments.pop();
+  return segments.join("");
 }

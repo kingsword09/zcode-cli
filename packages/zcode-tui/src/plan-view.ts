@@ -81,7 +81,7 @@ function planBody(
       if (todo.status === "completed") {
         lines.push(`${theme.success("✓")} ${theme.muted(todo.content)}`);
       } else if (todo.status === "in_progress") {
-        lines.push(`${theme.accent("□")} ${theme.accent(theme.bold(todo.content))}`);
+        lines.push(`${theme.accent("□")} ${theme.bold(theme.accent(todo.content))}`);
       } else {
         lines.push(`${theme.muted("□")} ${theme.muted(todo.content)}`);
       }

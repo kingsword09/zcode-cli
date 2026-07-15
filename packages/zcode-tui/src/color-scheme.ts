@@ -1,4 +1,5 @@
 export type ZCodeColorScheme = "dark" | "light";
+export type ZCodeThemePreference = ZCodeColorScheme | "auto";
 
 export interface RgbColor {
   r: number;
@@ -22,4 +23,20 @@ export function colorSchemeFromColorFgBg(value = process.env.COLORFGBG): ZCodeCo
   const background = Number(value.split(";").at(-1));
   if (!Number.isInteger(background) || background < 0 || background > 15) return undefined;
   return background <= 6 || background === 8 ? "dark" : "light";
+}
+
+/** Normalize config input without letting an invalid value disable detection. */
+export function themePreference(value: unknown): ZCodeThemePreference {
+  if (typeof value !== "string") return "auto";
+  const normalized = value.trim().toLowerCase();
+  return normalized === "dark" || normalized === "light" ? normalized : "auto";
+}
+
+export function initialColorScheme(
+  preference: ZCodeThemePreference,
+  colorFgBg = process.env.COLORFGBG
+): ZCodeColorScheme {
+  return preference === "auto"
+    ? colorSchemeFromColorFgBg(colorFgBg) ?? "dark"
+    : preference;
 }

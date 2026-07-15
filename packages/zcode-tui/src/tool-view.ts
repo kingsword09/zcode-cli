@@ -12,7 +12,7 @@ import {
   FileDiffView
 } from "./file-diff-view.ts";
 import { isPlanUpdateTool, planCard, planHasHiddenItems, PlanUpdateView } from "./plan-view.ts";
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
 import { asString, isRecord } from "./types.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import {
@@ -25,8 +25,9 @@ import {
   type ToolProgressData
 } from "./tool-renderers.ts";
 
-const maxPreviewCharacters = 2_400;
+const maxPreviewGraphemes = 2_400;
 const maxPreviewLines = 16;
+const maxPreviewImages = 4;
 
 export interface ToolViewOptions {
   name: string;
@@ -54,9 +55,10 @@ function truncate(value: string, expanded: boolean): { text: string; truncated: 
       truncated: true
     };
   }
-  if (normalized.length <= maxPreviewCharacters) return { text: normalized, truncated: false };
+  const visible = truncateGraphemes(normalized, maxPreviewGraphemes, "");
+  if (visible === normalized) return { text: normalized, truncated: false };
   return {
-    text: `${normalized.slice(0, maxPreviewCharacters)}\n… ${normalized.length - maxPreviewCharacters} more characters · Ctrl+O to expand`,
+    text: `${visible}\n… output truncated · Ctrl+O to expand`,
     truncated: true
   };
 }
@@ -76,7 +78,7 @@ function stringify(value: unknown): string | undefined {
   try {
     return JSON.stringify(value, jsonReplacer, 2);
   } catch {
-    return String(value);
+    return sanitizeTerminalText(String(value), { preserveSgr: false });
   }
 }
 
@@ -117,12 +119,23 @@ function imageValue(value: unknown): ToolImage | undefined {
   return mimeType?.startsWith("image/") ? { data, mimeType } : undefined;
 }
 
-function resultContent(value: unknown): { text?: string; images: ToolImage[] } {
+function resultContent(
+  value: unknown,
+  expanded: boolean
+): { text?: string; images: ToolImage[]; totalImages: number } {
   const images: ToolImage[] = [];
   const text: string[] = [];
   const append = (item: unknown): void => {
     if (typeof item === "string") {
       text.push(sanitizeTerminalText(item));
+      return;
+    }
+    if (typeof item === "number" || typeof item === "boolean") {
+      text.push(String(item));
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const nested of item) append(nested);
       return;
     }
     if (!isRecord(item)) return;
@@ -134,11 +147,16 @@ function resultContent(value: unknown): { text?: string; images: ToolImage[] } {
     const type = asString(item.type)?.toLowerCase();
     if (type === "text") {
       const value = asString(item.text) ?? asString(item.content);
-      if (value) text.push(value);
+      if (value) append(value);
       return;
     }
     const nested = item.output ?? item.stdout ?? item.text ?? item.message ?? item.value;
-    if (nested !== undefined && nested !== item) append(nested);
+    if (nested !== undefined && nested !== item) {
+      append(nested);
+      return;
+    }
+    const fallback = stringify(item);
+    if (fallback) text.push(fallback);
   };
 
   if (Array.isArray(value)) {
@@ -158,7 +176,11 @@ function resultContent(value: unknown): { text?: string; images: ToolImage[] } {
     append(value);
   }
 
-  return { text: text.filter(Boolean).join("\n"), images: images.slice(0, 4) };
+  return {
+    text: text.filter(Boolean).join("\n"),
+    images: expanded ? images : images.slice(0, maxPreviewImages),
+    totalImages: images.length
+  };
 }
 
 function errorText(value: unknown): string | undefined {
@@ -186,15 +208,12 @@ function statePresentation(state: string, theme: ZCodeTheme): { icon: string; su
   return { icon: theme.muted("○") };
 }
 
-function stateBackground(state: string, theme: ZCodeTheme): (text: string) => string {
+function stateBackground(state: string, theme: ZCodeTheme): ((text: string) => string) | undefined {
   const normalized = state.toLowerCase();
   if (normalized === "failed" || normalized === "error" || normalized === "cancelled") {
     return theme.toolErrorBackground;
   }
-  if (normalized === "complete" || normalized === "completed" || normalized === "success") {
-    return theme.toolSuccessBackground;
-  }
-  return theme.toolPendingBackground;
+  return normalized === "waiting_permission" ? theme.toolPendingBackground : undefined;
 }
 
 function stylePreview(value: string, theme: ZCodeTheme, expanded: boolean): { text: string; truncated: boolean } {
@@ -227,9 +246,13 @@ function toolText(
     theme
   });
   const summary = specialized?.summary ?? toolSummary(options.name, input);
+  const displayName = sanitizeTerminalText(
+    specialized?.displayName ?? options.name,
+    { preserveSgr: false }
+  );
   const header = [
     presentation.icon,
-    theme.bold(specialized?.displayName ?? options.name),
+    theme.bold(displayName || "Tool"),
     summary && theme.muted(oneLine(summary)),
     presentation.suffix && theme.muted(`· ${presentation.suffix}`)
   ].filter(Boolean).join(" ");
@@ -251,7 +274,7 @@ function toolText(
     }
   }
 
-  const result = resultContent(options.result);
+  const result = resultContent(options.result, expanded);
   if (specialized?.body) {
     const preview = truncate(specialized.body, expanded);
     const expansionHint = specialized.hiddenContent && !preview.truncated
@@ -264,6 +287,13 @@ function toolText(
     const preview = stylePreview(result.text, theme, expanded);
     sections.push(preview.text);
     truncated ||= preview.truncated;
+  }
+  if (result.totalImages > 1) {
+    const hiddenImages = result.totalImages - result.images.length;
+    sections.push(theme.muted(hiddenImages > 0
+      ? `${result.images.length} of ${result.totalImages} images shown · Ctrl+O to show all`
+      : `${result.totalImages} images`));
+    truncated ||= hiddenImages > 0;
   }
   const embeddedError = isRecord(options.result) ? options.result.error : undefined;
   const error = errorText(options.error ?? embeddedError);

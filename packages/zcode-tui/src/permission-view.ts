@@ -9,6 +9,7 @@ import {
   FileDiffView
 } from "./file-diff-view.ts";
 import type { ZCodeTheme } from "./theme.ts";
+import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
 import { normalizeToolName, recordString } from "./tool-renderers.ts";
 import { isRecord } from "./types.ts";
 
@@ -18,13 +19,13 @@ const maxInputCharacters = 6_000;
 function sanitizedJson(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   try {
-    return JSON.stringify(value, (key, field) => {
+    return sanitizeTerminalText(JSON.stringify(value, (key, field) => {
       if (/api.?key|authorization|password|secret|token/iu.test(key) && typeof field === "string") return "[redacted]";
-      if (typeof field === "string" && field.length > maxInputCharacters) return `${field.slice(0, maxInputCharacters)}…`;
+      if (typeof field === "string") return truncateGraphemes(field, maxInputCharacters);
       return field;
-    }, 2);
+    }, 2), { preserveSgr: false });
   } catch {
-    return String(value);
+    return sanitizeTerminalText(String(value), { preserveSgr: false });
   }
 }
 
@@ -32,7 +33,7 @@ function limited(value: string): string {
   const normalized = value.replace(/\r/g, "");
   const lines = normalized.split("\n");
   if (lines.length > maxInputLines) return `${lines.slice(0, maxInputLines).join("\n")}\n… ${lines.length - maxInputLines} more lines`;
-  return normalized.length > maxInputCharacters ? `${normalized.slice(0, maxInputCharacters)}…` : normalized;
+  return truncateGraphemes(normalized, maxInputCharacters);
 }
 
 export class PermissionPreview implements Component {

@@ -12,7 +12,11 @@ import {
   type RuntimeTodo,
   type RuntimeTodoGroup
 } from "./runtime-projection.ts";
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import {
+  sanitizeTerminalText,
+  truncateGraphemes,
+  wrapTerminalText
+} from "./terminal-text.ts";
 import type { ZCodeTheme } from "./theme.ts";
 
 const maxVisibleTodos = 4;
@@ -32,40 +36,44 @@ function elapsed(startedAt: number | undefined, now: number): string | undefined
   return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
-function oneLine(value: string, limit = 100): string {
+function oneLine(value: string, limit?: number): string {
   const normalized = sanitizeTerminalText(value, { preserveSgr: false }).replace(/\s+/gu, " ").trim();
-  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+  return limit === undefined ? normalized : truncateGraphemes(normalized, limit);
 }
 
-function toolLine(tool: RuntimeActiveToolCall, theme: ZCodeTheme, now: number): string {
+function toolLine(tool: RuntimeActiveToolCall, theme: ZCodeTheme, now: number, expanded: boolean): string {
   const icon = tool.status === "running" ? theme.accent("●") : theme.muted("○");
   const timing = elapsed(tool.startedAt, now);
-  return `  ${icon} ${theme.bold(oneLine(tool.toolName, 50))}${timing ? theme.muted(` · ${timing}`) : ""}`;
+  return `  ${icon} ${theme.bold(oneLine(tool.toolName, expanded ? undefined : 50))}${timing ? theme.muted(` · ${timing}`) : ""}`;
 }
 
-function backgroundLine(job: RuntimeBackgroundJob, theme: ZCodeTheme, now: number): string {
+function backgroundLine(job: RuntimeBackgroundJob, theme: ZCodeTheme, now: number, expanded: boolean): string {
   const icon = job.blocked ? theme.warning("◆") : theme.accent("●");
-  const label = oneLine(job.description ?? job.command ?? job.toolName ?? job.taskId, 90);
+  const label = oneLine(job.description ?? job.command ?? job.toolName ?? job.taskId, expanded ? undefined : 90);
   const details = [
-    job.taskId,
-    job.blocked ? job.blockedReason ?? "blocked" : elapsed(job.startedAt, now),
+    oneLine(job.taskId),
+    job.blocked ? oneLine(job.blockedReason ?? "blocked") : elapsed(job.startedAt, now),
     job.cancelRequestedAt !== undefined ? "cancelling" : undefined
   ].filter(Boolean).join(" · ");
   return `  ${icon} ${theme.bold(label)}${details ? theme.muted(` · ${details}`) : ""}`;
 }
 
-function todoLine(todo: RuntimeTodo, theme: ZCodeTheme): string {
-  if (todo.status === "completed") return `  ${theme.success("✓")} ${theme.muted(oneLine(todo.content))}`;
-  if (todo.status === "in_progress") return `  ${theme.accent("●")} ${theme.bold(oneLine(todo.content))}`;
+function todoLine(todo: RuntimeTodo, theme: ZCodeTheme, expanded: boolean): string {
+  const content = oneLine(todo.content, expanded ? undefined : 100);
+  if (todo.status === "completed") return `  ${theme.success("✓")} ${theme.muted(content)}`;
+  if (todo.status === "in_progress") return `  ${theme.accent("●")} ${theme.bold(content)}`;
   const priority = todo.priority === "high" ? theme.warning("!") : theme.muted("○");
-  return `  ${priority} ${theme.muted(oneLine(todo.content))}`;
+  return `  ${priority} ${theme.muted(content)}`;
 }
 
 export class RuntimeActivityView implements Component {
   private state: RuntimeActivityState = { todos: [] };
   private now = Date.now();
 
-  constructor(private readonly theme: ZCodeTheme) {}
+  constructor(
+    private readonly theme: ZCodeTheme,
+    private readonly expanded = false
+  ) {}
 
   update(state: RuntimeActivityState): void {
     this.state = state;
@@ -92,12 +100,13 @@ export class RuntimeActivityView implements Component {
     const lines = [` ${this.theme.bold("Activity")} ${this.theme.muted(`· ${summary}${background.length > 0 ? " · /tasks" : ""}`)}`];
 
     const activities = [
-      ...tools.map((tool) => toolLine(tool, this.theme, this.now)),
-      ...background.map((job) => backgroundLine(job, this.theme, this.now))
+      ...tools.map((tool) => toolLine(tool, this.theme, this.now, this.expanded)),
+      ...background.map((job) => backgroundLine(job, this.theme, this.now, this.expanded))
     ];
-    lines.push(...activities.slice(0, maxVisibleActivities));
-    if (activities.length > maxVisibleActivities) {
-      lines.push(this.theme.muted(`  … ${activities.length - maxVisibleActivities} more activities`));
+    const visibleActivities = this.expanded ? activities : activities.slice(0, maxVisibleActivities);
+    lines.push(...visibleActivities);
+    if (!this.expanded && activities.length > maxVisibleActivities) {
+      lines.push(this.theme.muted(`  … ${activities.length - maxVisibleActivities} more activities · /activity`));
     }
 
     const visibleTodos = unresolvedTodos
@@ -106,14 +115,18 @@ export class RuntimeActivityView implements Component {
         const priority = { high: 0, medium: 1, low: 2 } as const;
         return priority[left.priority] - priority[right.priority];
       })
-      .slice(0, maxVisibleTodos);
+      .slice(0, this.expanded ? undefined : maxVisibleTodos);
     if (visibleTodos.length > 0) {
       if (activities.length > 0) lines.push("");
-      lines.push(...visibleTodos.map((todo) => todoLine(todo, this.theme)));
-      if (unresolvedTodos.length > visibleTodos.length) {
-        lines.push(this.theme.muted(`  … ${unresolvedTodos.length - visibleTodos.length} more tasks`));
+      lines.push(...visibleTodos.map((todo) => todoLine(todo, this.theme, this.expanded)));
+      if (!this.expanded && unresolvedTodos.length > visibleTodos.length) {
+        lines.push(this.theme.muted(`  … ${unresolvedTodos.length - visibleTodos.length} more tasks · /activity`));
       }
     }
-    return [...lines.map((line) => truncateToWidth(line, Math.max(1, width))), ""];
+    const safeWidth = Math.max(1, width);
+    const rendered = this.expanded
+      ? lines.flatMap((line) => wrapTerminalText(line, safeWidth))
+      : lines.map((line) => truncateToWidth(line, safeWidth));
+    return [...rendered, ""];
   }
 }

@@ -77,7 +77,7 @@ export class WelcomeBanner implements Component {
     const informationWidth = Math.max(1, contentWidth - BRAND_MARK_WIDTH - gap.length);
     const primaryVersion = this.distributionVersion ?? this.runtimeVersion;
     const information = [
-      `${this.theme.accent(this.theme.bold("ZCODE"))}  ${this.theme.muted(`v${primaryVersion}`)}`,
+      `${this.theme.bold(this.theme.accent("ZCODE"))}  ${this.theme.muted(`v${primaryVersion}`)}`,
       this.distributionVersion ? this.theme.muted(`runtime v${this.runtimeVersion}`) : "",
       this.theme.muted(truncateFromStart(this.workspace, informationWidth)),
       this.branch ? this.theme.muted(`branch ${this.branch}`) : ""
@@ -90,7 +90,7 @@ export class WelcomeBanner implements Component {
   private renderCompact(width: number): string[] {
     const contentWidth = Math.max(0, width - 1);
     const primaryVersion = this.distributionVersion ?? this.runtimeVersion;
-    const identity = `${this.theme.accent(this.theme.bold("ZCODE"))}  ${this.theme.muted(`v${primaryVersion}`)}`;
+    const identity = `${this.theme.bold(this.theme.accent("ZCODE"))}  ${this.theme.muted(`v${primaryVersion}`)}`;
     const location = [this.workspace, this.branch ? `branch ${this.branch}` : undefined]
       .filter((value): value is string => Boolean(value))
       .join(" · ");

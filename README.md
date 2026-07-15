@@ -188,6 +188,7 @@ picker to return to input selection, then `Esc` again to close rewind.
 /diff                         browse current and per-turn file changes
 /context                      inspect context usage and source composition
 /status                       inspect detailed runtime and session status
+/activity                     inspect every active tool and open task
 /tasks                        inspect or stop background tasks
 /search <text>                search retained transcript blocks
 /search next|prev|clear       navigate or close transcript search
@@ -234,6 +235,9 @@ valid Z.AI model metadata, but deliberately omits `apiKey` until one is
 configured. This lets the official runtime and TUI start cleanly without
 pretending that model access is already configured. Choose one of these
 model-access paths before sending a prompt:
+
+Set `ui.theme` to `"auto"` (terminal detection), `"dark"`, or `"light"`.
+An explicit dark/light value takes priority over terminal probing.
 
 - Z.AI OAuth on macOS: run `zcode login` when no provider is configured, or
   `zcode login --oauth` to force reauthorization;
