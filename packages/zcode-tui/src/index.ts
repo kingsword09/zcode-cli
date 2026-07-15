@@ -829,6 +829,7 @@ class ZCodeTui {
 
     const steering = this.activeSubmissions > 0;
     const attachments = !steering && !input.startsWith("/") ? [...this.pendingAttachments] : [];
+    if (attachments.length > 0) this.clearPendingAttachments(false);
     this.addUserMessage(submission.displayInput, steering, attachments.length);
     if (submission.pending) {
       this.addNotice([
@@ -886,11 +887,6 @@ class ZCodeTui {
         this.addNotice(detail, "error");
       }
     } finally {
-      if (accepted && attachments.length > 0) {
-        const sent = new Set(attachments);
-        this.pendingAttachments = this.pendingAttachments.filter((attachment) => !sent.has(attachment));
-        this.syncAttachmentBar();
-      }
       this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
       if (this.turnAbortController === abortController) this.turnAbortController = undefined;
       if (this.activeSubmissions === 0) {
