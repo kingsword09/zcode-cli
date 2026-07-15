@@ -26,6 +26,13 @@ interface TranscriptBlock {
   messageId?: string;
   component: Component;
   searchText?: string | (() => string);
+  renderCache?: TranscriptBlockRenderCache;
+}
+
+interface TranscriptBlockRenderCache {
+  width: number;
+  sourceLines: string[];
+  lines: string[];
 }
 
 export interface TranscriptSearchStatus {
@@ -62,6 +69,7 @@ export class Transcript implements Component {
     if (isExpandableComponent(component)) component.setExpanded(this.expanded);
     const existing = this.blocks.find((block) => block.id === id);
     if (existing) {
+      this.releaseBlockCache(existing);
       existing.component = component;
       existing.kind = options.kind ?? existing.kind;
       existing.messageId = options.messageId ?? existing.messageId;
@@ -84,6 +92,7 @@ export class Transcript implements Component {
   removeBlock(id: string): boolean {
     const index = this.blocks.findIndex((block) => block.id === id);
     if (index < 0) return false;
+    this.releaseBlockCache(this.blocks[index]!);
     this.blocks.splice(index, 1);
     if (this.cursor !== undefined) {
       if (this.blocks.length === 0) this.cursor = undefined;
@@ -100,6 +109,7 @@ export class Transcript implements Component {
     let removed = 0;
     for (let index = this.blocks.length - 1; index >= 0; index -= 1) {
       if (this.blocks[index]?.messageId !== messageId) continue;
+      this.releaseBlockCache(this.blocks[index]!);
       this.blocks.splice(index, 1);
       removed += 1;
       if (index < this.windowStart) this.windowStart = Math.max(0, this.windowStart - 1);
@@ -117,6 +127,7 @@ export class Transcript implements Component {
   }
 
   clear(): void {
+    for (const block of this.blocks) this.releaseBlockCache(block);
     this.blocks.length = 0;
     this.windowStart = 0;
     this.search = undefined;
@@ -124,13 +135,14 @@ export class Transcript implements Component {
   }
 
   invalidate(): void {
-    for (const block of this.blocks) block.component.invalidate();
+    for (const block of this.blocks) this.releaseBlockCache(block);
   }
 
   setExpanded(expanded: boolean): void {
     if (this.expanded === expanded) return;
     this.expanded = expanded;
     for (const block of this.blocks) {
+      block.renderCache = undefined;
       if (isExpandableComponent(block.component)) block.component.setExpanded(expanded);
     }
   }
@@ -145,6 +157,7 @@ export class Transcript implements Component {
     if (index === undefined) return undefined;
     const component = this.blocks[index]?.component;
     if (!component || !isExpandableComponent(component)) return false;
+    this.blocks[index]!.renderCache = undefined;
     component.setExpanded(!component.isExpanded());
     this.page = 0;
     return component.isExpanded();
@@ -295,7 +308,9 @@ export class Transcript implements Component {
       const presented = selection.query
         ? decorated.map((line) => highlightMatches(line, selection.query!, this.highlightMatch))
         : decorated;
-      lines.push(...presented.map((line) => truncateToWidth(line, width)));
+      lines.push(...(!focused && !selection.query
+        ? this.presentStableBlock(block, presented, width)
+        : presented.map((line) => truncateToWidth(line, width))));
     }
     return lines.length > 0 ? [...lines, ""] : lines;
   }
@@ -390,8 +405,34 @@ export class Transcript implements Component {
 
   private advanceWindow(): void {
     if (this.blocks.length - this.windowStart <= renderWindowSize + renderWindowStep) return;
-    this.windowStart = Math.max(0, this.blocks.length - renderWindowSize);
+    const nextWindowStart = Math.max(0, this.blocks.length - renderWindowSize);
+    for (let index = this.windowStart; index < nextWindowStart; index += 1) {
+      const block = this.blocks[index];
+      if (block) this.releaseBlockCache(block);
+    }
+    this.windowStart = nextWindowStart;
   }
+
+  private presentStableBlock(block: TranscriptBlock, sourceLines: string[], width: number): string[] {
+    const cache = block.renderCache;
+    if (cache?.width === width && sameLines(cache.sourceLines, sourceLines)) return cache.lines;
+    const lines = sourceLines.map((line) => truncateToWidth(line, width));
+    block.renderCache = {
+      width,
+      sourceLines: [...sourceLines],
+      lines
+    };
+    return lines;
+  }
+
+  private releaseBlockCache(block: TranscriptBlock): void {
+    block.renderCache = undefined;
+    block.component.invalidate();
+  }
+}
+
+function sameLines(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((line, index) => line === right[index]);
 }
 
 function highlightMatches(line: string, query: string, style: (text: string) => string): string {

@@ -116,6 +116,11 @@ import { InputQueue, type QueuedSubmission } from "./input-queue.ts";
 import { QueuedInputView } from "./queued-input-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
 import {
+  runtimePollInterval,
+  runtimePollStateChanged,
+  type RuntimePollState
+} from "./runtime-poll.ts";
+import {
   parseSelectionCommand,
   protectSubmission,
   redactSecrets,
@@ -220,7 +225,7 @@ function modelRetryProgress(event: StreamEvent, phase: "scheduled" | "started"):
 }
 
 const doubleEscapeTimeoutMs = 800;
-const streamRenderIntervalMs = 50;
+const streamRenderIntervalMs = 100;
 const customProviderHelpCommand = "__zcode_custom_provider_help__";
 const rewindEscapeHint = "Esc again to rewind conversation";
 
@@ -354,7 +359,7 @@ class ZCodeTui {
   private runtimeRefreshInFlight = false;
   private runtimeRefreshPending = false;
   private runtimeRefreshTimer?: ReturnType<typeof setTimeout>;
-  private runtimePollTimer?: ReturnType<typeof setInterval>;
+  private runtimePollTimer?: ReturnType<typeof setTimeout>;
   private updateCheckAbortController?: AbortController;
   private loginRequired: boolean;
   private readonly loginWarning = new Text("", 1, 0);
@@ -451,11 +456,7 @@ class ZCodeTui {
     this.startUpdateRefresh(updateCheck);
     if (!this.loginRequired) void this.refreshGoal();
     if (!this.loginRequired) void this.refreshSessionUsage();
-    void this.refreshRuntimeState();
-    if (this.options.readRuntimeProjection || this.options.readTodos) {
-      this.runtimePollTimer = setInterval(() => void this.refreshRuntimeState(), 1_000);
-      this.runtimePollTimer.unref?.();
-    }
+    this.scheduleRuntimePoll(0);
     void this.loadHistory();
     if (this.options.subscribeWorkflowEvents) {
       this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
@@ -1387,9 +1388,11 @@ class ZCodeTui {
     this.turnTimingVisible = true;
     if (this.turnTimer) clearInterval(this.turnTimer);
     this.turnTimer = setInterval(
-      () => this.updateTurnStatus(),
-      this.animateTurnTimer ? TURN_TIMER_FRAME_DURATION_MS : 1_000
+      () => this.updateTurnStatus(this.streamRenderTimer === undefined),
+      TURN_TIMER_FRAME_DURATION_MS
     );
+    this.turnTimer.unref?.();
+    this.rescheduleRuntimePoll();
     this.updateTurnStatus();
   }
 
@@ -3191,6 +3194,24 @@ class ZCodeTui {
     this.runtimeRefreshTimer.unref?.();
   }
 
+  private scheduleRuntimePoll(delay = runtimePollInterval(this.turnStartedAt !== undefined)): void {
+    if (this.stopped || (!this.options.readRuntimeProjection && !this.options.readTodos)) return;
+    if (this.runtimePollTimer) return;
+    this.runtimePollTimer = setTimeout(() => {
+      this.runtimePollTimer = undefined;
+      void this.refreshRuntimeState().finally(() => this.scheduleRuntimePoll());
+    }, delay);
+    this.runtimePollTimer.unref?.();
+  }
+
+  private rescheduleRuntimePoll(): void {
+    if (this.runtimePollTimer) {
+      clearTimeout(this.runtimePollTimer);
+      this.runtimePollTimer = undefined;
+    }
+    this.scheduleRuntimePoll();
+  }
+
   private applyRuntimeProjection(projection: RuntimeProjectionSnapshot | undefined): void {
     if (!projection) return;
     this.runtimeProjection = projection;
@@ -3227,17 +3248,32 @@ class ZCodeTui {
           this.options.readRuntimeProjection?.(),
           this.options.readTodos?.()
         ]);
+        const next: RuntimePollState = {
+          projection: this.runtimeProjection,
+          todos: this.todos,
+          todoGroups: this.todoGroups
+        };
         if (projectionResult.status === "fulfilled" && projectionResult.value !== undefined) {
-          this.applyRuntimeProjection(normalizeRuntimeProjection(projectionResult.value));
+          next.projection = normalizeRuntimeProjection(projectionResult.value) ?? next.projection;
           if (isRecord(projectionResult.value) && Array.isArray(projectionResult.value.todoGroups)) {
-            this.todoGroups = normalizeTodoGroups(projectionResult.value);
+            next.todoGroups = normalizeTodoGroups(projectionResult.value);
           }
         }
         if (todosResult.status === "fulfilled" && todosResult.value !== undefined) {
-          this.todos = normalizeTodos(todosResult.value);
+          next.todos = normalizeTodos(todosResult.value);
         }
-        this.updateRuntimeActivity(false);
-        this.updateMetadata();
+        const current: RuntimePollState = {
+          projection: this.runtimeProjection,
+          todos: this.todos,
+          todoGroups: this.todoGroups
+        };
+        if (runtimePollStateChanged(current, next)) {
+          this.todos = next.todos;
+          this.todoGroups = next.todoGroups;
+          if (next.projection) this.applyRuntimeProjection(next.projection);
+          else this.updateRuntimeActivity(false);
+          this.updateMetadata();
+        }
       } while (this.runtimeRefreshPending);
     } finally {
       this.runtimeRefreshInFlight = false;
@@ -3332,6 +3368,7 @@ class ZCodeTui {
     this.activity = undefined;
     this.updateTurnStatus();
     this.scheduleRuntimeRefresh(0);
+    this.rescheduleRuntimePoll();
     if (notification) void this.notifications.notify(notification, notificationDetail);
   }
 
@@ -3354,7 +3391,7 @@ class ZCodeTui {
     this.cancelStreamRender();
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
-    if (this.runtimePollTimer) clearInterval(this.runtimePollTimer);
+    if (this.runtimePollTimer) clearTimeout(this.runtimePollTimer);
     this.unsubscribeWorkflow?.();
     const elapsedMilliseconds = this.turnStartedAt === undefined
       ? this.turnElapsedMilliseconds

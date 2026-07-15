@@ -1,4 +1,4 @@
-export const TURN_TIMER_FRAME_DURATION_MS = 125;
+export const TURN_TIMER_FRAME_DURATION_MS = 1_000;
 
 // Unicode clock faces form a complete, same-style rotation with stable terminal width.
 const turnTimerFrames = ["🕛", "🕐", "🕑", "🕒", "🕓", "🕔", "🕕", "🕖", "🕗", "🕘", "🕙", "🕚"] as const;

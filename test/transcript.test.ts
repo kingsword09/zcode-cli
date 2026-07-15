@@ -130,4 +130,54 @@ describe("TUI transcript", () => {
     expect(transcript.render(80).join("\n")).toContain("line 21");
     expect(fullRenders).toBe(0);
   });
+
+  test("reuses width presentation for stable blocks and refreshes changed content", () => {
+    let sourceLines = ["界".repeat(20)];
+    const component: Component = {
+      invalidate() {},
+      render: () => [...sourceLines]
+    };
+    const transcript = new Transcript();
+    transcript.addBlock(component);
+    const internal = transcript as unknown as {
+      blocks: Array<{ renderCache?: { lines: string[] } }>;
+    };
+
+    const firstLine = transcript.render(10)[0] ?? "";
+    expect(firstLine).toContain("界界界");
+    expect(visibleWidth(firstLine)).toBeLessThanOrEqual(10);
+    const firstCache = internal.blocks[0]?.renderCache;
+    transcript.render(10);
+    expect(internal.blocks[0]?.renderCache).toBe(firstCache);
+
+    sourceLines = ["changed"];
+    expect(transcript.render(10)[0]).toBe("changed");
+    expect(internal.blocks[0]?.renderCache).not.toBe(firstCache);
+  });
+
+  test("releases component and presentation caches when blocks leave the render window", () => {
+    const invalidations = Array<number>(301).fill(0);
+    const transcript = new Transcript();
+    for (let index = 0; index < 300; index += 1) {
+      transcript.addBlock({
+        invalidate: () => { invalidations[index] = (invalidations[index] ?? 0) + 1; },
+        render: () => [`block ${index}`]
+      });
+    }
+    transcript.render(80);
+    const internal = transcript as unknown as {
+      blocks: Array<{ renderCache?: unknown }>;
+    };
+    expect(internal.blocks[0]?.renderCache).toBeDefined();
+
+    transcript.addBlock({
+      invalidate: () => { invalidations[300] = (invalidations[300] ?? 0) + 1; },
+      render: () => ["block 300"]
+    });
+
+    expect(internal.blocks[0]?.renderCache).toBeUndefined();
+    expect(invalidations[0]).toBe(1);
+    expect(invalidations[60]).toBe(1);
+    expect(invalidations[61]).toBe(0);
+  });
 });
