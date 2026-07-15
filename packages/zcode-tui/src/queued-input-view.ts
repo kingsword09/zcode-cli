@@ -6,13 +6,11 @@ import {
 
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import type { ZCodeTheme } from "./theme.ts";
+import type { InputQueueState } from "./input-queue.ts";
 
 const maxVisibleInputs = 3;
 
-export interface QueuedInputViewState {
-  pendingSteers: string[];
-  queuedInputs: string[];
-}
+export type QueuedInputViewState = InputQueueState;
 
 function oneLine(value: string): string {
   return sanitizeTerminalText(value, { preserveSgr: false }).replace(/\s+/gu, " ").trim();
