@@ -4,10 +4,20 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { normalizeLoginArgs, readDistributionVersion } from "../src/launcher.ts";
+import {
+  normalizeLoginArgs,
+  readDistributionVersion,
+  resolveModelRetryMaxRetries
+} from "../src/launcher.ts";
 import { classifyZaiOAuthInvocation } from "../src/zai-oauth.ts";
 
 describe("launcher routing", () => {
+  test("uses five runtime retries by default and preserves an explicit override", () => {
+    expect(resolveModelRetryMaxRetries({})).toBe("5");
+    expect(resolveModelRetryMaxRetries({ ZCODE_MODEL_RETRY_MAX_RETRIES: " 2 " })).toBe("2");
+    expect(resolveModelRetryMaxRetries({ ZCODE_MODEL_RETRY_MAX_RETRIES: " " })).toBe("5");
+  });
+
   test("reads a safe npm distribution version", async () => {
     const directory = await mkdtemp(join(tmpdir(), "zcode-version-"));
     const manifest = join(directory, "package.json");

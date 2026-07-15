@@ -179,6 +179,16 @@ try {
   if (/Images\s+·\s+\[Image #1\]/i.test(activeTurnProjection)) {
     throw new Error("Submitted images remained in the pending attachment row during the active turn.");
   }
+  await waitFor(
+    "model stream stalled status",
+    /Model stream stalled\s+·\s+idle 60s/i,
+    featureTurnStart
+  );
+  await waitFor(
+    "model retry status",
+    /Retrying model request\s+·\s+1\/5\s+·\s+in 1s/i,
+    featureTurnStart
+  );
   await sendAndWait(
     "Keep the final response concise.\r",
     "pending active-turn steer",

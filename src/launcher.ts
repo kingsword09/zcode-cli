@@ -15,6 +15,12 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifestPath = join(packageRoot, "package.json");
 const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
 const launcherPath = join(packageRoot, "bin", "zcode.js");
+const defaultModelRetryMaxRetries = "5";
+
+export function resolveModelRetryMaxRetries(env: NodeJS.ProcessEnv): string {
+  return env.ZCODE_MODEL_RETRY_MAX_RETRIES?.trim() || defaultModelRetryMaxRetries;
+}
+
 export function resolveNodeExecutable(): string {
   return process.env.ZCODE_NODE?.trim() || process.execPath;
 }
@@ -43,9 +49,13 @@ function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, strin
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.ZCODE_CLI_OAUTH_CALLBACK_STDIN;
   const distributionVersion = readDistributionVersion();
-  const merged: NodeJS.ProcessEnv = {
+  const inherited: NodeJS.ProcessEnv = {
     ...env,
-    ...extra,
+    ...extra
+  };
+  const merged: NodeJS.ProcessEnv = {
+    ...inherited,
+    ZCODE_MODEL_RETRY_MAX_RETRIES: resolveModelRetryMaxRetries(inherited),
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,
     ZCODE_APP_CLI_ENTRY: launcherPath,
     ...(distributionVersion ? { ZCODE_APP_CLI_VERSION: distributionVersion } : {})

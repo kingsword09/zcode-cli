@@ -420,6 +420,31 @@ zcode --prompt "Explain this repository"
 user-level default. Running `/model` does not call the provider, so it is a safe
 configuration check before the first prompt.
 
+### Request retries and stalled streams
+
+The CLI leaves retry classification and execution to the official ZCode
+runtime. It supplies a default retry budget of five retries; override it when
+needed with the runtime's own environment variable:
+
+```bash
+ZCODE_MODEL_RETRY_MAX_RETRIES=3 zcode
+```
+
+Newly generated configs use a 60-second model-stream idle timeout:
+
+```json
+{
+  "modelStream": {
+    "idleTimeoutMs": 60000
+  }
+}
+```
+
+Existing configs are never overwritten, so update this field manually if an
+older generated file still contains `600000`. Retryable timeouts, dropped
+streams, rate limits and server/network errors are retried and shown in the
+TUI. Authentication and invalid-request responses remain non-retryable.
+
 ## Local development
 
 Install dependencies and extract the already installed macOS application:

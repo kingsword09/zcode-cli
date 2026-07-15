@@ -46,6 +46,7 @@ describe("user config bootstrap", () => {
     const result = await ensureUserConfig(env);
     const config = JSON.parse(await readFile(result.configPath, "utf8")) as {
       model: { lite: string; main: string };
+      modelStream: { idleTimeoutMs: number };
       provider: { zai: { options: { apiKey?: string }; models: Record<string, unknown> } };
     };
 
@@ -54,6 +55,7 @@ describe("user config bootstrap", () => {
     expect(config.provider.zai.models["glm-5.2"]).toBeDefined();
     expect(config.provider.zai.models["glm-5.1"]).toBeDefined();
     expect(config.model).toEqual({ main: "zai/glm-5.2", lite: "zai/glm-5.1" });
+    expect(config.modelStream.idleTimeoutMs).toBe(60_000);
     expect(await readConfiguredModelAccess(env)).toBeNull();
 
     if (process.platform !== "win32") {

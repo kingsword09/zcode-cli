@@ -23,8 +23,12 @@ export interface StreamEvent {
   progress?: ToolProgressData;
   attempt?: number;
   maxAttempts?: number;
+  maxRetries?: number;
+  nextAttempt?: number;
   delayMs?: number;
   durationMs?: number;
+  idleMs?: number;
+  timeoutMs?: number;
   dependencies?: string[];
   parallelGroupIndex?: number;
   canRunParallel?: boolean;
@@ -49,6 +53,14 @@ function runtimeToolKind(type: string | undefined): string | undefined {
   }
 }
 
+const modelNetworkEventTypes = new Set([
+  "model_request_started",
+  "model_request_completed",
+  "model_request_failed",
+  "model_retry_scheduled",
+  "model_stream_stalled"
+]);
+
 export function normalizeEvent(value: unknown): StreamEvent | null {
   if (!isRecord(value)) return null;
   const params = nestedRecord(value, "params");
@@ -56,14 +68,22 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
   const event = payload && (nestedRecord(payload, "event") ?? nestedRecord(payload, "streamEvent"));
   const body = event ?? payload ?? value;
   const toolCall = nestedRecord(body, "toolCall");
-  const type = asString(value.type) ?? (params && asString(params.type));
+  const envelopeType = asString(value.type) ?? (params && asString(params.type));
+  const bodyType = asString(body.type);
+  const type = bodyType && modelNetworkEventTypes.has(bodyType)
+    ? bodyType
+    : envelopeType ?? bodyType;
   const partValue = body.part;
   const part = normalizeRestoredPart(partValue);
   const error = body.error;
   const errorRecord = isRecord(error) ? error : undefined;
-  const number = (key: string): number | undefined => {
-    const field = body[key];
+  const streamRecovery = nestedRecord(body, "streamRecovery");
+  const recordNumber = (record: UnknownRecord | undefined, key: string): number | undefined => {
+    const field = record?.[key];
     return typeof field === "number" && Number.isFinite(field) ? field : undefined;
+  };
+  const number = (key: string): number | undefined => {
+    return recordNumber(body, key);
   };
   const strings = (key: string): string[] | undefined => {
     const field = body[key];
@@ -123,10 +143,14 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
       outputFile: asString(body.outputFile),
       backgroundTaskId: asString(body.backgroundTaskId)
     },
-    attempt: number("attempt"),
-    maxAttempts: number("maxAttempts") ?? number("maxRetries"),
+    attempt: number("attempt") ?? recordNumber(streamRecovery, "retryNumber"),
+    maxAttempts: number("maxAttempts"),
+    maxRetries: number("maxRetries") ?? recordNumber(streamRecovery, "maxRetries"),
+    nextAttempt: number("nextAttempt"),
     delayMs: number("delayMs") ?? number("retryDelayMs"),
     durationMs: number("durationMs") ?? number("duration"),
+    idleMs: number("idleMs"),
+    timeoutMs: number("timeoutMs"),
     dependencies: Array.isArray(body.dependencies)
       ? body.dependencies.filter((item): item is string => typeof item === "string")
       : undefined,
