@@ -117,6 +117,7 @@ import { QueuedInputView } from "./queued-input-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
 import {
   runtimePollInterval,
+  runtimeRefreshNeeded,
   runtimePollStateChanged,
   type RuntimePollState
 } from "./runtime-poll.ts";
@@ -225,7 +226,6 @@ function modelRetryProgress(event: StreamEvent, phase: "scheduled" | "started"):
 }
 
 const doubleEscapeTimeoutMs = 800;
-const streamRenderIntervalMs = 100;
 const customProviderHelpCommand = "__zcode_custom_provider_help__";
 const rewindEscapeHint = "Esc again to rewind conversation";
 
@@ -343,7 +343,6 @@ class ZCodeTui {
   private turnElapsedMilliseconds = 0;
   private turnTimingVisible = false;
   private turnTimer?: ReturnType<typeof setInterval>;
-  private streamRenderTimer?: ReturnType<typeof setTimeout>;
   private pendingTurnNotification?: TurnNotificationKind;
   private pendingTurnNotificationDetail = "";
   private goal?: GoalState;
@@ -1088,7 +1087,7 @@ class ZCodeTui {
     this.debugEvent("session", value);
     const event = normalizeEvent(value);
     if (!event) return;
-    this.scheduleRuntimeRefresh();
+    if (runtimeRefreshNeeded(event)) this.scheduleRuntimeRefresh();
     if (this.inputQueue.handleLifecycleEvent(event)) {
       this.requestStreamRender();
       return;
@@ -1388,7 +1387,7 @@ class ZCodeTui {
     this.turnTimingVisible = true;
     if (this.turnTimer) clearInterval(this.turnTimer);
     this.turnTimer = setInterval(
-      () => this.updateTurnStatus(this.streamRenderTimer === undefined),
+      () => this.updateTurnStatus(),
       TURN_TIMER_FRAME_DURATION_MS
     );
     this.turnTimer.unref?.();
@@ -3170,18 +3169,7 @@ class ZCodeTui {
   }
 
   private requestStreamRender(): void {
-    if (this.stopped || this.streamRenderTimer) return;
-    this.streamRenderTimer = setTimeout(() => {
-      this.streamRenderTimer = undefined;
-      if (!this.stopped) this.ui.requestRender();
-    }, streamRenderIntervalMs);
-    this.streamRenderTimer.unref?.();
-  }
-
-  private cancelStreamRender(): void {
-    if (!this.streamRenderTimer) return;
-    clearTimeout(this.streamRenderTimer);
-    this.streamRenderTimer = undefined;
+    if (!this.stopped) this.ui.requestRender();
   }
 
   private scheduleRuntimeRefresh(delay = 80): void {
@@ -3346,7 +3334,6 @@ class ZCodeTui {
   }
 
   private finishTurn(unfinishedToolState = "interrupted"): void {
-    this.cancelStreamRender();
     const notification = this.pendingTurnNotification;
     const notificationDetail = notification === "completed"
       ? this.turnAssistantText
@@ -3356,6 +3343,7 @@ class ZCodeTui {
     this.completeThinking();
     this.assistantStream.breakSegment();
     this.finalizeUnresolvedTools(unfinishedToolState);
+    this.turnDiffs.finishTurn();
     this.currentToolGroup = undefined;
     if (this.turnStartedAt !== undefined) {
       this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
@@ -3388,7 +3376,6 @@ class ZCodeTui {
     this.turnAbortController?.abort();
     this.updateCheckAbortController?.abort();
     if (this.turnTimer) clearInterval(this.turnTimer);
-    this.cancelStreamRender();
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
     if (this.runtimePollTimer) clearTimeout(this.runtimePollTimer);

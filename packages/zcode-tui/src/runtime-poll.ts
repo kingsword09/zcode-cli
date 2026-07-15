@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
+import type { StreamEvent } from "./events.ts";
 import type {
   RuntimeProjectionSnapshot,
   RuntimeTodo,
@@ -21,4 +22,13 @@ export function runtimePollInterval(active: boolean): number {
 
 export function runtimePollStateChanged(current: RuntimePollState, next: RuntimePollState): boolean {
   return !isDeepStrictEqual(current, next);
+}
+
+export function runtimeRefreshNeeded(
+  event: Pick<StreamEvent, "field" | "kind" | "type">
+): boolean {
+  if (event.type === "part.delta") return false;
+  return event.kind !== "text_delta"
+    && event.kind !== "reasoning_delta"
+    && event.kind !== "tool_input_delta";
 }

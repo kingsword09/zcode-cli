@@ -3,11 +3,16 @@ import {
   Markdown,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
   type Component
 } from "@earendil-works/pi-tui";
 
 import type { ZCodeTheme } from "./theme.ts";
-import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
+import {
+  sanitizeTerminalText,
+  StreamingTerminalTextSanitizer,
+  truncateGraphemes
+} from "./terminal-text.ts";
 import type { WindowedRenderResult } from "./renderable.ts";
 
 export type MarkdownSegment =
@@ -35,6 +40,97 @@ interface MarkdownWindowLayout {
 const maxMermaidSourceCharacters = 20_000;
 const markdownWindowChunkLines = 80;
 const terminalWidthPlaceholder = "\u200b";
+const inlineMarkdownSyntax = /[\\`*_[\]<>~&|]/u;
+const markdownAutolinkSyntax = /(?:\b(?:[a-z][a-z0-9+.-]{1,31}:\/\/|www\.)|@)/iu;
+const markdownBlockSyntax = /^(?: {4}|\t| {0,3}(?:#{1,6}(?:\s|$)|>|[+-](?:\s|$)|\d+[.)](?:\s|$)|-{3,}\s*$))/u;
+
+export function isPlainMarkdownBlock(text: string): boolean {
+  return Boolean(text)
+    && !text.includes("\n")
+    && !text.includes("\t")
+    && !inlineMarkdownSyntax.test(text)
+    && !markdownAutolinkSyntax.test(text)
+    && !markdownBlockSyntax.test(text);
+}
+
+class StreamingPlainText implements Component {
+  private cachedText?: string;
+  private cachedWidth?: number;
+  private cachedLines?: string[];
+  private renderedText = "";
+  private renderedWidth?: number;
+  private stableLines: string[] = [];
+  private lastWrappedLine?: string;
+
+  constructor(
+    private text: string,
+    private readonly paddingX: number
+  ) {}
+
+  setText(text: string): void {
+    if (text === this.text) return;
+    if (!text.startsWith(this.text)) this.resetWrapping();
+    this.text = text;
+    this.cachedText = undefined;
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
+  }
+
+  invalidate(): void {
+    this.cachedText = undefined;
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
+    this.resetWrapping();
+  }
+
+  render(width: number): string[] {
+    if (this.cachedLines && this.cachedText === this.text && this.cachedWidth === width) {
+      return this.cachedLines;
+    }
+
+    const contentWidth = Math.max(1, width - this.paddingX * 2);
+    const canAppend = this.renderedWidth === contentWidth
+      && this.lastWrappedLine !== undefined
+      && this.text.startsWith(this.renderedText);
+    const wrapped = canAppend ? this.appendWrappedLines(contentWidth) : undefined;
+    const fullWrapped = wrapped ?? wrapTextWithAnsi(this.text, contentWidth);
+    const appendedLines = this.presentLines(fullWrapped, width);
+    const lines = canAppend ? [...this.stableLines, ...appendedLines] : appendedLines;
+
+    this.renderedText = this.text;
+    this.renderedWidth = contentWidth;
+    this.stableLines = canAppend
+      ? [...this.stableLines, ...appendedLines.slice(0, -1)]
+      : appendedLines.slice(0, -1);
+    this.lastWrappedLine = fullWrapped.at(-1);
+    this.cachedText = this.text;
+    this.cachedWidth = width;
+    this.cachedLines = lines;
+    return lines;
+  }
+
+  private appendWrappedLines(contentWidth: number): string[] {
+    const previousLastLine = this.lastWrappedLine?.trimEnd() ?? "";
+    const trailingWhitespace = /\s*$/u.exec(this.renderedText)?.[0] ?? "";
+    const delta = this.text.slice(this.renderedText.length);
+    return wrapTextWithAnsi(`${previousLastLine}${trailingWhitespace}${delta}`, contentWidth);
+  }
+
+  private presentLines(lines: string[], width: number): string[] {
+    const margin = " ".repeat(this.paddingX);
+    return lines.map((line) => {
+      const withMargins = `${margin}${line}${margin}`;
+      return `${withMargins}${" ".repeat(Math.max(0, width - visibleWidth(withMargins)))}`;
+    });
+  }
+
+  private resetWrapping(): void {
+    this.renderedText = "";
+    this.renderedWidth = undefined;
+    this.stableLines = [];
+    this.lastWrappedLine = undefined;
+  }
+}
 
 export function normalizeMermaidTerminalWidth(source: string): string {
   let normalized = "";
@@ -235,6 +331,7 @@ export class RichMarkdown implements Component {
   private cachedLines?: string[];
   private renderedSegments: RenderedMarkdownSegment[] = [];
   private windowLayout?: MarkdownWindowLayout;
+  private readonly streamSanitizer = new StreamingTerminalTextSanitizer();
 
   constructor(
     private text: string,
@@ -246,17 +343,36 @@ export class RichMarkdown implements Component {
 
   setText(text: string): void {
     const sanitized = sanitizeTerminalText(text, { preserveSgr: false });
+    this.streamSanitizer.reset();
     if (sanitized === this.text) return;
     this.text = sanitized;
-    this.invalidate();
+    this.invalidateTextLayout();
+  }
+
+  appendText(delta: string): void {
+    const sanitized = this.streamSanitizer.append(delta);
+    if (!sanitized) return;
+    this.text += sanitized;
+    this.invalidateTextLayout();
+  }
+
+  finishText(): void {
+    const sanitized = this.streamSanitizer.finish();
+    if (!sanitized) return;
+    this.text += sanitized;
+    this.invalidateTextLayout();
   }
 
   invalidate(): void {
+    this.invalidateTextLayout();
+    for (const rendered of this.renderedSegments) rendered.component.invalidate();
+  }
+
+  private invalidateTextLayout(): void {
     this.cachedText = undefined;
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
     this.windowLayout = undefined;
-    for (const rendered of this.renderedSegments) rendered.component.invalidate();
   }
 
   getSearchText(): string {
@@ -314,15 +430,23 @@ export class RichMarkdown implements Component {
       const previous = this.renderedSegments[index];
       if (previous && sameSegment(previous.segment, segment)) return previous;
       if (previous?.segment.kind === "markdown" && segment.kind === "markdown"
-        && index === segments.length - 1 && previous.component instanceof Markdown) {
-        previous.component.setText(segment.text);
-        return { segment, component: previous.component };
+        && index === segments.length - 1) {
+        if (previous.component instanceof StreamingPlainText && isPlainMarkdownBlock(segment.text)) {
+          previous.component.setText(segment.text);
+          return { segment, component: previous.component };
+        }
+        if (previous.component instanceof Markdown && !isPlainMarkdownBlock(segment.text)) {
+          previous.component.setText(segment.text);
+          return { segment, component: previous.component };
+        }
       }
       return {
         segment,
         component: segment.kind === "mermaid"
           ? new MermaidBlock(segment.source, this.paddingX, this.theme)
-          : new Markdown(segment.text, this.paddingX, 0, this.theme.markdown)
+          : isPlainMarkdownBlock(segment.text)
+            ? new StreamingPlainText(segment.text, this.paddingX)
+            : new Markdown(segment.text, this.paddingX, 0, this.theme.markdown)
       };
     });
   }

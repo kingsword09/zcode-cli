@@ -28,6 +28,12 @@ export class AssistantStream {
   ) {}
 
   beginTurn(): void {
+    const current = this.current;
+    current?.finishText();
+    for (const segment of this.partSegments.values()) {
+      if (segment.view !== current) segment.view.finishText();
+    }
+    this.partSegments.clear();
     this.current = undefined;
     this.currentText = "";
     this.currentPartId = undefined;
@@ -36,10 +42,10 @@ export class AssistantStream {
 
   clear(): void {
     this.beginTurn();
-    this.partSegments.clear();
   }
 
   breakSegment(): void {
+    this.current?.finishText();
     this.current = undefined;
     this.currentText = "";
     this.currentPartId = undefined;
@@ -50,7 +56,7 @@ export class AssistantStream {
     if (partId) {
       const segment = this.ensurePartSegment(partId, messageId);
       segment.text += delta;
-      segment.view.setText(segment.text);
+      segment.view.appendText(delta);
       this.current = segment.view;
       this.currentText = segment.text;
       this.currentPartId = partId;
@@ -61,7 +67,7 @@ export class AssistantStream {
         this.currentPartId = undefined;
       }
       this.currentText += delta;
-      this.current.setText(this.currentText);
+      this.current.appendText(delta);
     }
     this.streamedText += delta;
     return this.streamedText;
@@ -87,6 +93,7 @@ export class AssistantStream {
   removePart(partId: string): void {
     const segment = this.partSegments.get(partId);
     if (!segment) return;
+    segment.view.finishText();
     this.partSegments.delete(partId);
     if (this.currentPartId === partId) this.breakSegment();
   }

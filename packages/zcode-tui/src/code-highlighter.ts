@@ -5,7 +5,8 @@ import { highlight, supportsLanguage, type Theme } from "cli-highlight";
 import type { ZCodeColorScheme } from "./color-scheme.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 
-const maxCacheEntries = 128;
+export const CODE_HIGHLIGHT_CACHE_MAX_ENTRIES = 128;
+export const CODE_HIGHLIGHT_CACHE_MAX_CHARACTERS = 2_000_000;
 const maxHighlightCharacters = 100_000;
 const plainLanguages = new Set(["", "text", "txt", "plain", "plaintext", "none"]);
 
@@ -106,7 +107,8 @@ export function languageForFilename(filePath: string): string | undefined {
 }
 
 export class CodeHighlighter {
-  private readonly cache = new Map<string, string[]>();
+  private readonly cache = new Map<string, { characters: number; lines: string[] }>();
+  private cacheCharacters = 0;
 
   constructor(
     private readonly enabled: boolean,
@@ -117,6 +119,7 @@ export class CodeHighlighter {
     if (this.colorScheme === colorScheme) return;
     this.colorScheme = colorScheme;
     this.cache.clear();
+    this.cacheCharacters = 0;
   }
 
   highlight(code: string, language?: string): string[] {
@@ -131,7 +134,7 @@ export class CodeHighlighter {
     if (cached) {
       this.cache.delete(key);
       this.cache.set(key, cached);
-      return cached;
+      return cached.lines;
     }
 
     let lines: string[];
@@ -145,10 +148,17 @@ export class CodeHighlighter {
     } catch {
       lines = sanitized.replace(/\r/gu, "").split("\n");
     }
-    this.cache.set(key, lines);
-    if (this.cache.size > maxCacheEntries) {
-      const oldest = this.cache.keys().next().value;
-      if (oldest !== undefined) this.cache.delete(oldest);
+    const characters = key.length + lines.reduce((total, line) => total + line.length, 0);
+    if (characters <= CODE_HIGHLIGHT_CACHE_MAX_CHARACTERS) {
+      this.cache.set(key, { characters, lines });
+      this.cacheCharacters += characters;
+    }
+    while (this.cache.size > CODE_HIGHLIGHT_CACHE_MAX_ENTRIES
+      || this.cacheCharacters > CODE_HIGHLIGHT_CACHE_MAX_CHARACTERS) {
+      const oldest = this.cache.entries().next().value;
+      if (!oldest) break;
+      this.cache.delete(oldest[0]);
+      this.cacheCharacters -= oldest[1].characters;
     }
     return lines;
   }

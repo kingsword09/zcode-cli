@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { TurnDiffStore } from "../packages/zcode-tui/src/turn-diff-store.ts";
+import {
+  MAX_RETAINED_TURN_DIFFS,
+  TurnDiffStore
+} from "../packages/zcode-tui/src/turn-diff-store.ts";
 
 const diff = (filePath: string, additions: number) => ({
   filePath,
@@ -30,5 +33,50 @@ describe("turn diff store", () => {
     const store = new TurnDiffStore();
     store.beginTurn("Read only");
     expect(store.snapshots()).toEqual([]);
+  });
+
+  test("releases completed empty turns while preserving chronological indexes", () => {
+    const store = new TurnDiffStore();
+    const internal = store as unknown as {
+      current?: unknown;
+      turns: unknown[];
+    };
+
+    for (let turn = 0; turn < 1_000; turn += 1) {
+      store.beginTurn(`Read only ${turn}`);
+      store.finishTurn();
+    }
+    expect(internal.turns).toHaveLength(0);
+    expect(internal.current).toBeUndefined();
+
+    store.beginTurn("Mutation after read-only turns");
+    store.upsertTool("call_mutation", [diff("changed.ts", 2)]);
+    store.finishTurn();
+    expect(store.snapshots()[0]).toMatchObject({
+      index: 1_001,
+      prompt: "Mutation after read-only turns"
+    });
+
+    store.clear();
+    store.beginTurn("First after clear");
+    store.upsertTool("call_after_clear", [diff("reset.ts", 1)]);
+    expect(store.snapshots()[0]?.index).toBe(1);
+  });
+
+  test("retains only the newest completed mutation turns", () => {
+    const store = new TurnDiffStore();
+    for (let turn = 1; turn <= 100; turn += 1) {
+      store.beginTurn(`Mutation ${turn}`);
+      store.upsertTool(`call_${turn}`, [diff(`file_${turn}.ts`, turn)]);
+      store.finishTurn();
+    }
+
+    const snapshots = store.snapshots();
+    expect(snapshots).toHaveLength(MAX_RETAINED_TURN_DIFFS);
+    expect(snapshots.map((snapshot) => snapshot.index)).toEqual(
+      Array.from({ length: MAX_RETAINED_TURN_DIFFS }, (_, index) => 81 + index)
+    );
+    expect(snapshots[0]?.prompt).toBe("Mutation 81");
+    expect(snapshots.at(-1)?.prompt).toBe("Mutation 100");
   });
 });

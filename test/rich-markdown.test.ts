@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, Text, visibleWidth } from "@earendil-works/pi-tui";
 
 import {
   RichMarkdown,
+  isPlainMarkdownBlock,
   normalizeMermaidTerminalWidth,
   renderMermaidPreview,
   splitMarkdownSegments,
@@ -16,6 +17,118 @@ function terminalColumn(line: string, marker: string): number {
 }
 
 describe("TUI rich Markdown", () => {
+  test("uses the plain fast path only when Markdown semantics are impossible", () => {
+    const plain = [
+      "Ordinary prose with punctuation (42), 中文宽度 and emoji ✅.",
+      "Paths like packages/zcode-tui/src stay plain.",
+      "A sentence with a mid-line hyphen stays plain."
+    ];
+    const markdown = [
+      "# heading",
+      "- list item",
+      "+ list item",
+      "1. ordered item",
+      "---",
+      "    indented code",
+      "**bold**",
+      "`code`",
+      "[link](target)",
+      "<https://example.com>",
+      "https://example.com",
+      "ftp://example.com",
+      "www.example.com",
+      "person@example.com",
+      "AT&amp;T",
+      "left | right",
+      "tab\tcontent",
+      "first line\nsecond line"
+    ];
+
+    for (const source of plain) expect(isPlainMarkdownBlock(source)).toBeTrue();
+    for (const source of markdown) expect(isPlainMarkdownBlock(source)).toBeFalse();
+  });
+
+  test("plain fast path is byte-identical to Markdown at supported widths and themes", () => {
+    const sources = [
+      "Ordinary prose with punctuation (42), 中文宽度 and emoji ✅.",
+      "This deliberately long sentence wraps across several terminal rows while remaining plain text for every rendered frame."
+    ];
+    for (const color of [false, true]) {
+      const theme = createTheme(color);
+      for (const source of sources) {
+        const text = new Text(source, 1, 0);
+        const markdown = new Markdown(source, 1, 0, theme.markdown);
+        for (const width of [40, 60, 80, 100]) {
+          expect(text.render(width)).toEqual(markdown.render(width));
+        }
+      }
+    }
+  });
+
+  test("plain streaming prefixes stay byte-identical to one-shot Markdown", () => {
+    const source = "Ordinary prose grows token by token with 中文宽度, punctuation (42), and emoji ✅.";
+    for (const color of [false, true]) {
+      const theme = createTheme(color);
+      for (let end = 1; end <= source.length; end += 1) {
+        const prefix = source.slice(0, end);
+        expect(isPlainMarkdownBlock(prefix)).toBeTrue();
+        const streamed = new RichMarkdown("", 1, theme);
+        for (const character of prefix) streamed.appendText(character);
+        for (const width of [40, 60, 80, 100]) {
+          const expected = new Markdown(prefix, 1, 0, theme.markdown).render(width);
+          expect(streamed.render(width)).toEqual(expected);
+        }
+      }
+    }
+  });
+
+  test("incremental plain wrapping matches Text for difficult append boundaries", () => {
+    const sources = [
+      "word   boundary spacing keeps only meaningful terminal cells",
+      "supercalifragilisticexpialidociouscontinuestogrowwithoutspaces",
+      "中文宽度连续换行测试以及更多字符",
+      "family emoji 👨‍👩‍👧‍👦 and flags 🇨🇳 remain complete"
+    ];
+    const widths = [40, 17, 60, 11, 80, 100];
+
+    for (const source of sources) {
+      const component = new RichMarkdown("", 1, createTheme(false));
+      let prefix = "";
+      for (const character of source) {
+        prefix += character;
+        component.appendText(character);
+        const plain = prefix.trim();
+        for (const width of widths) {
+          expect(component.render(width)).toEqual(new Text(plain, 1, 0).render(width));
+        }
+      }
+
+      component.setText("replacement text that is not an append");
+      for (const width of widths) {
+        expect(component.render(width)).toEqual(
+          new Text("replacement text that is not an append", 1, 0).render(width)
+        );
+      }
+      component.invalidate();
+      expect(component.render(40)).toEqual(
+        new Text("replacement text that is not an append", 1, 0).render(40)
+      );
+    }
+  });
+
+  test("switches a growing plain tail to Markdown as soon as syntax appears", () => {
+    const component = new RichMarkdown("Plain tail", 1, createTheme(false));
+    component.render(80);
+    const internal = component as unknown as {
+      renderedSegments: Array<{ component: unknown }>;
+    };
+    expect(internal.renderedSegments[0]?.component).not.toBeInstanceOf(Markdown);
+
+    component.appendText(" with **bold**");
+    expect(component.render(80).join("\n")).toContain("bold");
+    expect(internal.renderedSegments[0]?.component).toBeInstanceOf(Markdown);
+  });
+
   test("extracts only complete Mermaid fences", () => {
     expect(splitMarkdownSegments([
       "Before",
@@ -70,6 +183,55 @@ describe("TUI rich Markdown", () => {
     component.setText("first\n\nsecond");
     expect(component.getSearchText()).toBe("first\n\nsecond");
     expect(component.render(80).join("\n")).toContain("second");
+  });
+
+  test("renders chunked streaming input exactly like one-shot input", () => {
+    const source = [
+      "# Heading",
+      "",
+      "Paragraph with **bold** and \x1b[31muntrusted color\x1b[0m.",
+      "",
+      "| Name | Value |",
+      "| --- | ---: |",
+      "| 中文 | 42 |",
+      "",
+      "```ts",
+      "const answer = 42;",
+      "```",
+      "",
+      "- first",
+      "- second"
+    ].join("\n");
+    const chunks = [
+      source.slice(0, 19),
+      source.slice(19, 39),
+      source.slice(39, 52),
+      source.slice(52, 97),
+      source.slice(97)
+    ];
+    const streamed = new RichMarkdown("", 1, createTheme(false));
+    for (const chunk of chunks) streamed.appendText(chunk);
+    streamed.finishText();
+    const complete = new RichMarkdown(source, 1, createTheme(false));
+
+    expect(streamed.getSearchText()).toBe(complete.getSearchText());
+    for (const width of [40, 60, 80, 100]) {
+      expect(streamed.render(width)).toEqual(complete.render(width));
+    }
+  });
+
+  test("keeps completed Markdown segment caches when only the tail grows", () => {
+    const component = new RichMarkdown("stable paragraph\n\nstream", 1, createTheme(false));
+    component.render(80);
+    const internal = component as unknown as {
+      renderedSegments: Array<{ component: { cachedLines?: string[] } }>;
+    };
+    const stableLines = internal.renderedSegments[0]?.component.cachedLines;
+    expect(stableLines).toBeDefined();
+
+    component.appendText("ing tail");
+    component.render(80);
+    expect(internal.renderedSegments[0]?.component.cachedLines).toBe(stableLines);
   });
 
   test("uses an explicit readable foreground for strong text on light terminals", () => {

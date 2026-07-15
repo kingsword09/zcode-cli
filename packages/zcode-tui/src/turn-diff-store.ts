@@ -1,5 +1,7 @@
 import type { FileDiffData } from "./file-diff-view.ts";
 
+export const MAX_RETAINED_TURN_DIFFS = 20;
+
 export interface TurnDiffSnapshot {
   id: string;
   index: number;
@@ -19,15 +21,27 @@ interface TurnRecord {
 export class TurnDiffStore {
   private readonly turns: TurnRecord[] = [];
   private current?: TurnRecord;
+  private nextIndex = 1;
 
   beginTurn(prompt?: string): void {
+    this.finishTurn();
     this.current = {
       id: `turn_${crypto.randomUUID()}`,
-      index: this.turns.length + 1,
+      index: this.nextIndex,
       prompt: prompt?.trim() || undefined,
       tools: new Map()
     };
+    this.nextIndex += 1;
     this.turns.push(this.current);
+  }
+
+  finishTurn(): void {
+    if (!this.current) return;
+    if (this.current.tools.size === 0) this.turns.pop();
+    else if (this.turns.length > MAX_RETAINED_TURN_DIFFS) {
+      this.turns.splice(0, this.turns.length - MAX_RETAINED_TURN_DIFFS);
+    }
+    this.current = undefined;
   }
 
   upsertTool(toolCallId: string, diffs: FileDiffData[]): void {
@@ -53,5 +67,6 @@ export class TurnDiffStore {
   clear(): void {
     this.turns.length = 0;
     this.current = undefined;
+    this.nextIndex = 1;
   }
 }
