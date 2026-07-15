@@ -88,6 +88,58 @@ async function filesBelow(directory: string): Promise<string[]> {
   return result;
 }
 
+async function verifyLauncherSighup(): Promise<void> {
+  if (process.platform === "win32") return;
+  const signalDecoder = new TextDecoder();
+  let signalOutput = "";
+  const signalTerminal = new Bun.Terminal({
+    cols: 80,
+    rows: 24,
+    name: "xterm-256color",
+    data(_terminal, data) {
+      signalOutput += signalDecoder.decode(data, { stream: true });
+    }
+  });
+  const signalChild = Bun.spawn(command, {
+    cwd: root,
+    env: {
+      ...process.env,
+      CI: "1",
+      HOME: temporaryHome,
+      NO_UPDATE_NOTIFIER: "1",
+      USERPROFILE: temporaryHome,
+      TERM: "xterm-256color"
+    },
+    terminal: signalTerminal
+  });
+  const startedAt = Date.now();
+  while (!/ZCode/i.test(plainText(signalOutput))
+    && signalChild.exitCode === null
+    && Date.now() - startedAt < 4_000) {
+    await Bun.sleep(20);
+  }
+  if (!/ZCode/i.test(plainText(signalOutput))) {
+    signalChild.kill("SIGKILL");
+    await signalChild.exited;
+    if (!signalTerminal.closed) signalTerminal.close();
+    throw new Error(`Launcher did not reach the TUI before SIGHUP.\n${plainText(signalOutput).slice(-2_000)}`);
+  }
+  signalChild.kill("SIGHUP");
+  const exitCode = await Promise.race([
+    signalChild.exited,
+    Bun.sleep(2_000).then(() => undefined)
+  ]);
+  if (exitCode === undefined) {
+    signalChild.kill("SIGKILL");
+    await signalChild.exited;
+  }
+  if (!signalTerminal.closed) signalTerminal.close();
+  signalOutput += signalDecoder.decode();
+  if (exitCode !== 129) {
+    throw new Error(`Launcher did not forward SIGHUP promptly; exit code was ${String(exitCode)}.`);
+  }
+}
+
 const timeout = setTimeout(() => {
   child.kill("SIGKILL");
 }, 30_000);
@@ -130,6 +182,13 @@ try {
 const code = await child.exited;
 clearTimeout(timeout);
 if (!terminal.closed) terminal.close();
+if (!interactionError) {
+  try {
+    await verifyLauncherSighup();
+  } catch (error) {
+    interactionError = error;
+  }
+}
 const configured = await Bun.file(configPath).exists()
   ? await Bun.file(configPath).text()
   : "";
@@ -181,4 +240,4 @@ if (!/mode switched to plan|current mode: plan|◈ default ─ ◉ plan/i.test(p
   throw new Error(`The /mode command did not update the TUI.\n${plain.slice(-4_000)}`);
 }
 
-console.log("zigpty + pi-tui smoke test passed.");
+console.log("Inherited-terminal + pi-tui smoke test passed.");

@@ -90,18 +90,11 @@ const tuiImport = await execute(node, [
 ]);
 if (tuiImport.code !== 0) throw new Error(`TUI import failed: ${tuiImport.stderr}`);
 
-const zigptyImport = await execute(node, [
-  "--input-type=module",
-  "--eval",
-  "const module = await import('zigpty'); if (!module.hasNative) process.exit(2);"
-]);
-if (zigptyImport.code !== 0) throw new Error(`zigpty native import failed: ${zigptyImport.stderr}`);
-
 const launcher = await execute(node, [join(root, "bin", "zcode.js"), "--version"]);
 if (launcher.code !== 0 || launcher.stdout.trim() !== version.stdout.trim()) {
   throw new Error(`Node.js launcher check failed: ${launcher.stderr || launcher.stdout}`);
 }
 
 console.log(
-  `Runtime checks passed for ZCode CLI ${version.stdout.trim()} with Node ${nodeVersion.stdout.trim()}, zigpty, and pi-tui.`
+  `Runtime checks passed for ZCode CLI ${version.stdout.trim()} with Node ${nodeVersion.stdout.trim()} and pi-tui.`
 );

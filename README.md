@@ -5,8 +5,8 @@ Unofficial terminal client for the official agent runtime shipped with ZCode Des
 The project extracts the upstream `resources/glm` runtime, injects a local
 `@zcode/tui` implementation based on
 [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi/tree/main/packages/tui),
-and starts it through the native [`zigpty`](https://github.com/pithings/zigpty)
-PTY binding for Node.js.
+and launches it as a Node.js child process that directly inherits the user's
+terminal.
 
 This project is not affiliated with or endorsed by Z.ai. ZCode and its bundled
 runtime remain subject to their upstream terms. Confirm that you are allowed to
@@ -34,19 +34,17 @@ delays the editor. Set `ZCODE_DISABLE_UPDATE_CHECK=1` or
 `NO_UPDATE_NOTIFIER=1` to disable the check; CI environments skip it
 automatically.
 
-A normal installation requires only Node.js. `zigpty` ships small prebuilt
-native bindings for each supported platform, with no compiler or postinstall
-step required.
+A normal installation requires only Node.js and has no native PTY addon or
+postinstall build step.
 
 ## Architecture
 
 ```text
-Node.js npm launcher
-  └─ zigpty (PTY / resize / input forwarding)
-      └─ Node.js
-          └─ official zcode.cjs agent runtime
-              └─ local @zcode/tui adapter
-                  └─ @earendil-works/pi-tui
+Node.js npm launcher (config / login / version metadata)
+  └─ inherited stdin / stdout / stderr
+      └─ official zcode.cjs agent runtime
+          └─ local @zcode/tui adapter
+              └─ @earendil-works/pi-tui
 ```
 
 The official agent, model, session, tool, plugin, MCP, credential store and
@@ -55,12 +53,12 @@ package supplies the missing terminal interface and a narrow macOS callback
 bridge for Z.AI's registered Desktop OAuth flow.
 
 Node.js starts the public npm command and remains the compatibility host for the
-extracted upstream kernel. `zigpty` owns the native terminal while the official
-runtime stays in a separate PTY child process. Synchronization adds the local
-TUI/data bridge, OAuth compatibility handoff and clearer HTTP diagnostics. OAuth
-callbacks are passed to the official runtime over stdin; its encrypted credential
-store, Coding Plan key resolver and config writer remain the only persistence
-path.
+extracted upstream kernel. The official runtime directly owns raw terminal mode,
+IME cursor placement and resize handling; the launcher does not insert a second
+PTY or relay terminal bytes. Synchronization adds the local TUI/data bridge,
+OAuth compatibility handoff and clearer HTTP diagnostics. OAuth callbacks are
+passed to the official runtime over stdin; its encrypted credential store,
+Coding Plan key resolver and config writer remain the only persistence path.
 
 ## Current TUI functionality
 
@@ -110,6 +108,25 @@ Compare @src/index.ts with @"docs/design notes.md"
 Suggestions come from the official ZCode runtime, stay inside the current
 workspace and exclude common repository metadata and dependency directories.
 Paths containing spaces are inserted in the quoted `@"..."` form.
+
+### Active-turn input
+
+While a regular agent turn is running, press `Enter` to send the current text
+as same-turn steering. Until the official runtime reaches a safe model-step
+boundary, the steer stays in a waiting row next to the editor instead of being
+shown as committed conversation history. Once the runtime confirms injection,
+the message moves into the transcript at its actual position and uses the normal
+user-message `›` prefix. The `↪` marker is reserved for the temporary waiting
+row.
+
+To keep a follow-up editable instead, press `Tab` while the editor contains
+text and completion is closed. The input remains in the local next-turn queue.
+Queued inputs start in FIFO order after the active turn completes normally.
+With an empty editor, press `Alt+Up` or `Shift+Left` to move the most recently
+queued input back into the editor. Accepted steers cannot be edited because
+they have already been handed to the official runtime, even while the waiting
+row is visible; use `Tab` when the text must remain changeable. A steer rejected
+or discarded before injection returns to the editable next-turn queue.
 
 ### Image attachments
 
@@ -228,9 +245,7 @@ an oversized selected block without rendering the entire message at once.
 - macOS, Linux or Windows on x64 or ARM64.
 
 Developing or publishing from source additionally requires Bun 1.3 or newer.
-`7z` is needed only when downloading and extracting a remote installer. npm
-installs the approximately 422 KB `zigpty` package containing all supported
-prebuilt PTY bindings.
+`7z` is needed only when downloading and extracting a remote installer.
 
 Z.AI browser OAuth currently requires macOS because the registered provider
 callback is `zcode://zai-auth/callback`; API-key and custom-provider access work
@@ -423,14 +438,17 @@ bun run check
 bun run check:tui
 ```
 
-`check:tui` runs two real-PTY scenarios. The official runtime scenario completes
+`check:tui` runs real-PTY scenarios. The official runtime scenario completes
 masked Coding Plan API-key setup in a temporary home, verifies the official
-config output, executes `/help`, switches to plan mode, and exits. The offline
+config output, executes `/help`, switches to plan mode, exits, and checks that
+the launcher forwards terminal SIGHUP shutdown. The offline
 feature scenario also covers suspended login restoration, selectors, image
 attachments, nested Agent tools, Markdown, Mermaid, diffs, transcript
 navigation, context/status details, MCP actions, background tasks and the
-workflow panel. Both scenarios advance from observed terminal output instead
-of fixed timers and do not make model API calls.
+workflow panel. A pressure scenario verifies that steering, UTF-8 input and
+Ctrl+C cancellation remain responsive during rapid Bash progress output. The
+scenarios advance from observed terminal output instead of fixed timers and do
+not make model API calls.
 
 Start the client directly:
 
@@ -492,7 +510,7 @@ bun link
 zcode
 ```
 
-Headless and protocol commands bypass the PTY and preserve ordinary stdio:
+Headless and protocol commands use the same inherited stdio path:
 
 ```bash
 zcode --version
@@ -544,10 +562,10 @@ It contains only:
 
 Tests, GitHub workflows, build scripts, launcher/TUI TypeScript sources, local
 config, `.release/` artifacts and development `node_modules` are not published.
-npm installs only the declared pi-tui and zigpty runtime dependencies. The
-launcher and TUI are compiled to JavaScript with `tsdown`; its launcher banner
-adds the Node.js shebang directly, with no post-build rewrite. The compiled TUI
-is injected into `vendor/` before publication.
+npm installs only the declared pi-tui runtime dependency. The launcher and TUI
+are compiled to JavaScript with `tsdown`; its launcher banner adds the Node.js
+shebang directly, with no post-build rewrite. The compiled TUI is injected into
+`vendor/` before publication.
 
 ## Automated npm publishing
 

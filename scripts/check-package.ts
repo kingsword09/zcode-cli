@@ -103,7 +103,7 @@ export async function validatePackageTree(base = root): Promise<void> {
   }
   const keywords = Array.isArray(packageJson.keywords) ? packageJson.keywords : [];
   if (!keywords.every((keyword) => typeof keyword === "string")
-    || !["cli", "node", "pty", "tui", "zcode", "zigpty"].every((keyword) => keywords.includes(keyword))) {
+    || !["cli", "node", "terminal", "tui", "zcode"].every((keyword) => keywords.includes(keyword))) {
     throw new Error("The npm package keywords are incomplete.");
   }
   if (packageJson.homepage !== "https://github.com/kingsword09/zcode-cli#readme"
@@ -122,10 +122,8 @@ export async function validatePackageTree(base = root): Promise<void> {
   if (packageJson.publishConfig?.access !== "public" || packageJson.publishConfig?.provenance !== true) {
     throw new Error("npm public access and provenance must remain enabled.");
   }
-  if (typeof packageJson.dependencies?.zigpty !== "string"
-    || !packageJson.dependencies.zigpty.startsWith("^")
-    || packageJson.dependencies.bun !== undefined) {
-    throw new Error("The zigpty runtime dependency is missing or Bun is still a runtime dependency.");
+  if (packageJson.dependencies?.zigpty !== undefined || packageJson.dependencies?.bun !== undefined) {
+    throw new Error("The published package must not depend on a second PTY runtime or Bun.");
   }
 
   const lock = parseRuntimeLock(JSON.parse(await readFile(join(base, "zcode-runtime.lock.json"), "utf8")));
@@ -168,8 +166,10 @@ export async function validatePackageTree(base = root): Promise<void> {
   if (!nodeLauncherSource.startsWith("#!/usr/bin/env node\n")) {
     throw new Error("The public zcode launcher has no Node.js shebang.");
   }
-  if (nodeLauncherSource.includes("Bun.") || !nodeLauncherSource.includes('from "zigpty"')) {
-    throw new Error("The published launcher is not the reviewed Node.js + zigpty bundle.");
+  if (nodeLauncherSource.includes("Bun.")
+    || nodeLauncherSource.includes('from "zigpty"')
+    || !nodeLauncherSource.includes('from "node:child_process"')) {
+    throw new Error("The published launcher does not use the reviewed inherited-stdio Node.js runtime path.");
   }
   if (process.platform !== "win32" && (nodeLauncher.mode & 0o111) === 0) {
     throw new Error("The public zcode launcher is not executable.");

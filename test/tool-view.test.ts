@@ -35,6 +35,37 @@ describe("TUI tool execution view", () => {
     expect(larger.length).toBeLessThan(2_700);
   });
 
+  test("coalesces rapid tool progress updates until the next render", () => {
+    const theme = createTheme(false);
+    const bold = theme.bold;
+    let rebuilds = 0;
+    theme.bold = (text) => {
+      rebuilds += 1;
+      return bold(text);
+    };
+    const view = new ToolExecutionView(theme, {
+      name: "Bash",
+      state: "running",
+      input: { command: "long-running-task" }
+    });
+
+    for (let index = 0; index < 500; index += 1) {
+      view.update({
+        name: "Bash",
+        state: "running",
+        input: { command: "long-running-task" },
+        progress: {
+          stdoutBytes: index,
+          stdoutTail: `progress ${index}`
+        }
+      });
+    }
+
+    expect(rebuilds).toBe(0);
+    expect(view.render(80).join("\n")).toContain("progress 499");
+    expect(rebuilds).toBe(1);
+  });
+
   test("styles mutation diffs and keeps running state compact", () => {
     const view = new ToolExecutionView(createTheme(false), {
       name: "ApplyPatch",

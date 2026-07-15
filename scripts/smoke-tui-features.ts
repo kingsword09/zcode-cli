@@ -172,14 +172,52 @@ try {
   const featureTurnStart = await sendAndWait(
     "\r",
     "submitted image turn",
-    /[›↪]\s*inspect @src\/index\.ts\s+\[1 image\][\s\S]*◇ Thought/i,
+    /›\s*inspect @src\/index\.ts\s+\[1 image\][\s\S]*◇ Thought/i,
     4_000
   );
   const activeTurnProjection = plainText(output.slice(featureTurnStart));
   if (/Images\s+·\s+\[Image #1\]/i.test(activeTurnProjection)) {
     throw new Error("Submitted images remained in the pending attachment row during the active turn.");
   }
+  await sendAndWait(
+    "Keep the final response concise.\r",
+    "pending active-turn steer",
+    /Steering current turn · 1 waiting[\s\S]*↪ Keep the final response concise\.[\s\S]*waiting for the next model step/i
+  );
+  await sendAndWait(
+    "Edit this rejected steer.\r",
+    "rejected steer fallback",
+    /Steer was not accepted \(turn not steerable\); queued for the next turn\.[\s\S]*Queued next turn · 1 input[\s\S]*Edit this rejected steer\./i
+  );
+  await sendAndWait(
+    "\x1b[1;2D",
+    "restored rejected steer with Shift+Left",
+    /Edit this rejected steer\.[\s\S]*◈ alpha\/model/i
+  );
+  await sendAndSettle("\x15");
+  await sendAndWait(
+    "Revise this queued follow-up.",
+    "editable follow-up draft",
+    /Revise this queued follow-up\./i
+  );
+  await sendAndWait(
+    "\t",
+    "queued follow-up",
+    /Queued next turn · 1 input[\s\S]*↳ Revise this queued follow-up\.[\s\S]*Alt\+Up/i
+  );
+  await sendAndWait(
+    "\x1bp",
+    "restored queued follow-up",
+    /Revise this queued follow-up\.[\s\S]*◈ alpha\/model/i
+  );
+  await sendAndSettle("\x15");
+  await sendAndWait(
+    "Run this after the active turn.\t",
+    "automatic next-turn follow-up",
+    /Queued next turn · 1 input[\s\S]*Run this after the active turn\./i
+  );
   await waitFor("feature turn", /Feature prompt complete\./i, featureTurnStart, 12_000);
+  await waitFor("queued follow-up turn", /Queued follow-up started after the active turn\./i, featureTurnStart, 4_000);
   await waitFor("feature turn completion", /Feature background audit · turn complete/i, 0, 4_000);
   await sendAndWait("\x0f", "expanded Agent transcript", /Response:\s*Nested rendering inspected\./i);
 
@@ -241,8 +279,9 @@ const turnNotifications = output.match(/\x1b\]9;ZCode ·/gu) ?? [];
 if (turnNotifications.length !== 3
   || !output.includes("\x1b]9;ZCode · Plan approval fixture complete: allow.")
   || !output.includes("\x1b]9;ZCode · Plan approval fixture complete: deny · plan_approval_feedback.")
-  || !output.includes("\x1b]9;ZCode · Feature prompt complete.")) {
-  throw new Error(`Expected three unfocused agent-turn notifications, received ${turnNotifications.length}.`);
+  || !output.includes("\x1b]9;ZCode · Queued follow-up started after the active turn.")
+  || output.includes("\x1b]9;ZCode · Feature prompt complete.")) {
+  throw new Error(`Expected three idle-boundary agent-turn notifications, received ${turnNotifications.length}.`);
 }
 
 for (const [label, pattern] of [
@@ -282,7 +321,12 @@ for (const [label, pattern] of [
   ["multiple attachment tokens", /Images[\s\S]*\[Image #1\][\s\S]*\[Image #2\]/i],
   ["attachment selection", /› \[Image #2\][\s\S]*Backspace\/Delete remove/i],
   ["attachment navigation", /› \[Image #1\]/i],
-  ["workspace file reference", /[›↪]\s*inspect @src\/index\.ts/i],
+  ["workspace file reference", /›\s*inspect @src\/index\.ts/i],
+  ["pending active-turn steering", /Steering current turn · 1 waiting[\s\S]*Keep the final response concise\./i],
+  ["committed active-turn steering", /› Keep the final response concise\./i],
+  ["rejected steer fallback", /Steer was not accepted \(turn not steerable\); queued for the next turn\./i],
+  ["editable follow-up queue", /Queued next turn · 1 input[\s\S]*Revise this queued follow-up\./i],
+  ["automatic queued follow-up", /Queued follow-up started after the active turn\./i],
   ["completed thinking card", /◇ Thought/i],
   ["reasoning content", /Inspecting the repository before using tools\./i],
   ["updated plan", /● Updated Plan/i],
@@ -360,9 +404,9 @@ for (const [label, pattern] of [
 
 for (const [label, pattern] of [
   ["mode transcript", /Mode: plan/i],
-  ["model command transcript", /[›↪]\s*\/model\s+(?:alpha|beta)\/model/i],
+  ["model command transcript", /›\s*\/model\s+(?:alpha|beta)\/model/i],
   ["model response transcript", /Model switched to/i],
-  ["effort command transcript", /[›↪]\s*\/effort\s+(?:low|high)/i],
+  ["effort command transcript", /›\s*\/effort\s+(?:low|high)/i],
   ["effort response transcript", /Reasoning effort switched to/i]
 ] as const) {
   if (pattern.test(plain)) throw new Error(`Unexpected ${label} in feature TUI smoke.\n${plain.slice(-6_000)}`);

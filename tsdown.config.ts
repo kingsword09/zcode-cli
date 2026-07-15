@@ -12,11 +12,7 @@ export default defineConfig([
     clean: false,
     dts: false,
     sourcemap: false,
-    banner: { js: "#!/usr/bin/env node" },
-    deps: {
-      neverBundle: ["zigpty"],
-      onlyBundle: false
-    }
+    banner: { js: "#!/usr/bin/env node" }
   },
   {
     name: "tui",

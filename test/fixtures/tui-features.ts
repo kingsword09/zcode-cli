@@ -22,6 +22,12 @@ let model = "alpha/model";
 let effort = "low";
 let backgroundStatus = "running";
 let turnCompleted = false;
+let featureTurnActive = false;
+let featureSteerInput: string | undefined;
+let resolveFeatureSteer!: () => void;
+const featureSteerReceived = new Promise<void>((resolve) => {
+  resolveFeatureSteer = resolve;
+});
 let goal = {
   status: "active",
   tokenBudget: 50_000,
@@ -200,6 +206,45 @@ await runTui({
   sendInput: async (input, options) => {
     const prompt = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
     const promptText = typeof input === "string" ? input : prompt.text;
+    if (featureTurnActive) {
+      if (options.delivery !== "steer_active_turn") {
+        throw new Error(`Active-turn input used unexpected delivery mode: ${String(options.delivery)}`);
+      }
+      if (promptText === "Edit this rejected steer.") {
+        return {
+          kind: "rejected",
+          activeTurnId: "turn_feature",
+          reason: "turn_not_steerable"
+        };
+      }
+      if (promptText !== "Keep the final response concise.") {
+        throw new Error(`Unexpected active-turn steer: ${String(promptText)}`);
+      }
+      featureSteerInput = promptText;
+      const pendingInputId = "pending_feature_1";
+      await emitRuntime(options, "turn_steer_queued", {
+        input: promptText,
+        inputId: options.inputId,
+        pendingInputId,
+        queueLength: 1,
+        targetTurnId: "turn_feature"
+      });
+      resolveFeatureSteer();
+      return { kind: "queued", pendingInputId, queueLength: 1, turnId: "turn_feature" };
+    }
+    if (options.delivery !== "start_turn") {
+      throw new Error(`Idle input used unexpected delivery mode: ${String(options.delivery)}`);
+    }
+    if (promptText === "Run this after the active turn.") {
+      return {
+        kind: "started_turn",
+        result: {
+          response: "Queued follow-up started after the active turn.",
+          model,
+          thoughtLevel: effort
+        }
+      };
+    }
     if (promptText === "review long plan" || promptText === "review plan feedback") {
       if (!options.requestPermission) throw new Error("Plan approval callback is unavailable.");
       const approval = await options.requestPermission({
@@ -231,6 +276,7 @@ await runTui({
     ) {
       throw new Error("Feature smoke prompt did not include the selected file and image attachment.");
     }
+    featureTurnActive = true;
     await emit(options, { kind: "reasoning_delta", delta: "Inspecting " });
     await emit(options, { kind: "reasoning_delta", delta: "the repository before using tools." });
     await emit(options, { kind: "tool_input_start", toolCallId: "call_plan", toolName: "TodoWrite" });
@@ -391,6 +437,14 @@ await runTui({
         }
       }
     });
+    await Promise.race([featureSteerReceived, Bun.sleep(3_000)]);
+    if (!featureSteerInput) throw new Error("Feature smoke did not receive active-turn steering.");
+    await Bun.sleep(150);
+    await emitRuntime(options, "turn_steer_drained", {
+      injectedMessageIds: ["message_steer"],
+      pendingInputIds: ["pending_feature_1"],
+      targetTurnId: "turn_feature"
+    });
     await emit(options, { kind: "reasoning_delta", delta: "Synthesizing the final response." });
     await emitRuntime(options, "part.started", {
       part: {
@@ -401,6 +455,7 @@ await runTui({
       }
     });
     await Bun.sleep(1_100);
+    featureTurnActive = false;
     turnCompleted = true;
     return {
       kind: "started_turn",

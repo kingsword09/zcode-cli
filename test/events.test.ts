@@ -110,6 +110,33 @@ describe("ZCode event adapter", () => {
     });
   });
 
+  test("normalizes the pending and committed identities for active-turn steering", () => {
+    expect(normalizeEvent({
+      type: "turn_steer_queued",
+      payload: {
+        inputId: "input_1",
+        pendingInputId: "pending_1",
+        targetTurnId: "turn_1"
+      }
+    })).toMatchObject({
+      type: "turn_steer_queued",
+      inputId: "input_1",
+      pendingInputId: "pending_1"
+    });
+
+    expect(normalizeEvent({
+      type: "turn_steer_drained",
+      payload: {
+        pendingInputIds: ["pending_1"],
+        injectedMessageIds: ["message_steer_1"]
+      }
+    })).toMatchObject({
+      type: "turn_steer_drained",
+      pendingInputIds: ["pending_1"],
+      injectedMessageIds: ["message_steer_1"]
+    });
+  });
+
   test("normalizes subagent lifecycle metadata for the parent tool card", () => {
     expect(normalizeEvent({
       type: "subagent_stopped",

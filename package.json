@@ -10,12 +10,10 @@
     "glm",
     "node",
     "pi-tui",
-    "pty",
     "terminal",
     "tui",
     "z-ai",
-    "zcode",
-    "zigpty"
+    "zcode"
   ],
   "homepage": "https://github.com/kingsword09/zcode-cli#readme",
   "bugs": {
@@ -49,7 +47,7 @@
     "sync:local": "bun run build && bun scripts/sync-runtime.ts --app /Applications/ZCode.app",
     "check": "bun run build && bun scripts/check-runtime.ts",
     "check:oauth-callback": "bun scripts/smoke-oauth-callback.ts",
-    "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts && bun scripts/smoke-tui-widths.ts",
+    "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts && bun scripts/smoke-tui-pressure.ts && bun scripts/smoke-tui-widths.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "version:build": "bun scripts/bump-build.ts",
@@ -67,8 +65,7 @@
     "provenance": true
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.80.6",
-    "zigpty": "^0.2.1"
+    "@earendil-works/pi-tui": "^0.80.6"
   },
   "devDependencies": {
     "beautiful-mermaid": "^1.1.3",
