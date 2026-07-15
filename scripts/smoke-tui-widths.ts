@@ -70,6 +70,10 @@ async function verifyWidth(
     await sendAndWait("/status\r", "status dialog", /ZCode Status/iu);
     terminal.write("\r");
     await Bun.sleep(75);
+    await sendAndWait("\x16", "attachment row", /\[Image #1\]/iu);
+    await sendAndWait("\x1b[A", "attachment selection", /› \[Image #1\][\s\S]*Del/iu);
+    await sendAndWait("\x1b[B", "attachment return", /Images · \[Image #1\]/iu);
+    await sendAndWait("/attachments clear\r", "attachment clear", /Pending attachments cleared\./iu);
     await sendAndWait("review long plan\r", "plan dialog", /Ready to implement\?/iu);
     await sendAndWait("\x0f", "expanded plan", /Ctrl\+O[\s\S]*Esc return/iu);
     terminal.write("\x1b[6~");

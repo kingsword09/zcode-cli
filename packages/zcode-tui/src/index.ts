@@ -27,6 +27,7 @@ import {
   promptInput,
   type PromptImageAttachment
 } from "./attachments.ts";
+import { AttachmentBar } from "./attachment-bar.ts";
 import { AssistantStream } from "./assistant-stream.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
 import {
@@ -274,7 +275,7 @@ class ZCodeTui {
   private readonly runtimeActivity: RuntimeActivityView;
   private readonly status: StatusLine;
   private readonly turnStatus: FooterBar;
-  private readonly attachmentStatus: Text;
+  private readonly attachmentBar: AttachmentBar;
   private readonly editor: Editor;
   private readonly assistantStream: AssistantStream;
   private readonly notifications: TurnNotifier;
@@ -363,7 +364,11 @@ class ZCodeTui {
     });
     this.status = new StatusLine();
     this.turnStatus = new FooterBar();
-    this.attachmentStatus = new Text("", 0, 0);
+    this.attachmentBar = new AttachmentBar(this.theme, {
+      onExit: () => this.leaveAttachmentSelection(),
+      onRemove: (index) => this.removePendingAttachment(index),
+      onRender: () => this.ui.requestRender()
+    });
     this.runtimeActivity = new RuntimeActivityView(this.theme);
     this.editor = new Editor(this.ui, this.theme.editor, { paddingX: 1, autocompleteMaxVisible: 7 });
     this.assistantStream = new AssistantStream(
@@ -454,7 +459,7 @@ class ZCodeTui {
     this.ui.addChild(this.runtimeActivity);
     this.ui.addChild(this.choiceHost);
     this.ui.addChild(this.turnStatus);
-    this.ui.addChild(this.attachmentStatus);
+    this.ui.addChild(this.attachmentBar);
     this.ui.addChild(this.editor);
     this.ui.addChild(this.status);
 
@@ -591,7 +596,7 @@ class ZCodeTui {
       { name: "clear", description: "Clear the visible transcript" },
       { name: "copy", description: "Copy the latest assistant response" },
       { name: "paste-image", description: "Attach an image from the system clipboard" },
-      { name: "attachments", description: "Show or clear pending attachments", argumentHint: "[clear]" },
+      { name: "attachments", description: "Manage or clear pending attachments", argumentHint: "[clear]" },
       { name: "activity", description: "Inspect every active tool and open task" },
       { name: "tasks", description: "Inspect or stop background tasks", argumentHint: "[stop <task-id>]" },
       { name: "diff", description: "Browse current and per-turn file changes" },
@@ -611,9 +616,14 @@ class ZCodeTui {
   private bindInput(): void {
     this.ui.addInputListener((data) => {
       if (this.notifications.handleInput(data)) return { consume: true };
+      if (this.attachmentBar.isActive()) return undefined;
       if (this.choiceDepth > 0) return undefined;
       if (this.rewindFlowActive) return { consume: true };
       if (!matchesKey(data, "escape")) this.clearRewindEscape();
+      if (matchesKey(data, "up") && this.canEnterAttachmentSelection()) {
+        this.enterAttachmentSelection();
+        return { consume: true };
+      }
       if (matchesKey(data, "ctrl+o")) {
         this.prepareTranscriptViewport();
         if (this.transcript.toggleFocusedExpanded() === undefined) this.transcript.toggleExpanded();
@@ -741,16 +751,15 @@ class ZCodeTui {
       return;
     }
     if (input === "/attachments" || input === "/attachments list") {
-      this.addNotice(
-        this.pendingAttachments.length > 0 ? attachmentSummary(this.pendingAttachments) : "No pending attachments.",
-        "muted"
-      );
+      if (this.pendingAttachments.length === 0) {
+        this.addNotice("No pending attachments.", "muted");
+      } else {
+        this.enterAttachmentSelection();
+      }
       return;
     }
     if (input === "/attachments clear") {
-      this.pendingAttachments = [];
-      this.updateAttachmentStatus();
-      this.addNotice("Pending attachments cleared.", "muted");
+      this.clearPendingAttachments(true);
       return;
     }
     if (input === "/activity") {
@@ -880,7 +889,7 @@ class ZCodeTui {
       if (accepted && attachments.length > 0) {
         const sent = new Set(attachments);
         this.pendingAttachments = this.pendingAttachments.filter((attachment) => !sent.has(attachment));
-        this.updateAttachmentStatus();
+        this.syncAttachmentBar();
       }
       this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
       if (this.turnAbortController === abortController) this.turnAbortController = undefined;
@@ -1717,7 +1726,7 @@ class ZCodeTui {
         return;
       }
       this.pendingAttachments.push(attachment);
-      this.updateAttachmentStatus();
+      this.syncAttachmentBar();
       this.addNotice(`${attachmentSummary([attachment])}.`, "muted");
     } catch (error) {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
@@ -1726,9 +1735,49 @@ class ZCodeTui {
     }
   }
 
-  private updateAttachmentStatus(): void {
-    const summary = attachmentSummary(this.pendingAttachments);
-    this.attachmentStatus.setText(summary ? ` ${this.theme.warning(summary)} · /attachments clear` : "");
+  private canEnterAttachmentSelection(): boolean {
+    if (this.pendingAttachments.length === 0
+      || this.activeSubmissions > 0
+      || this.turnAbortController
+      || this.editor.isShowingAutocomplete()) return false;
+    const cursor = this.editor.getCursor();
+    return cursor.line === 0 && cursor.col === 0;
+  }
+
+  private enterAttachmentSelection(): boolean {
+    if (this.pendingAttachments.length === 0) return false;
+    if (this.activeSubmissions > 0 || this.turnAbortController) {
+      this.addNotice("Wait for the active turn before managing attachments.", "warning");
+      return false;
+    }
+    if (!this.attachmentBar.activate()) return false;
+    this.ui.setFocus(this.attachmentBar);
+    this.ui.requestRender();
+    return true;
+  }
+
+  private leaveAttachmentSelection(): void {
+    this.attachmentBar.deactivate();
+    this.ui.setFocus(this.editor);
+    this.ui.requestRender();
+  }
+
+  private removePendingAttachment(index: number): void {
+    if (index < 0 || index >= this.pendingAttachments.length) return;
+    this.pendingAttachments.splice(index, 1);
+    this.syncAttachmentBar();
+  }
+
+  private clearPendingAttachments(notify: boolean): void {
+    this.pendingAttachments = [];
+    this.syncAttachmentBar();
+    if (notify) this.addNotice("Pending attachments cleared.", "muted");
+  }
+
+  private syncAttachmentBar(): void {
+    const wasActive = this.attachmentBar.isActive();
+    this.attachmentBar.setAttachments(this.pendingAttachments);
+    if (wasActive && !this.attachmentBar.isActive()) this.ui.setFocus(this.editor);
     this.ui.requestRender();
   }
 

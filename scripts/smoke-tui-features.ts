@@ -153,10 +153,23 @@ try {
     "queued plan feedback",
     /Plan approval fixture complete: deny · plan_approval_feedback\./i
   );
-  await sendAndWait("\x16", "clipboard image", /1 image attached/i);
+  await sendAndWait("\x16", "first clipboard image", /Images[\s\S]*\[Image #1\]/i);
+  await sendAndWait("\x16", "second clipboard image", /Images[\s\S]*\[Image #1\][\s\S]*\[Image #2\]/i);
+  await sendAndWait("/attachments\r", "attachment command selection", /Images[\s\S]*› \[Image #2\]/i);
+  await sendAndWait("\x1b", "attachment command return", /Images · \[Image #1\] · \[Image #2\][\s\S]*↑ manage/i);
   await sendAndWait("inspect @ind", "workspace path suggestions", /index\.ts[\s\S]*src\/index\.ts/i);
   await sendAndWait("\r", "workspace path completion", /inspect @src\/index\.ts/i);
-  await sendAndWait("\x1b[O\r", "feature turn", /Feature prompt complete\./i, 12_000);
+  await sendAndSettle("\x01");
+  await sendAndWait(
+    "\x1b[A",
+    "attachment selection",
+    /Images[\s\S]*› \[Image #2\][\s\S]*Backspace\/Delete remove/i
+  );
+  await sendAndWait("\x1b[D", "previous attachment", /Images[\s\S]*› \[Image #1\]/i);
+  await sendAndWait("\x1b[3~", "removed attachment", /Images › \[Image #1\]/i);
+  await sendAndWait("\x1b[B", "returned from attachments", /Images · \[Image #1\][\s\S]*↑ manage/i);
+  await sendAndSettle("\x05");
+  await sendAndWait("\r", "feature turn", /Feature prompt complete\./i, 12_000);
   await waitFor("feature turn completion", /Feature background audit · turn complete/i, 0, 4_000);
   await sendAndWait("\x0f", "expanded Agent transcript", /Response:\s*Nested rendering inspected\./i);
 
@@ -256,6 +269,9 @@ for (const [label, pattern] of [
   ["model picker", /Select model/i],
   ["effort picker", /Select reasoning effort/i],
   ["image attachment", /1 image attached/i],
+  ["multiple attachment tokens", /Images[\s\S]*\[Image #1\][\s\S]*\[Image #2\]/i],
+  ["attachment selection", /› \[Image #2\][\s\S]*Backspace\/Delete remove/i],
+  ["attachment navigation", /› \[Image #1\]/i],
   ["workspace file reference", /[›↪]\s*inspect @src\/index\.ts/i],
   ["completed thinking card", /◇ Thought/i],
   ["reasoning content", /Inspecting the repository before using tools\./i],

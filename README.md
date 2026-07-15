@@ -78,7 +78,7 @@ path.
 - `/login` setup choices with masked API-key entry, redacted transcript/history and OAuth waiting state;
 - suspended Z.AI browser login with terminal restoration and an optional `ZCODE_TUI_LOGIN_CMD` override;
 - interactive tool-permission approval dialogs;
-- clipboard image attachments through Ctrl+V or `/paste-image`;
+- clipboard image attachments through Ctrl+V or `/paste-image`, with a keyboard-selectable attachment row;
 - compact tool execution views with path, command, progress, result and image previews;
 - parent/child Agent tool trees with resumable subagent metadata and expandable Prompt/Response details;
 - syntax-highlighted Markdown code blocks with stable streaming-block rendering;
@@ -110,6 +110,21 @@ Compare @src/index.ts with @"docs/design notes.md"
 Suggestions come from the official ZCode runtime, stay inside the current
 workspace and exclude common repository metadata and dependency directories.
 Paths containing spaces are inserted in the quoted `@"..."` form.
+
+### Image attachments
+
+Press `Ctrl+V` or run `/paste-image` to attach an image from the clipboard.
+Pending images appear above the editor as complete `[Image #N]` tokens.
+
+Move the editor cursor to the start of its first line and press `Up`, or run
+`/attachments`, to focus the attachment row. While it is focused:
+
+- `Left`/`Right` selects an image;
+- `Backspace` or `Delete` removes the selected image and renumbers the rest;
+- `Down`, `Esc`, `Ctrl+C`, or `Enter` returns to the editor without changing its text.
+
+Run `/attachments clear` to remove every pending image at once. `Ctrl+D`
+retains its terminal-standard empty-editor exit and forward-delete behavior.
 
 ### Turn completion notifications
 
