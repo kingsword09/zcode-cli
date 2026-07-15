@@ -65,30 +65,37 @@ async function checkedRun(
   return result.stdout.trim();
 }
 
-async function currentDefaultHandler(runner: CommandRunner, scheme: string): Promise<string> {
-  return checkedRun(runner, "/usr/bin/osascript", [
+async function currentDefaultHandler(
+  runner: CommandRunner,
+  scheme: string,
+  step = "reading current OAuth callback handler"
+): Promise<string> {
+  return withStepContext(step, () => checkedRun(runner, "/usr/bin/osascript", [
     "-l",
     "JavaScript",
     "-e",
     currentHandlerScript,
     scheme
-  ]);
+  ]));
 }
 
 async function setDefaultHandler(
   runner: CommandRunner,
   scheme: string,
-  bundleId: string
+  bundleId: string,
+  step = "activating OAuth callback handler"
 ): Promise<void> {
-  const status = await checkedRun(runner, "/usr/bin/osascript", [
-    "-l",
-    "JavaScript",
-    "-e",
-    setHandlerScript,
-    scheme,
-    bundleId
-  ]);
-  if (status !== "0") throw new Error(`Unable to register the ${scheme} callback handler (status ${status}).`);
+  await withStepContext(step, async () => {
+    const status = await checkedRun(runner, "/usr/bin/osascript", [
+      "-l",
+      "JavaScript",
+      "-e",
+      setHandlerScript,
+      scheme,
+      bundleId
+    ]);
+    if (status !== "0") throw new Error(`Unable to register the ${scheme} callback handler (status ${status}).`);
+  });
 }
 
 function appleScriptString(value: string): string {
@@ -199,7 +206,12 @@ export async function recoverStaleDarwinOAuthHandler(
   }
   const current = await currentDefaultHandler(runner, record.scheme).catch(() => "");
   if (current === record.bundleId) {
-    await setDefaultHandler(runner, record.scheme, record.previousHandler || "none");
+    await setDefaultHandler(
+      runner,
+      record.scheme,
+      record.previousHandler || "none",
+      "restoring stale OAuth callback handler"
+    );
   }
   await unregisterApp(runner, record.appPath);
   await rm(record.appPath, { recursive: true, force: true });
@@ -223,6 +235,18 @@ async function delay(milliseconds: number, signal?: AbortSignal): Promise<void> 
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+async function withStepContext<T>(
+  step: string,
+  action: () => Promise<T>
+): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${step}: ${detail}`, { cause: error });
+  }
 }
 
 export async function createDarwinUrlCallbackReceiver(
@@ -273,36 +297,48 @@ export async function createDarwinUrlCallbackReceiver(
     for (const line of callbackAppleScript(callbackPath, options.scheme, previousHandler)) {
       compileArgs.push("-e", line);
     }
-    await checkedRun(runner, "/usr/bin/osacompile", compileArgs);
+    await withStepContext("compiling OAuth callback app", () =>
+      checkedRun(runner, "/usr/bin/osacompile", compileArgs)
+    );
 
     const infoPlist = join(appPath, "Contents", "Info.plist");
-    await checkedRun(runner, "/usr/bin/plutil", [
-      "-insert",
-      "CFBundleIdentifier",
-      "-string",
-      bundleId,
-      infoPlist
-    ]);
-    await checkedRun(runner, "/usr/bin/plutil", [
-      "-insert",
-      "LSUIElement",
-      "-bool",
-      "true",
-      infoPlist
-    ]);
-    await checkedRun(runner, "/usr/bin/plutil", [
-      "-insert",
-      "CFBundleURLTypes",
-      "-json",
-      JSON.stringify([{
-        CFBundleTypeRole: "Viewer",
-        CFBundleURLName: "ZCode CLI OAuth Callback",
-        CFBundleURLSchemes: [options.scheme]
-      }]),
-      infoPlist
-    ]);
-    await checkedRun(runner, "/usr/bin/codesign", ["--force", "--deep", "--sign", "-", appPath]);
-    await checkedRun(runner, launchServicesRegister, ["-f", appPath]);
+    await withStepContext("setting CFBundleIdentifier", () =>
+      checkedRun(runner, "/usr/bin/plutil", [
+        "-insert",
+        "CFBundleIdentifier",
+        "-string",
+        bundleId,
+        infoPlist
+      ])
+    );
+    await withStepContext("setting LSUIElement", () =>
+      checkedRun(runner, "/usr/bin/plutil", [
+        "-insert",
+        "LSUIElement",
+        "-bool",
+        "true",
+        infoPlist
+      ])
+    );
+    await withStepContext("setting CFBundleURLTypes", () =>
+      checkedRun(runner, "/usr/bin/plutil", [
+        "-insert",
+        "CFBundleURLTypes",
+        "-json",
+        JSON.stringify([{
+          CFBundleTypeRole: "Viewer",
+          CFBundleURLName: "ZCode CLI OAuth Callback",
+          CFBundleURLSchemes: [options.scheme]
+        }]),
+        infoPlist
+      ])
+    );
+    await withStepContext("ad-hoc codesigning callback app", () =>
+      checkedRun(runner, "/usr/bin/codesign", ["--force", "--deep", "--sign", "-", appPath])
+    );
+    await withStepContext("registering callback app with LaunchServices", () =>
+      checkedRun(runner, launchServicesRegister, ["-f", appPath])
+    );
 
     const record: RecoveryRecord = {
       appPath,
@@ -315,8 +351,18 @@ export async function createDarwinUrlCallbackReceiver(
     await chmod(recovery, 0o600);
     await setDefaultHandler(runner, options.scheme, bundleId);
     handlerChanged = true;
-    const registered = await currentDefaultHandler(runner, options.scheme);
-    if (registered !== bundleId) throw new Error(`macOS did not activate the ${options.scheme} callback handler.`);
+    const registered = await currentDefaultHandler(
+      runner,
+      options.scheme,
+      "verifying OAuth callback handler"
+    );
+    if (registered !== bundleId) {
+      throw new Error(
+        `macOS did not activate the ${options.scheme} callback handler.`
+        + " Remove stale `ZCode CLI OAuth Callback *.app` entries from"
+        + " `~/Applications`, then retry `zcode login`."
+      );
+    }
   } catch (error) {
     await cleanup();
     throw error;
@@ -334,7 +380,12 @@ export async function createDarwinUrlCallbackReceiver(
         if (callback.trim()) return callback.trim();
         await delay(100, signal);
       }
-      throw new Error("Authorization timed out. Please retry login.");
+      throw new Error(
+        "Authorization timed out. Please retry `zcode login`."
+        + " If the browser routed the callback elsewhere, check for a stale"
+        + " `ZCode CLI OAuth Callback *.app` entry in `~/Applications` and"
+        + " remove it before retrying."
+      );
     }
   };
 }

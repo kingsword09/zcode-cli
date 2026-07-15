@@ -145,6 +145,14 @@ Move the editor cursor to the start of its first line and press `Up`, or run
 Run `/attachments clear` to remove every pending image at once. `Ctrl+D`
 retains its terminal-standard empty-editor exit and forward-delete behavior.
 
+### Theme
+
+Set `ui.theme` to `"auto"` (terminal detection), `"dark"`, or `"light"` in the
+user config: `~/.zcode/cli/config.json` on macOS/Linux or
+`%USERPROFILE%\.zcode\cli\config.json` on Windows. An explicit dark/light value
+takes priority over terminal probing. `auto` queries the terminal background
+color and color scheme at startup and re-applies the matching palette.
+
 ### Turn completion notifications
 
 Notifications are enabled by default and emitted after a normal agent turn
@@ -268,9 +276,6 @@ valid Z.AI model metadata, but deliberately omits `apiKey` until one is
 configured. This lets the official runtime and TUI start cleanly without
 pretending that model access is already configured. Choose one of these
 model-access paths before sending a prompt:
-
-Set `ui.theme` to `"auto"` (terminal detection), `"dark"`, or `"light"`.
-An explicit dark/light value takes priority over terminal probing.
 
 - Z.AI OAuth on macOS: run `zcode login` when no provider is configured, or
   `zcode login --oauth` to force reauthorization;

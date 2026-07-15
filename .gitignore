@@ -4,5 +4,6 @@ packages/zcode-tui/dist/
 bin/zcode.js
 .vendor-next/
 .release/
+.zcode/
 *.tgz
 .DS_Store
