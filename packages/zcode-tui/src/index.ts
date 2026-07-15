@@ -208,6 +208,16 @@ const toolLifecycleEventKinds = new Set([
 
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
+
+function modelRetryProgress(event: StreamEvent, phase: "scheduled" | "started"): string {
+  const retryNumber = phase === "started"
+    ? Math.max(1, (event.attempt ?? 2) - 1)
+    : Math.max(1, (event.nextAttempt ?? ((event.attempt ?? 1) + 1)) - 1);
+  const maxRetries = event.maxRetries
+    ?? (event.maxAttempts !== undefined ? Math.max(1, event.maxAttempts - 1) : undefined);
+  return `${retryNumber}${maxRetries !== undefined ? `/${maxRetries}` : ""}`;
+}
+
 const doubleEscapeTimeoutMs = 800;
 const streamRenderIntervalMs = 50;
 const customProviderHelpCommand = "__zcode_custom_provider_help__";
@@ -1142,22 +1152,48 @@ class ZCodeTui {
         title: "Model stream failed",
         detail: event.error instanceof Error ? event.error.message : asString(event.error) ?? event.message
       });
+    } else if (event.type === "model_request_started") {
+      this.updateActivity(
+        event.attempt !== undefined && event.attempt > 1
+          ? `retrying model request · ${modelRetryProgress(event, "started")}…`
+          : "waiting for model…",
+        false
+      );
     } else if (event.type === "turn.failed") {
       this.finalizeUnresolvedTools("failed", event.message ?? "Turn failed.");
       this.addSystemEvent({ tone: "error", title: "Turn failed", detail: event.message });
     } else if (event.type === "model_retry_scheduled" || event.type === "streamRecovery.updated") {
-      const attempt = event.attempt !== undefined ? `attempt ${event.attempt}${event.maxAttempts ? `/${event.maxAttempts}` : ""}` : "retry scheduled";
-      const delay = event.delayMs !== undefined ? ` in ${Math.ceil(event.delayMs / 1_000)}s` : "";
+      const retry = modelRetryProgress(event, "scheduled");
+      const delay = event.delayMs !== undefined ? `in ${Math.ceil(event.delayMs / 1_000)}s` : undefined;
+      this.updateActivity(
+        ["retrying model request", retry, delay].filter(Boolean).join(" · ") + "…",
+        false
+      );
       this.addSystemEvent({
         tone: "warning",
         title: event.type === "streamRecovery.updated" ? "Recovering model stream" : "Retrying model request",
-        summary: `${attempt}${delay}`,
+        summary: [retry, delay].filter(Boolean).join(" · "),
         detail: event.message
       });
-    } else if (event.type === "model_request_failed" && event.retryable !== true) {
-      this.addSystemEvent({ tone: "error", title: "Model request failed", detail: event.message });
+    } else if (event.type === "model_request_failed") {
+      this.updateActivity(
+        event.retryable === true ? "model request failed · waiting to retry…" : "model request failed…",
+        false
+      );
+      if (event.retryable !== true) {
+        this.addSystemEvent({ tone: "error", title: "Model request failed", detail: event.message });
+      }
     } else if (event.type === "model_stream_stalled") {
-      this.addSystemEvent({ tone: "warning", title: "Model stream stalled", detail: event.message });
+      this.updateActivity("model stream stalled · waiting to retry…", false);
+      const idle = event.idleMs !== undefined ? `idle ${Math.ceil(event.idleMs / 1_000)}s` : undefined;
+      this.addSystemEvent({
+        tone: "warning",
+        title: "Model stream stalled",
+        summary: idle,
+        detail: event.message
+      });
+    } else if (event.type === "model_request_completed") {
+      this.updateActivity("processing model response…", false);
     } else if (event.type === "compact_boundary" || event.type === "session_compacted") {
       this.addSystemEvent({
         tone: "muted",

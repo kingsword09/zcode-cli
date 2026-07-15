@@ -277,6 +277,45 @@ await runTui({
       throw new Error("Feature smoke prompt did not include the selected file and image attachment.");
     }
     featureTurnActive = true;
+    await emitRuntime(options, "model.network_status", {
+      type: "model_request_started",
+      attempt: 1,
+      maxAttempts: 6
+    });
+    await emitRuntime(options, "model.network_status", {
+      type: "model_stream_stalled",
+      attempt: 1,
+      maxAttempts: 6,
+      idleMs: 60_000,
+      timeoutMs: 60_000,
+      message: "Model stream stalled: no event received for 60000ms."
+    });
+    await emitRuntime(options, "model.network_status", {
+      type: "model_request_failed",
+      attempt: 1,
+      maxAttempts: 6,
+      retryable: true,
+      message: "Model stream idle timeout."
+    });
+    await emitRuntime(options, "model.network_status", {
+      type: "model_retry_scheduled",
+      attempt: 1,
+      nextAttempt: 2,
+      maxAttempts: 6,
+      delayMs: 1_000,
+      retryable: true,
+      message: "Retrying after model stream idle timeout."
+    });
+    await emitRuntime(options, "model.network_status", {
+      type: "model_request_started",
+      attempt: 2,
+      maxAttempts: 6
+    });
+    await emitRuntime(options, "model.network_status", {
+      type: "model_request_completed",
+      attempt: 2,
+      maxAttempts: 6
+    });
     await emit(options, { kind: "reasoning_delta", delta: "Inspecting " });
     await emit(options, { kind: "reasoning_delta", delta: "the repository before using tools." });
     await emit(options, { kind: "tool_input_start", toolCallId: "call_plan", toolName: "TodoWrite" });

@@ -26,7 +26,7 @@
     "overrides": {}
   },
   "modelStream": {
-    "idleTimeoutMs": 600000
+    "idleTimeoutMs": 60000
   },
   "permission": {
     "mode": "build",

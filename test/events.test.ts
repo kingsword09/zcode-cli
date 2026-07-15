@@ -68,6 +68,56 @@ describe("ZCode event adapter", () => {
     });
   });
 
+  test("uses nested runtime model-network event types and retry metadata", () => {
+    expect(normalizeEvent({
+      type: "model.network_status",
+      payload: {
+        type: "model_retry_scheduled",
+        attempt: 1,
+        nextAttempt: 2,
+        maxAttempts: 6,
+        delayMs: 2_000,
+        retryable: true,
+        message: "Provider overloaded"
+      }
+    })).toMatchObject({
+      type: "model_retry_scheduled",
+      attempt: 1,
+      nextAttempt: 2,
+      maxAttempts: 6,
+      delayMs: 2_000,
+      retryable: true,
+      message: "Provider overloaded"
+    });
+
+    expect(normalizeEvent({
+      type: "model.network_status",
+      payload: {
+        type: "model_stream_stalled",
+        idleMs: 60_000,
+        timeoutMs: 60_000
+      }
+    })).toMatchObject({
+      type: "model_stream_stalled",
+      idleMs: 60_000,
+      timeoutMs: 60_000
+    });
+
+    expect(normalizeEvent({
+      type: "streamRecovery.updated",
+      payload: {
+        streamRecovery: {
+          retryNumber: 2,
+          maxRetries: 5
+        }
+      }
+    })).toMatchObject({
+      type: "streamRecovery.updated",
+      attempt: 2,
+      maxRetries: 5
+    });
+  });
+
   test("normalizes raw runtime tool lifecycle events", () => {
     expect(normalizeEvent({
       type: "tool_call_started",
