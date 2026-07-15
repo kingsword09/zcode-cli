@@ -34,6 +34,7 @@ describe("context and status detail views", () => {
       workspace: "/repo",
       branch: "main",
       metrics: { totalTokens: 18_000, turnCount: 4 },
+      goal: { status: "active", tokenBudget: 50_000, tokensUsed: 40_000, timeUsedSeconds: 120 },
       openTodos: 2,
       mcpSummary: "2 connected"
     }).render(80).join("\n");
@@ -41,6 +42,8 @@ describe("context and status detail views", () => {
     expect(output).toContain("CLI version      3.3.5-1");
     expect(output).toContain("Runtime version  1.0.0");
     expect(output).toContain("custom/glm");
+    expect(output).toMatch(/Goal\s+Active \(40K \/ 50K\)/u);
+    expect(output).not.toContain("[ Goal:");
     expect(output).toContain("2 connected");
   });
 });

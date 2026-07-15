@@ -44,15 +44,24 @@ function formatGoalElapsed(totalSeconds: number): string {
   return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
 }
 
-export function goalStatusText(goal: GoalState | undefined): string | undefined {
+export function goalStatusLabel(goal: GoalState | undefined): string | undefined {
   if (!goal) return undefined;
+  if (goal.status === "active") return "Active";
+  if (goal.status === "paused") return "Paused";
+  if (goal.status === "budget_limited") return goal.tokenBudget === null ? "Abandoned" : "Unmet";
+  return "Achieved";
+}
+
+export function goalStatusText(goal: GoalState | undefined): string | undefined {
+  const label = goalStatusLabel(goal);
+  if (!goal || !label) return undefined;
   const usage = goal.tokenBudget === null
     ? undefined
     : `${formatTokens(goal.tokensUsed)} / ${formatTokens(goal.tokenBudget)}`;
-  if (goal.status === "active") return usage ? `Pursuing goal (${usage})` : "Pursuing goal";
-  if (goal.status === "paused") return "Goal paused (/goal resume)";
-  if (goal.status === "budget_limited") return usage ? `Goal unmet (${usage})` : "Goal abandoned";
+  if (goal.status === "active") return usage ? `${label} (${usage})` : label;
+  if (goal.status === "paused") return `${label} (/goal resume)`;
+  if (goal.status === "budget_limited") return usage ? `${label} (${usage})` : label;
   return goal.timeUsedSeconds > 0
-    ? `Goal achieved (${formatGoalElapsed(goal.timeUsedSeconds)})`
-    : "Goal achieved";
+    ? `${label} (${formatGoalElapsed(goal.timeUsedSeconds)})`
+    : label;
 }

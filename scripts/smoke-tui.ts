@@ -116,11 +116,11 @@ try {
   );
   await waitFor(
     "API key turn completion",
-    /(?:Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan)[\s\S]*\n \[0s\]/i,
+    /(?:Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan)[\s\S]*\n \[ 🕛 0s \]/i,
     apiKeySetupStart
   );
   await sendAndWait("/help\r", "help output", /Slash commands:|Usage:/i);
-  await sendAndWait("/mode plan\r", "plan mode", /mode switched to plan|current mode: plan|default · plan/i);
+  await sendAndWait("/mode plan\r", "plan mode", /mode switched to plan|current mode: plan|◈ default ─ ◉ plan/i);
   terminal.write("/exit\r");
 } catch (error) {
   interactionError = error;
@@ -177,7 +177,7 @@ if (leakedFiles.length > 0) {
 if (!/Slash commands:|Usage:/i.test(plain)) {
   throw new Error(`The /help command did not render.\n${plain.slice(-4_000)}`);
 }
-if (!/mode switched to plan|current mode: plan|default · plan/i.test(plain)) {
+if (!/mode switched to plan|current mode: plan|◈ default ─ ◉ plan/i.test(plain)) {
   throw new Error(`The /mode command did not update the TUI.\n${plain.slice(-4_000)}`);
 }
 

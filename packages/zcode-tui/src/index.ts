@@ -55,7 +55,13 @@ import {
   type DiffBrowserSource
 } from "./diff-browser.ts";
 import { FileDiffView, fileDiffsForTool } from "./file-diff-view.ts";
-import { formatTokens, goalStatusText, normalizeGoal, type GoalState } from "./goal-status.ts";
+import {
+  formatTokens,
+  goalStatusLabel,
+  goalStatusText,
+  normalizeGoal,
+  type GoalState
+} from "./goal-status.ts";
 import {
   answeredQuestionInput,
   defaultPermissionChoices,
@@ -155,7 +161,11 @@ import {
 } from "./tool-renderers.ts";
 import { ToolExecutionView, toolSucceeded } from "./tool-view.ts";
 import { Transcript } from "./transcript.ts";
-import { turnStatusText } from "./turn-status.ts";
+import {
+  TURN_TIMER_FRAME_DURATION_MS,
+  turnStatusText,
+  turnTimerAnimationEnabled
+} from "./turn-status.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
 import { UpdateAvailableView, updateCommand } from "./update-available-view.ts";
 import { Divider, WelcomeBanner } from "./welcome-banner.ts";
@@ -253,6 +263,7 @@ function restoredToolState(status: string): string {
 }
 
 class ZCodeTui {
+  private readonly animateTurnTimer: boolean;
   private readonly colorsEnabled: boolean;
   private readonly distributionVersion?: string;
   private readonly themePreference: ZCodeThemePreference;
@@ -307,6 +318,7 @@ class ZCodeTui {
   private activity?: string;
   private turnStartedAt?: number;
   private turnElapsedMilliseconds = 0;
+  private turnTimingVisible = false;
   private turnTimer?: ReturnType<typeof setInterval>;
   private pendingTurnNotification?: TurnNotificationKind;
   private pendingTurnNotificationDetail = "";
@@ -330,6 +342,7 @@ class ZCodeTui {
   private readonly loginHelp = new Text("", 1, 0);
 
   constructor(private readonly options: TuiOptions) {
+    this.animateTurnTimer = turnTimerAnimationEnabled();
     this.colorsEnabled = !options.noColor && !process.env.NO_COLOR;
     this.themePreference = themePreference(options.theme);
     this.distributionVersion = sanitizeTerminalText(
@@ -440,10 +453,10 @@ class ZCodeTui {
     this.ui.addChild(this.transcript);
     this.ui.addChild(this.runtimeActivity);
     this.ui.addChild(this.choiceHost);
-    this.ui.addChild(this.status);
+    this.ui.addChild(this.turnStatus);
     this.ui.addChild(this.attachmentStatus);
     this.ui.addChild(this.editor);
-    this.ui.addChild(this.turnStatus);
+    this.ui.addChild(this.status);
 
     const commands = this.autocompleteCommands();
     this.editor.setAutocompleteProvider(
@@ -1216,8 +1229,12 @@ class ZCodeTui {
     this.turnDiffs.beginTurn(prompt);
     this.turnStartedAt = Date.now();
     this.turnElapsedMilliseconds = 0;
+    this.turnTimingVisible = true;
     if (this.turnTimer) clearInterval(this.turnTimer);
-    this.turnTimer = setInterval(() => this.updateTurnStatus(), 1_000);
+    this.turnTimer = setInterval(
+      () => this.updateTurnStatus(),
+      this.animateTurnTimer ? TURN_TIMER_FRAME_DURATION_MS : 1_000
+    );
     this.updateTurnStatus();
   }
 
@@ -2832,18 +2849,21 @@ class ZCodeTui {
   private updateMetadata(): void {
     const fields: StatusLineField[] = [
       {
-        text: this.theme.muted(this.model),
+        text: this.theme.muted(`◈ ${this.model}`),
+        compactText: this.theme.muted(`◈ ${this.model}`),
         priority: 100,
         required: true
       },
       {
-        text: this.theme.muted(this.mode),
+        text: this.theme.muted(`◉ ${this.mode}`),
+        compactText: this.theme.muted(`◉ ${this.mode}`),
         priority: 70
       }
     ];
     if (this.thoughtLevel) {
       fields.push({
-        text: this.theme.muted(this.thoughtLevel),
+        text: this.theme.muted(`⚡ ${this.thoughtLevel}`),
+        compactText: this.theme.muted(`⚡ ${this.thoughtLevel}`),
         priority: 60
       });
     }
@@ -2856,7 +2876,7 @@ class ZCodeTui {
           ? this.theme.warning
           : this.theme.muted;
       fields.push({
-        text: style(`${remaining}% context left`),
+        text: style(`ctx ${remaining}% left`),
         compactText: style(`ctx ${remaining}%`),
         priority: 90
       });
@@ -2880,7 +2900,7 @@ class ZCodeTui {
     const search = this.transcript.searchStatus();
     if (search) {
       fields.push({
-        text: this.theme.accent(`search ${search.current}/${search.total}: ${search.query}`),
+        text: this.theme.accent(`find ${search.current}/${search.total}: ${search.query}`),
         compactText: this.theme.accent(`find ${search.current}/${search.total}`),
         priority: 95
       });
@@ -2888,7 +2908,7 @@ class ZCodeTui {
     const cursor = this.transcript.cursorStatus();
     if (cursor) {
       fields.push({
-        text: this.theme.accent(`transcript ${cursor.current}/${cursor.total} · ${cursor.kind}`),
+        text: this.theme.accent(`message ${cursor.current}/${cursor.total} · ${cursor.kind}`),
         compactText: this.theme.accent(`msg ${cursor.current}/${cursor.total}`),
         priority: 95
       });
@@ -2901,7 +2921,7 @@ class ZCodeTui {
       });
     }
 
-    this.status.setFields(fields, this.theme.muted(" · "));
+    this.status.setFields(fields, this.theme.muted(" ─ "));
     this.ui.requestRender();
   }
 
@@ -2914,17 +2934,26 @@ class ZCodeTui {
     if (this.turnStartedAt !== undefined) {
       this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
     }
-    const text = turnStatusText(this.activity, this.turnElapsedMilliseconds);
-    const left = this.activity ? this.theme.accent(text) : this.theme.muted(text);
+    const showElapsed = this.turnStartedAt !== undefined || (!this.activity && this.turnTimingVisible);
+    const text = turnStatusText(
+      this.activity,
+      this.turnElapsedMilliseconds,
+      showElapsed,
+      this.turnStartedAt !== undefined && this.animateTurnTimer
+    ) ?? "";
+    const left = text
+      ? this.activity ? this.theme.accent(text) : this.theme.muted(text)
+      : "";
     const goalText = goalStatusText(this.goal);
-    const right = goalText && this.goal
-      ? this.goal.status === "complete"
-        ? this.theme.success(goalText)
-        : this.goal.status === "paused" || this.goal.status === "budget_limited"
-          ? this.theme.warning(goalText)
-          : this.theme.accent(goalText)
-      : undefined;
-    this.turnStatus.setContent(left, right);
+    const goalLabel = goalStatusLabel(this.goal);
+    const goalStyle = this.goal?.status === "complete"
+      ? this.theme.success
+      : this.goal?.status === "paused" || this.goal?.status === "budget_limited"
+        ? this.theme.warning
+        : this.theme.accent;
+    const right = goalText ? goalStyle(`[ Goal: ${goalText} ]`) : undefined;
+    const compactRight = goalLabel ? goalStyle(`[ Goal: ${goalLabel} ]`) : undefined;
+    this.turnStatus.setContent(left, right, compactRight);
     this.updateRuntimeActivity(false);
     this.ui.requestRender();
   }

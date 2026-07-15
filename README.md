@@ -72,6 +72,7 @@ path.
 - searchable model and reasoning-effort selectors, plus MCP and workflow panels;
 - status-bar-only Shift+Tab mode (`build` → `edit` → `yolo` → `plan`), Ctrl+N model and empty-prompt Tab effort cycling;
 - structured session-goal status in the right side of the turn footer;
+- animated active-turn timer with a static `ZCODE_TUI_REDUCED_MOTION=1` fallback;
 - responsive context-remaining and session-token metrics in the status line;
 - generic upstream selection dialogs for sessions, plugins and checkpoints;
 - `/login` setup choices with masked API-key entry, redacted transcript/history and OAuth waiting state;
