@@ -63,7 +63,7 @@ describe("release package", () => {
     expect(packageJson.scripts["build:tui"]).toContain("--filter tui");
     expect(packageJson.bin.zcode).toBe("bin/zcode.js");
     expect(packageJson.engines).toEqual({ node: ">=22.19.0" });
-    expect(packageJson.dependencies.zigpty).toMatch(/^\^/u);
+    expect(packageJson.dependencies.zigpty).toBeUndefined();
     expect(packageJson.dependencies.bun).toBeUndefined();
     expect(packageJson.homepage).toBe("https://github.com/kingsword09/zcode-cli#readme");
     expect(packageJson.bugs.url).toBe("https://github.com/kingsword09/zcode-cli/issues");
@@ -71,7 +71,7 @@ describe("release package", () => {
       type: "git",
       url: "git+https://github.com/kingsword09/zcode-cli.git"
     });
-    expect(packageJson.keywords).toEqual(expect.arrayContaining(["cli", "node", "pty", "tui", "zcode", "zigpty"]));
+    expect(packageJson.keywords).toEqual(expect.arrayContaining(["cli", "node", "terminal", "tui", "zcode"]));
   });
 
   test("accepts reviewed paths and rejects omissions or development files", () => {
@@ -101,7 +101,7 @@ describe("release package", () => {
       name: "zcode-app-cli",
       version: "3.3.5-1",
       description: "Unofficial terminal client",
-      keywords: ["cli", "node", "pty", "tui", "zcode", "zigpty"],
+      keywords: ["cli", "node", "terminal", "tui", "zcode"],
       homepage: "https://github.com/kingsword09/zcode-cli#readme",
       bugs: { url: "https://github.com/kingsword09/zcode-cli/issues" },
       license: "MIT",
@@ -113,7 +113,7 @@ describe("release package", () => {
       bin: { zcode: "bin/zcode.js" },
       files: ["bin/zcode.js", "vendor", "config.example.json", "zcode-runtime.lock.json", "README.md", "LICENSE"],
       publishConfig: { access: "public", provenance: true },
-      dependencies: { "@earendil-works/pi-tui": "^0.80.6", zigpty: "^0.2.1" }
+      dependencies: { "@earendil-works/pi-tui": "^0.80.6" }
     };
     const tuiPackage = {
       name: "@zcode/tui",
@@ -123,7 +123,7 @@ describe("release package", () => {
     const files: Record<string, string> = {
       "LICENSE": "license",
       "README.md": "readme",
-      "bin/zcode.js": "#!/usr/bin/env node\nimport { spawn } from \"zigpty\";\n",
+      "bin/zcode.js": "#!/usr/bin/env node\nimport { spawn } from \"node:child_process\";\n",
       "bin/zcode.ts": "export {};\n",
       "config.example.json": "{}\n",
       "package.json": `${JSON.stringify(packageJson)}\n`,

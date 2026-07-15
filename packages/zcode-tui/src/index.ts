@@ -112,6 +112,7 @@ import {
   type RewindTarget
 } from "./rewind.ts";
 import { isVisibleProtocolPart, ProtocolPartView } from "./protocol-part-view.ts";
+import { QueuedInputView } from "./queued-input-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
 import {
   parseSelectionCommand,
@@ -208,11 +209,24 @@ const toolLifecycleEventKinds = new Set([
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
 const doubleEscapeTimeoutMs = 800;
+const streamRenderIntervalMs = 50;
 const customProviderHelpCommand = "__zcode_custom_provider_help__";
 const rewindEscapeHint = "Esc again to rewind conversation";
 
 interface QueuedSubmission extends ProtectedSubmission {
   externalLogin?: boolean;
+}
+
+interface PendingSteerSubmission {
+  inputId: string;
+  pendingInputId?: string;
+  submission: QueuedSubmission;
+}
+
+interface SendInputDisposition {
+  accepted: boolean;
+  pendingInputId?: string;
+  reason?: string;
 }
 
 export function shouldUseNoBrowserForLogin(
@@ -275,6 +289,7 @@ class ZCodeTui {
   private readonly runtimeActivity: RuntimeActivityView;
   private readonly status: StatusLine;
   private readonly turnStatus: FooterBar;
+  private readonly queuedInputView: QueuedInputView;
   private readonly attachmentBar: AttachmentBar;
   private readonly editor: Editor;
   private readonly assistantStream: AssistantStream;
@@ -284,6 +299,9 @@ class ZCodeTui {
   private stopped = false;
   private activeSubmissions = 0;
   private queuedSelectionCommand?: QueuedSubmission;
+  private readonly queuedFollowUps: QueuedSubmission[] = [];
+  private readonly pendingSteers: PendingSteerSubmission[] = [];
+  private queuedFollowUpsAutoSend = true;
   private turnAbortController?: AbortController;
   private currentThinking?: ThinkingView;
   private currentThinkingPartId?: string;
@@ -321,6 +339,7 @@ class ZCodeTui {
   private turnElapsedMilliseconds = 0;
   private turnTimingVisible = false;
   private turnTimer?: ReturnType<typeof setInterval>;
+  private streamRenderTimer?: ReturnType<typeof setTimeout>;
   private pendingTurnNotification?: TurnNotificationKind;
   private pendingTurnNotificationDetail = "";
   private goal?: GoalState;
@@ -364,6 +383,7 @@ class ZCodeTui {
     });
     this.status = new StatusLine();
     this.turnStatus = new FooterBar();
+    this.queuedInputView = new QueuedInputView(this.theme);
     this.attachmentBar = new AttachmentBar(this.theme, {
       onExit: () => this.leaveAttachmentSelection(),
       onRemove: (index) => this.removePendingAttachment(index),
@@ -459,6 +479,7 @@ class ZCodeTui {
     this.ui.addChild(this.runtimeActivity);
     this.ui.addChild(this.choiceHost);
     this.ui.addChild(this.turnStatus);
+    this.ui.addChild(this.queuedInputView);
     this.ui.addChild(this.attachmentBar);
     this.ui.addChild(this.editor);
     this.ui.addChild(this.status);
@@ -498,7 +519,7 @@ class ZCodeTui {
   private async runSuspendedLogin(displayInput: string, overrideCommand?: string): Promise<void> {
     this.transcript.clearSearch();
     this.transcript.clearCursor();
-    this.addUserMessage(displayInput, false);
+    this.addUserMessage(displayInput);
     this.beginTurn(displayInput);
     this.activeSubmissions += 1;
     this.updateActivity("signing in…");
@@ -638,6 +659,21 @@ class ZCodeTui {
         this.ui.requestRender(true);
         return { consume: true };
       }
+      if (!this.editor.getText()
+        && this.queuedFollowUps.length > 0
+        && (matchesKey(data, "alt+up") || matchesKey(data, "shift+left"))) {
+        this.editLatestQueuedFollowUp();
+        return { consume: true };
+      }
+      if (!this.editor.getText() && matchesKey(data, "shift+left")) {
+        this.addNotice(
+          this.pendingSteers.length > 0
+            ? "A steer waiting in the runtime cannot be edited. Use Tab before Enter to keep input editable."
+            : "No editable next-turn input is queued. During an active turn, press Tab instead of Enter to queue a draft.",
+          "muted"
+        );
+        return { consume: true };
+      }
       if (!this.editor.getText() && matchesKey(data, "alt+up")) {
         this.prepareTranscriptViewport();
         this.transcript.moveCursor(-1);
@@ -669,6 +705,13 @@ class ZCodeTui {
       }
       if (matchesKey(data, "ctrl+n")) {
         void this.switchModel();
+        return { consume: true };
+      }
+      if (matchesKey(data, "tab")
+        && this.turnAbortController
+        && Boolean(this.editor.getText().trim())
+        && !this.editor.isShowingAutocomplete()) {
+        this.queueCurrentEditorInput();
         return { consume: true };
       }
       if (matchesKey(data, "tab") && !this.editor.getText()) {
@@ -829,8 +872,26 @@ class ZCodeTui {
 
     const steering = this.activeSubmissions > 0;
     const attachments = !steering && !input.startsWith("/") ? [...this.pendingAttachments] : [];
+    if (steering && !this.options.sendInput) {
+      this.queueFollowUp({ ...submission, recordHistory: false });
+      return;
+    }
     if (attachments.length > 0) this.clearPendingAttachments(false);
-    this.addUserMessage(submission.displayInput, steering, attachments.length);
+
+    const abortController = new AbortController();
+    const inputId = `input_${crypto.randomUUID()}`;
+    const callOptions: PromptCallOptions = {
+      abortSignal: abortController.signal,
+      delivery: steering ? "steer_active_turn" : "start_turn",
+      inputId,
+      queryId: `query_${crypto.randomUUID()}`,
+      onEvent: (event) => this.onEvent(event),
+      requestPermission: (request, context) => this.requestPermission(request, context)
+    };
+    const pendingSteer = steering
+      ? this.trackPendingSteer(submission, inputId)
+      : undefined;
+    if (!steering) this.addUserMessage(submission.displayInput, attachments.length);
     if (submission.pending) {
       this.addNotice([
         submission.pending.primary,
@@ -840,20 +901,11 @@ class ZCodeTui {
     }
     if (!steering) this.beginTurn(submission.displayInput);
 
-    const abortController = new AbortController();
     if (!steering) this.turnAbortController = abortController;
     this.activeSubmissions += 1;
-    this.updateActivity(submission.status ?? (steering ? "steering…" : "working…"));
+    if (!steering || submission.status) this.updateActivity(submission.status ?? "working…");
     const notificationEligible = !steering && !input.startsWith("/");
     if (notificationEligible) this.pendingTurnNotification = "completed";
-
-    const callOptions: PromptCallOptions = {
-      abortSignal: abortController.signal,
-      inputId: `input_${crypto.randomUUID()}`,
-      queryId: `query_${crypto.randomUUID()}`,
-      onEvent: (event) => this.onEvent(event),
-      requestPermission: (request, context) => this.requestPermission(request, context)
-    };
 
     let accepted = false;
     let unfinishedToolState = "interrupted";
@@ -868,31 +920,72 @@ class ZCodeTui {
         accepted = true;
       } else {
         const outcome = await this.options.sendInput(promptInput(input, attachments), callOptions);
-        accepted = await this.handleSendOutcome(outcome);
+        const disposition = await this.handleSendOutcome(outcome);
+        if (pendingSteer && disposition.pendingInputId) {
+          this.associatePendingSteer(pendingSteer.inputId, disposition.pendingInputId);
+        }
+        accepted = disposition.accepted;
+        if (!accepted && steering) {
+          const retained = this.removePendingSteer(pendingSteer?.inputId);
+          if (retained) this.queueFollowUp({ ...retained.submission, recordHistory: false });
+          const reason = disposition.reason ? ` (${disposition.reason.replaceAll("_", " ")})` : "";
+          this.addNotice(`Steer was not accepted${reason}; queued for the next turn.`, "warning");
+        } else if (!accepted) {
+          this.queuedFollowUpsAutoSend = false;
+          this.addNotice(
+            `Input rejected: ${disposition.reason?.replaceAll("_", " ") ?? "unknown reason"}.`,
+            "warning"
+          );
+        }
       }
       if (!accepted && notificationEligible) this.pendingTurnNotification = undefined;
     } catch (error) {
       if (abortController.signal.aborted) {
         unfinishedToolState = "cancelled";
+        if (!steering) this.queuedFollowUpsAutoSend = false;
         if (notificationEligible) this.pendingTurnNotification = undefined;
         this.addNotice(submission.cancelStatus ?? "Turn cancelled.", "muted");
       } else {
         unfinishedToolState = "failed";
+        if (!steering) this.queuedFollowUpsAutoSend = false;
         const message = error instanceof Error ? error.message : String(error);
         const detail = redactSecrets(message, submission.secrets);
+        let steerRecoveryDetail: string | undefined;
+        if (steering) {
+          const retained = this.pendingSteerByInputId(pendingSteer?.inputId);
+          if (retained?.pendingInputId) {
+            steerRecoveryDetail = "Steer remains queued for the active turn.";
+          } else if (retained) {
+            const removed = this.removePendingSteer(pendingSteer?.inputId);
+            if (removed) this.queueFollowUp({ ...removed.submission, recordHistory: false });
+            steerRecoveryDetail = "Steer retained for the next turn.";
+          } else {
+            steerRecoveryDetail = "Steer state was already resolved by the runtime.";
+          }
+        }
         if (notificationEligible) {
           this.pendingTurnNotification = "failed";
           this.pendingTurnNotificationDetail = detail;
         }
-        this.addNotice(detail, "error");
+        this.addNotice(
+          steering ? `${detail}\n${steerRecoveryDetail}` : detail,
+          steering ? "warning" : "error"
+        );
       }
     } finally {
       this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
       if (this.turnAbortController === abortController) this.turnAbortController = undefined;
       if (this.activeSubmissions === 0) {
-        this.finishTurn(unfinishedToolState);
         nextCommand = this.queuedSelectionCommand;
         this.queuedSelectionCommand = undefined;
+        if (!nextCommand && this.queuedFollowUpsAutoSend) {
+          nextCommand = this.takeNextQueuedFollowUp();
+          if (nextCommand) {
+            this.pendingTurnNotification = undefined;
+            this.pendingTurnNotificationDetail = "";
+          }
+        }
+        this.finishTurn(unfinishedToolState);
       }
       void this.refreshGoal();
       void this.refreshSessionUsage();
@@ -900,18 +993,25 @@ class ZCodeTui {
     if (nextCommand) await this.submit(nextCommand.input, nextCommand);
   }
 
-  private async handleSendOutcome(outcome: unknown): Promise<boolean> {
-    if (!isRecord(outcome)) return true;
+  private async handleSendOutcome(outcome: unknown): Promise<SendInputDisposition> {
+    if (!isRecord(outcome)) return { accepted: true };
     const kind = asString(outcome.kind);
     if (kind === "started_turn") {
       await this.handleResult(outcome.result);
-    } else if (kind === "queued") {
-      this.addNotice("Input queued for the active turn.", "muted");
-    } else if (kind === "rejected") {
-      this.addNotice(`Input rejected: ${asString(outcome.reason) ?? "unknown reason"}.`, "warning");
-      return false;
+      return { accepted: true };
     }
-    return true;
+    if (kind === "queued") {
+      return {
+        accepted: true,
+        pendingInputId: asString(outcome.pendingInputId) ?? asString(outcome.pendingInputID)
+      };
+    } else if (kind === "rejected") {
+      return {
+        accepted: false,
+        reason: asString(outcome.reason) ?? "unknown reason"
+      };
+    }
+    return { accepted: true };
   }
 
   private async handleResult(
@@ -969,12 +1069,16 @@ class ZCodeTui {
     const event = normalizeEvent(value);
     if (!event) return;
     this.scheduleRuntimeRefresh();
+    if (this.handleSteerLifecycle(event)) {
+      this.requestStreamRender();
+      return;
+    }
     if (this.handleSubagentLifecycle(event)) {
-      this.ui.requestRender();
+      this.requestStreamRender();
       return;
     }
     if (this.handleProtocolPartEvent(event)) {
-      this.ui.requestRender();
+      this.requestStreamRender();
       return;
     }
     if (event.kind && toolLifecycleEventKinds.has(event.kind)) {
@@ -994,11 +1098,11 @@ class ZCodeTui {
     } else if (event.kind === "reasoning_start") {
       this.currentToolGroup = undefined;
       this.assistantStream.breakSegment();
-      this.updateActivity("thinking…");
+      this.updateActivity("thinking…", false);
     } else if (event.kind === "reasoning_delta") {
       this.currentToolGroup = undefined;
       this.assistantStream.breakSegment();
-      this.updateActivity("thinking…");
+      this.updateActivity("thinking…", false);
       if (event.delta && (this.currentThinking || event.delta.trim())) {
         this.appendThinking(event.delta, event.partId, event.messageId);
       }
@@ -1007,7 +1111,7 @@ class ZCodeTui {
     } else if (event.kind === "tool_input_start") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
       this.updateToolView(tool, "preparing");
-      this.updateActivity(`preparing ${tool.name}…`);
+      this.updateActivity(`preparing ${tool.name}…`, false);
     } else if (event.kind === "tool_input_delta" && event.delta) {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
       tool.inputText += event.delta;
@@ -1019,7 +1123,7 @@ class ZCodeTui {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
       if (event.input !== undefined) tool.input = event.input;
       this.updateToolView(tool, event.kind === "scheduled" ? "queued" : "running", undefined, undefined, event.progress);
-      this.updateActivity(`running ${tool.name}…`);
+      this.updateActivity(`running ${tool.name}…`, false);
     } else if (event.kind === "progress") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
       this.updateToolView(tool, "running", event.result, undefined, event.progress);
@@ -1063,7 +1167,7 @@ class ZCodeTui {
     } else if (event.type === "rewind.triggered") {
       this.addSystemEvent({ tone: "muted", title: "Conversation rewound", detail: event.message });
     }
-    this.ui.requestRender();
+    this.requestStreamRender();
   }
 
   private handleProtocolPartEvent(event: StreamEvent): boolean {
@@ -1228,6 +1332,7 @@ class ZCodeTui {
     this.completeThinking();
     this.assistantStream.beginTurn();
     this.turnAssistantText = "";
+    this.queuedFollowUpsAutoSend = true;
     this.pendingTurnNotification = undefined;
     this.pendingTurnNotificationDetail = "";
     this.currentToolGroup = undefined;
@@ -1292,13 +1397,12 @@ class ZCodeTui {
     }
   }
 
-  private addUserMessage(text: string, steering: boolean, attachmentCount = 0, messageId?: string): void {
+  private addUserMessage(text: string, attachmentCount = 0, messageId?: string): void {
     const safeText = sanitizeTerminalText(text, { preserveSgr: false });
-    const prefix = steering ? "↪" : "›";
     const suffix = attachmentCount > 0 ? `  [${attachmentCount} image${attachmentCount === 1 ? "" : "s"}]` : "";
     this.currentToolGroup = undefined;
     this.transcript.addBlock(
-      new Text(`${this.theme.accent(prefix)} ${safeText}${this.theme.muted(suffix)}`, 1, 0),
+      new Text(`${this.theme.accent("›")} ${safeText}${this.theme.muted(suffix)}`, 1, 0),
       { kind: "user", messageId, searchText: safeText }
     );
     this.ui.requestRender();
@@ -1651,7 +1755,7 @@ class ZCodeTui {
         const text = message.parts.map((part) => part.type === "text" || part.type === "file" ? part.text : "")
           .filter(Boolean)
           .join("\n");
-        if (text) this.addUserMessage(text, false, 0, message.messageId);
+        if (text) this.addUserMessage(text, 0, message.messageId);
         continue;
       }
       for (const part of message.parts) this.restorePart(part, message.role, message.messageId);
@@ -1703,6 +1807,129 @@ class ZCodeTui {
     }
     const style = part.type === "retry" ? "warning" : "muted";
     this.addNotice(part.text, style, part.partId, messageId);
+  }
+
+  private queueCurrentEditorInput(): void {
+    const input = this.editor.getText().trim();
+    if (!input) return;
+    this.editor.setText("");
+    this.queueFollowUp(protectSubmission(input));
+  }
+
+  private queueFollowUp(submission: QueuedSubmission): void {
+    this.queuedFollowUps.push(submission);
+    this.syncQueuedInputView();
+  }
+
+  private trackPendingSteer(
+    submission: QueuedSubmission,
+    inputId: string
+  ): PendingSteerSubmission {
+    const pending = { inputId, submission };
+    this.pendingSteers.push(pending);
+    this.syncQueuedInputView();
+    return pending;
+  }
+
+  private pendingSteerByInputId(inputId: string | undefined): PendingSteerSubmission | undefined {
+    return inputId ? this.pendingSteers.find((pending) => pending.inputId === inputId) : undefined;
+  }
+
+  private associatePendingSteer(inputId: string, pendingInputId: string): void {
+    const pending = this.pendingSteers.find((candidate) => (
+      candidate.inputId === inputId || candidate.pendingInputId === pendingInputId
+    ));
+    if (!pending || pending.pendingInputId === pendingInputId) return;
+    pending.pendingInputId = pendingInputId;
+    this.syncQueuedInputView();
+  }
+
+  private removePendingSteer(inputId: string | undefined): PendingSteerSubmission | undefined {
+    if (!inputId) return undefined;
+    const index = this.pendingSteers.findIndex((pending) => pending.inputId === inputId);
+    if (index < 0) return undefined;
+    const [pending] = this.pendingSteers.splice(index, 1);
+    this.syncQueuedInputView();
+    return pending;
+  }
+
+  private takePendingSteer(pendingInputId: string): PendingSteerSubmission | undefined {
+    const index = this.pendingSteers.findIndex((pending) => pending.pendingInputId === pendingInputId);
+    if (index < 0) return undefined;
+    const [pending] = this.pendingSteers.splice(index, 1);
+    return pending;
+  }
+
+  private handleSteerLifecycle(event: StreamEvent): boolean {
+    if (event.type === "turn_steer_queued" || event.type === "turn.steerQueued") {
+      if (event.inputId && event.pendingInputId) {
+        this.associatePendingSteer(event.inputId, event.pendingInputId);
+      }
+      return true;
+    }
+    if (event.type === "turn_steer_drained" || event.type === "turn.steerDrained") {
+      this.commitPendingSteers(event.pendingInputIds ?? [], event.injectedMessageIds ?? []);
+      return true;
+    }
+    if (event.type === "turn_steer_discarded" || event.type === "turn.steerDiscarded") {
+      this.discardPendingSteers(event.pendingInputIds ?? [], event.reason);
+      return true;
+    }
+    return false;
+  }
+
+  private commitPendingSteers(pendingInputIds: string[], messageIds: string[]): void {
+    const committed = pendingInputIds.flatMap((pendingInputId, index) => {
+      const pending = this.takePendingSteer(pendingInputId);
+      return pending ? [{ messageId: messageIds[index], pending }] : [];
+    });
+    if (committed.length === 0) return;
+    this.completeThinking();
+    this.assistantStream.breakSegment();
+    for (const { messageId, pending } of committed) {
+      this.addUserMessage(pending.submission.displayInput, 0, messageId);
+    }
+    this.syncQueuedInputView();
+  }
+
+  private discardPendingSteers(pendingInputIds: string[], reason?: string): void {
+    const discarded = pendingInputIds.flatMap((pendingInputId) => {
+      const pending = this.takePendingSteer(pendingInputId);
+      return pending ? [pending] : [];
+    });
+    if (discarded.length === 0) return;
+    this.queuedFollowUps.push(...discarded.map(({ submission }) => ({
+      ...submission,
+      recordHistory: false
+    })));
+    this.syncQueuedInputView();
+    const detail = reason ? ` (${reason.replaceAll("_", " ")})` : "";
+    this.addNotice(
+      `${discarded.length === 1 ? "Steer was" : `${discarded.length} steers were`} not consumed${detail}; queued for the next turn.`,
+      "warning"
+    );
+  }
+
+  private editLatestQueuedFollowUp(): void {
+    const submission = this.queuedFollowUps.pop();
+    if (!submission) return;
+    this.editor.setText(submission.input);
+    this.ui.setFocus(this.editor);
+    this.syncQueuedInputView();
+  }
+
+  private takeNextQueuedFollowUp(): QueuedSubmission | undefined {
+    const submission = this.queuedFollowUps.shift();
+    if (submission) this.syncQueuedInputView();
+    return submission;
+  }
+
+  private syncQueuedInputView(): void {
+    this.queuedInputView.setState({
+      pendingSteers: this.pendingSteers.map(({ submission }) => submission.displayInput),
+      queuedInputs: this.queuedFollowUps.map((submission) => submission.displayInput)
+    });
+    this.ui.requestRender();
   }
 
   private async attachClipboardImage(): Promise<void> {
@@ -2970,12 +3197,12 @@ class ZCodeTui {
     this.ui.requestRender();
   }
 
-  private updateActivity(activity: string | undefined): void {
+  private updateActivity(activity: string | undefined, requestRender = true): void {
     this.activity = activity ? sanitizeTerminalText(activity, { preserveSgr: false }) : undefined;
-    this.updateTurnStatus();
+    this.updateTurnStatus(requestRender);
   }
 
-  private updateTurnStatus(): void {
+  private updateTurnStatus(requestRender = true): void {
     if (this.turnStartedAt !== undefined) {
       this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
     }
@@ -3000,7 +3227,22 @@ class ZCodeTui {
     const compactRight = goalLabel ? goalStyle(`[ Goal: ${goalLabel} ]`) : undefined;
     this.turnStatus.setContent(left, right, compactRight);
     this.updateRuntimeActivity(false);
-    this.ui.requestRender();
+    if (requestRender) this.ui.requestRender();
+  }
+
+  private requestStreamRender(): void {
+    if (this.stopped || this.streamRenderTimer) return;
+    this.streamRenderTimer = setTimeout(() => {
+      this.streamRenderTimer = undefined;
+      if (!this.stopped) this.ui.requestRender();
+    }, streamRenderIntervalMs);
+    this.streamRenderTimer.unref?.();
+  }
+
+  private cancelStreamRender(): void {
+    if (!this.streamRenderTimer) return;
+    clearTimeout(this.streamRenderTimer);
+    this.streamRenderTimer = undefined;
   }
 
   private scheduleRuntimeRefresh(delay = 80): void {
@@ -3132,6 +3374,7 @@ class ZCodeTui {
   }
 
   private finishTurn(unfinishedToolState = "interrupted"): void {
+    this.cancelStreamRender();
     const notification = this.pendingTurnNotification;
     const notificationDetail = notification === "completed"
       ? this.turnAssistantText
@@ -3172,6 +3415,7 @@ class ZCodeTui {
     this.turnAbortController?.abort();
     this.updateCheckAbortController?.abort();
     if (this.turnTimer) clearInterval(this.turnTimer);
+    this.cancelStreamRender();
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
     if (this.runtimePollTimer) clearInterval(this.runtimePollTimer);

@@ -4,8 +4,6 @@ import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { hasNative, spawn as spawnPty } from "zigpty";
-
 import { ensureUserConfig, readConfiguredModelAccess } from "./model-access.ts";
 import {
   classifyZaiOAuthInvocation,
@@ -17,58 +15,6 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifestPath = join(packageRoot, "package.json");
 const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
 const launcherPath = join(packageRoot, "bin", "zcode.js");
-const NON_TUI_COMMANDS = new Set([
-  "app-server",
-  "commands",
-  "doctor",
-  "login",
-  "logout",
-  "plugins",
-  "skills",
-  "version"
-]);
-const NON_TUI_FLAGS = new Set([
-  "-h",
-  "--help",
-  "-v",
-  "--version",
-  "-p",
-  "--prompt",
-  "--json",
-  "--target"
-]);
-const FLAGS_WITH_VALUES = new Set([
-  "-p",
-  "--prompt",
-  "--attach",
-  "--cwd",
-  "--disallowedTools",
-  "--disallowed-tools",
-  "--locale",
-  "--mode",
-  "--resume",
-  "--target"
-]);
-
-export function isTuiInvocation(args: string[]): boolean {
-  if (args.some((argument) => NON_TUI_FLAGS.has(argument))) return false;
-  let command: string | undefined;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument.startsWith("--") && argument.includes("=")) continue;
-    if (FLAGS_WITH_VALUES.has(argument)) {
-      index += 1;
-      continue;
-    }
-    if (!argument.startsWith("-")) {
-      command = argument;
-      break;
-    }
-  }
-  if (command === "tui") return true;
-  return command ? !NON_TUI_COMMANDS.has(command) : true;
-}
-
 export function resolveNodeExecutable(): string {
   return process.env.ZCODE_NODE?.trim() || process.execPath;
 }
@@ -131,7 +77,7 @@ async function waitForChild(child: ChildProcess): Promise<number> {
   });
 }
 
-async function runWithInheritedStdio(node: string, args: string[]): Promise<number> {
+async function runRuntime(node: string, args: string[]): Promise<number> {
   const child = spawnChild(node, [runtimePath, ...args], {
     cwd: process.cwd(),
     env: runtimeEnvironment(),
@@ -142,65 +88,16 @@ async function runWithInheritedStdio(node: string, args: string[]): Promise<numb
   };
   const onSigint = () => forwardSignal("SIGINT");
   const onSigterm = () => forwardSignal("SIGTERM");
+  const onSighup = () => forwardSignal("SIGHUP");
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
+  if (process.platform !== "win32") process.once("SIGHUP", onSighup);
   try {
     return await waitForChild(child);
   } finally {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
-  }
-}
-
-async function runInNativeTerminal(node: string, args: string[]): Promise<number> {
-  if (!hasNative) {
-    throw new Error("zigpty has no native binding for this platform. Reinstall zcode-app-cli on a supported target.");
-  }
-  const wasRaw = process.stdin.isRaw ?? false;
-  const inputDecoder = new TextDecoder();
-  const pty = spawnPty(node, [runtimePath, ...args], {
-    cols: process.stdout.columns ?? 80,
-    rows: process.stdout.rows ?? 24,
-    cwd: process.cwd(),
-    env: {
-      ...runtimeEnvironment(),
-      TERM: process.env.TERM ?? "xterm-256color"
-    },
-    name: process.env.TERM ?? "xterm-256color",
-    encoding: null
-  });
-  const output = pty.onData((data) => process.stdout.write(data));
-
-  const onInput = (data: Buffer | string) => {
-    if (pty.exitCode === null) {
-      pty.write(typeof data === "string" ? data : inputDecoder.decode(data, { stream: true }));
-    }
-  };
-  const onResize = () => {
-    if (pty.exitCode === null) {
-      pty.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
-    }
-  };
-  const onSigint = () => pty.kill("SIGINT");
-  const onSigterm = () => pty.kill("SIGTERM");
-
-  try {
-    process.stdin.setRawMode?.(true);
-    process.stdin.resume();
-    process.stdin.on("data", onInput);
-    process.stdout.on("resize", onResize);
-    process.once("SIGINT", onSigint);
-    process.once("SIGTERM", onSigterm);
-    return await pty.exited;
-  } finally {
-    output.dispose();
-    process.stdin.off("data", onInput);
-    process.stdout.off("resize", onResize);
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-    process.stdin.setRawMode?.(wasRaw);
-    if (!wasRaw) process.stdin.pause();
-    pty.close();
+    if (process.platform !== "win32") process.off("SIGHUP", onSighup);
   }
 }
 
@@ -284,9 +181,8 @@ export async function main(args: string[]): Promise<number> {
     }
   }
 
-  const interactive = isTuiInvocation(login.args) && process.stdin.isTTY && process.stdout.isTTY;
   try {
-    return interactive ? await runInNativeTerminal(node, login.args) : await runWithInheritedStdio(node, login.args);
+    return await runRuntime(node, login.args);
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     return 1;

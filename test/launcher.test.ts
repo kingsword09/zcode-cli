@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { isTuiInvocation, normalizeLoginArgs, readDistributionVersion } from "../src/launcher.ts";
+import { normalizeLoginArgs, readDistributionVersion } from "../src/launcher.ts";
 import { classifyZaiOAuthInvocation } from "../src/zai-oauth.ts";
 
 describe("launcher routing", () => {
@@ -19,22 +19,6 @@ describe("launcher routing", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  });
-
-  test("routes full-screen invocations through the zigpty terminal", () => {
-    expect(isTuiInvocation([])).toBe(true);
-    expect(isTuiInvocation(["tui"])).toBe(true);
-    expect(isTuiInvocation(["--cwd", "/tmp", "--mode", "plan"])).toBe(true);
-    expect(isTuiInvocation(["--resume", "sess_123"])).toBe(true);
-    expect(isTuiInvocation(["--cwd", "doctor"])).toBe(true);
-  });
-
-  test("keeps protocol and headless commands on inherited stdio", () => {
-    expect(isTuiInvocation(["app-server"])).toBe(false);
-    expect(isTuiInvocation(["doctor", "--json"])).toBe(false);
-    expect(isTuiInvocation(["--cwd", "/tmp", "doctor"])).toBe(false);
-    expect(isTuiInvocation(["--prompt", "hello"])).toBe(false);
-    expect(isTuiInvocation(["tui", "--help"])).toBe(false);
   });
 
   test("checks configured access by default and keeps an explicit OAuth escape hatch", () => {

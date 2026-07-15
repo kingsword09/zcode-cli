@@ -309,6 +309,7 @@ export class ToolExecutionView extends Container {
   private options: ToolViewOptions;
   private expanded = false;
   private hiddenContent = false;
+  private dirty = true;
   private readonly card = new Box(1, 0);
   private readonly imageHost = new Container();
 
@@ -317,18 +318,17 @@ export class ToolExecutionView extends Container {
     this.options = options;
     this.addChild(this.card);
     this.addChild(this.imageHost);
-    this.rebuild();
   }
 
   update(options: ToolViewOptions): void {
     this.options = options;
-    this.rebuild();
+    this.dirty = true;
   }
 
   setExpanded(expanded: boolean): void {
     if (this.expanded === expanded) return;
     this.expanded = expanded;
-    this.rebuild();
+    this.dirty = true;
   }
 
   isExpanded(): boolean {
@@ -336,7 +336,13 @@ export class ToolExecutionView extends Container {
   }
 
   hasHiddenContent(): boolean {
+    this.ensureRebuilt();
     return this.hiddenContent;
+  }
+
+  override render(width: number): string[] {
+    this.ensureRebuilt();
+    return super.render(width);
   }
 
   getSearchText(): string {
@@ -360,6 +366,12 @@ export class ToolExecutionView extends Container {
   isTerminal(): boolean {
     return ["complete", "completed", "success", "failed", "error", "cancelled", "rejected", "interrupted"]
       .includes(this.options.state.toLowerCase());
+  }
+
+  private ensureRebuilt(): void {
+    if (!this.dirty) return;
+    this.rebuild();
+    this.dirty = false;
   }
 
   private rebuild(): void {

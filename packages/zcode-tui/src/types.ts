@@ -11,6 +11,8 @@ export interface SlashCommandOption {
 
 export interface PromptCallOptions {
   abortSignal?: AbortSignal;
+  delivery?: "auto" | "start_turn" | "steer_active_turn";
+  expectedTurnId?: string;
   inputId?: string;
   queryId?: string;
   onEvent?: (event: unknown) => void | Promise<void>;

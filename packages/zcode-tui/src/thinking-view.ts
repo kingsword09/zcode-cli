@@ -11,6 +11,7 @@ export class ThinkingView extends Box {
   private text = "";
   private completed = false;
   private expanded = false;
+  private dirty = false;
 
   constructor(private readonly theme: ZCodeTheme) {
     super(1, 0);
@@ -19,26 +20,26 @@ export class ThinkingView extends Box {
   append(delta: string): void {
     if (!delta) return;
     this.text += sanitizeTerminalText(delta, { preserveSgr: false });
-    this.rebuild();
+    this.dirty = true;
   }
 
   setText(text: string): void {
     const sanitized = sanitizeTerminalText(text, { preserveSgr: false });
     if (this.text === sanitized) return;
     this.text = sanitized;
-    this.rebuild();
+    this.dirty = true;
   }
 
   complete(): void {
     if (this.completed) return;
     this.completed = true;
-    this.rebuild();
+    this.dirty = true;
   }
 
   setExpanded(expanded: boolean): void {
     if (this.expanded === expanded) return;
     this.expanded = expanded;
-    this.rebuild();
+    this.dirty = true;
   }
 
   isExpanded(): boolean {
@@ -51,6 +52,14 @@ export class ThinkingView extends Box {
 
   getSearchText(): string {
     return this.text;
+  }
+
+  override render(width: number): string[] {
+    if (this.dirty) {
+      this.rebuild();
+      this.dirty = false;
+    }
+    return super.render(width);
   }
 
   private rebuild(): void {

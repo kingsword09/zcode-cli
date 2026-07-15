@@ -8,6 +8,11 @@ export interface StreamEvent {
   field?: "text" | "reasoning" | "input" | "output";
   messageId?: string;
   partId?: string;
+  inputId?: string;
+  pendingInputId?: string;
+  pendingInputIds?: string[];
+  injectedMessageIds?: string[];
+  reason?: string;
   part?: RestoredPart;
   toolName?: string;
   toolCallId?: string;
@@ -60,6 +65,12 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
     const field = body[key];
     return typeof field === "number" && Number.isFinite(field) ? field : undefined;
   };
+  const strings = (key: string): string[] | undefined => {
+    const field = body[key];
+    return Array.isArray(field)
+      ? field.filter((item): item is string => typeof item === "string")
+      : undefined;
+  };
 
   return {
     type,
@@ -73,6 +84,11 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
       ?? asString(body.assistantMessageId)
       ?? part?.messageId,
     partId: asString(body.partId) ?? asString(body.partID) ?? part?.partId,
+    inputId: asString(body.inputId) ?? asString(body.inputID),
+    pendingInputId: asString(body.pendingInputId) ?? asString(body.pendingInputID),
+    pendingInputIds: strings("pendingInputIds") ?? strings("pendingInputIDs"),
+    injectedMessageIds: strings("injectedMessageIds") ?? strings("injectedMessageIDs"),
+    reason: asString(body.reason),
     part,
     toolName: asString(body.toolName)
       ?? (toolCall && (asString(toolCall.name) ?? asString(toolCall.toolName)))
