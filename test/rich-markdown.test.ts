@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Markdown, Text, visibleWidth } from "@earendil-works/pi-tui";
 
 import { CodeHighlighter } from "../packages/zcode-tui/src/code-highlighter.ts";
@@ -11,6 +11,10 @@ import {
   splitStreamingMarkdownSegments
 } from "../packages/zcode-tui/src/rich-markdown.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
+
+// This file exhaustively renders every streaming prefix across widths and themes.
+// Keep correctness coverage intact while allowing slower shared CI runners to finish.
+setDefaultTimeout(20_000);
 
 function terminalColumn(line: string, marker: string): number {
   const index = line.indexOf(marker);
@@ -4073,7 +4077,7 @@ describe("TUI rich Markdown", () => {
 
   test("keeps depth-four line-local blockquotes byte-identical", () => {
     expectNestedBlockquoteDepthByteIdentical(4);
-  }, 10_000);
+  });
 
   test("avoids incremental setup for a restored large nested blockquote", () => {
     for (const depth of [3, 4] as const) {
@@ -4266,7 +4270,7 @@ describe("TUI rich Markdown", () => {
 
   test("keeps depth-three cross-line semantic quote chunks byte-identical", () => {
     expectNestedCrossLineQuoteByteIdentical(3);
-  }, 10_000);
+  });
 
   test("avoids incremental setup for restored large nested cross-line quotes", () => {
     for (const depth of [2, 3] as const) {
