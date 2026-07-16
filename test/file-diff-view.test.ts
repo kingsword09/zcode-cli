@@ -3,10 +3,17 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import {
   fileDiffCard,
+  fileDiffsForPermission,
   fileDiffsForTool,
   FileDiffView,
   wordDiffLines
 } from "../packages/zcode-tui/src/file-diff-view.ts";
+import {
+  fileDiffRetentionSize,
+  MAX_RETAINED_DIFF_CHARACTERS,
+  MAX_RETAINED_DIFF_FILES,
+  MAX_RETAINED_DIFF_LINES
+} from "../packages/zcode-tui/src/file-diff-budget.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 import { toolCard } from "../packages/zcode-tui/src/tool-view.ts";
 
@@ -169,5 +176,80 @@ describe("TUI file diff view", () => {
 
     expect(card).toContain("… diff truncated");
     expect(card).not.toContain("line 200");
+  });
+
+  test("distinguishes retained truncation from an expandable viewport preview", () => {
+    const diffs = fileDiffsForTool(
+      "Write",
+      {
+        file_path: "large.ts",
+        content: Array.from({ length: 2_100 }, (_, index) => `line ${index}`).join("\n")
+      },
+      { success: true },
+      "complete"
+    );
+    const collapsed = new FileDiffView(createTheme(false), {
+      toolName: "Write",
+      state: "complete",
+      diffs,
+      expanded: false
+    }).render(80).join("\n");
+    const expanded = new FileDiffView(createTheme(false), {
+      toolName: "Write",
+      state: "complete",
+      diffs,
+      expanded: true
+    }).render(80).join("\n");
+
+    expect(collapsed).toContain("Ctrl+O to expand retained preview");
+    expect(expanded).toContain("diff truncated at retention limit");
+    expect(expanded).not.toContain("Ctrl+O to expand");
+  });
+
+  test("applies one retained budget to every mutation diff source", () => {
+    const added = Array.from({ length: 2_100 }, (_, index) => `new line ${index}`).join("\n");
+    const removed = Array.from({ length: 2_100 }, (_, index) => `old line ${index}`).join("\n");
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: src/patch.ts",
+      "@@ -1,2100 +1,2100 @@",
+      ...removed.split("\n").map((line) => `-${line}`),
+      ...added.split("\n").map((line) => `+${line}`),
+      "*** End Patch"
+    ].join("\n");
+    const officialLines = added.split("\n").map((line) => `+${line}`);
+    const cases = [
+      fileDiffsForTool(
+        "Write",
+        { file_path: "src/write.ts", content: added },
+        { success: true },
+        "complete"
+      ),
+      fileDiffsForPermission("Edit", {
+        file_path: "src/edit.ts",
+        old_string: removed,
+        new_string: added
+      }),
+      fileDiffsForTool("ApplyPatch", { patch_text: patch }, undefined, "running"),
+      fileDiffsForTool("Edit", {}, {
+        display: {
+          kind: "file_diff",
+          filePath: "src/official.ts",
+          additions: 2_100,
+          deletions: 0,
+          structuredPatch: [{ lines: officialLines }]
+        }
+      }, "complete")
+    ];
+
+    for (const diffs of cases) {
+      const size = fileDiffRetentionSize(diffs);
+      expect(size.files).toBeLessThanOrEqual(MAX_RETAINED_DIFF_FILES);
+      expect(size.lines).toBeLessThanOrEqual(MAX_RETAINED_DIFF_LINES);
+      expect(size.characters).toBeLessThanOrEqual(MAX_RETAINED_DIFF_CHARACTERS);
+      expect(diffs.some((file) => file.truncated)).toBeTrue();
+    }
+    expect(cases[0]?.[0]?.additions).toBe(2_100);
+    expect(cases[1]?.[0]).toMatchObject({ additions: 2_100, deletions: 2_100 });
   });
 });

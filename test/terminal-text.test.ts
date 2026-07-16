@@ -4,6 +4,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   sanitizeTerminalText,
   removeLastGrapheme,
+  StreamingTerminalTextSanitizer,
   truncateGraphemes,
   truncateTerminalText,
   wrapTerminalText
@@ -31,6 +32,41 @@ describe("terminal text safety", () => {
 
   test("turns carriage-return progress into non-destructive lines", () => {
     expect(sanitizeTerminalText("10%\r20%\r\nDone\b!")).toBe("10%\n20%\nDone!");
+  });
+
+  test("matches one-shot sanitizing across every transport chunk boundary", () => {
+    const values = [
+      "before\x1b[31mred\x1b[0mafter",
+      "title\x1b]0;owned\x07safe",
+      "left\x1bPpayload\x1b\\right",
+      "one\x9b2Jtwo\x9dunsafe\x07three",
+      "10%\r20%\r\nDone\tcell",
+      "unknown\x1b!escape",
+      "unfinished\x1b]discarded"
+    ];
+
+    for (const value of values) {
+      const expected = sanitizeTerminalText(value);
+      for (let split = 0; split <= value.length; split += 1) {
+        const sanitizer = new StreamingTerminalTextSanitizer();
+        const actual = sanitizer.append(value.slice(0, split))
+          + sanitizer.append(value.slice(split))
+          + sanitizer.finish();
+        expect(actual).toBe(expected);
+      }
+
+      const sanitizer = new StreamingTerminalTextSanitizer();
+      const actual = Array.from(value, (character) => sanitizer.append(character)).join("")
+        + sanitizer.finish();
+      expect(actual).toBe(expected);
+    }
+  });
+
+  test("preserves trusted SGR split across chunks without preserving commands", () => {
+    const sanitizer = new StreamingTerminalTextSanitizer({ preserveSgr: true });
+    expect(sanitizer.append("\x1b[3")).toBe("");
+    expect(sanitizer.append("1mred\x1b[2")).toBe("\x1b[31mred");
+    expect(sanitizer.append("Jsafe") + sanitizer.finish()).toBe("safe");
   });
 
   test("wraps ANSI text and truncates complete terminal graphemes", () => {

@@ -34,13 +34,46 @@ async function runPressureTurn(
 ): Promise<unknown> {
   const toolCallId = cancellable ? "pressure_cancel" : "pressure_steer";
   const command = cancellable ? "cancel-pressure" : "steer-pressure";
+  const partId = `${toolCallId}_part`;
   active = true;
   try {
+    await options.onEvent?.({ kind: "tool_input_start", toolCallId, toolName: "Bash" });
+    for (let index = 0; index < 10_000; index += 1) {
+      void options.onEvent?.({
+        kind: "tool_input_delta",
+        delta: "0123456789",
+        toolCallId,
+        toolName: "Bash"
+      });
+    }
+    await Bun.sleep(30);
+    await options.onEvent?.({
+      kind: "tool_call",
+      input: { command },
+      toolCallId,
+      toolName: "Bash"
+    });
     await emit(options, "tool_call_started", {
       input: { command },
       toolCallId,
       toolName: "Bash"
     });
+    await emit(options, "part.started", {
+      part: {
+        type: "tool",
+        partId,
+        callId: toolCallId,
+        tool: "Bash",
+        state: { status: "running", input: { command } }
+      }
+    });
+    for (let index = 0; index < 10_000; index += 1) {
+      void options.onEvent?.({
+        type: "part.delta",
+        payload: { partId, field: "output", delta: "0123456789" }
+      });
+    }
+    await Bun.sleep(30);
     for (let index = 0; index < (cancellable ? 100_000 : 5_000); index += 1) {
       if (options.abortSignal?.aborted) throw new Error("Pressure turn cancelled.");
       await emit(options, "tool_call_progress", {

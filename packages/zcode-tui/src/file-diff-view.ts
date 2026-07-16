@@ -7,6 +7,7 @@ import {
 import { diffWordsWithSpace } from "diff";
 
 import { createTheme, type ZCodeTheme } from "./theme.ts";
+import { boundedFileDiffs } from "./file-diff-budget.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import { asString, isRecord } from "./types.ts";
 
@@ -263,13 +264,13 @@ export function fileDiffsForTool(
 ): FileDiffData[] {
   if (!isFileMutationTool(name)) return [];
   const official = collectDisplays(result);
-  if (official.length > 0) return official;
+  if (official.length > 0) return boundedFileDiffs(official);
   const normalized = name.toLowerCase().replace(/[^a-z]/gu, "");
   if (normalized === "applypatch" && isRecord(input)) {
     const patch = asString(input.patch_text) ?? asString(input.patchText) ?? asString(input.patch);
-    if (patch) return parseApplyPatch(patch);
+    if (patch) return boundedFileDiffs(parseApplyPatch(patch));
   }
-  return normalized === "write" ? writeCreateDiff(input, result, state) : [];
+  return normalized === "write" ? boundedFileDiffs(writeCreateDiff(input, result, state)) : [];
 }
 
 export function fileDiffsForPermission(name: string, input: unknown): FileDiffData[] {
@@ -277,10 +278,10 @@ export function fileDiffsForPermission(name: string, input: unknown): FileDiffDa
   const normalized = name.toLowerCase().replace(/[^a-z]/gu, "");
   if (normalized.includes("applypatch") || normalized === "patch") {
     const patch = asString(input.patch_text) ?? asString(input.patchText) ?? asString(input.patch);
-    return patch ? parseApplyPatch(patch) : [];
+    return patch ? boundedFileDiffs(parseApplyPatch(patch)) : [];
   }
-  if (normalized.includes("write")) return previewWriteDiff(input);
-  if (normalized.includes("edit")) return previewEditDiff(input);
+  if (normalized.includes("write")) return boundedFileDiffs(previewWriteDiff(input));
+  if (normalized.includes("edit")) return boundedFileDiffs(previewEditDiff(input));
   return [];
 }
 
@@ -384,6 +385,7 @@ export class FileDiffView implements Component {
     let visibleHunks = 0;
     let visibleLines = 0;
     let truncated = this.options.diffs.length > diffs.length;
+    let retentionTruncated = false;
 
     for (let fileIndex = 0; fileIndex < diffs.length; fileIndex += 1) {
       const diff = diffs[fileIndex]!;
@@ -427,10 +429,20 @@ export class FileDiffView implements Component {
               : "No textual diff available";
         output.push(this.theme.muted(`└ ${description}`));
       }
-      if (diff.truncated) truncated = true;
+      if (diff.truncated) {
+        retentionTruncated = true;
+        truncated = true;
+      }
     }
 
-    if (truncated) output.push(this.theme.muted("… diff truncated · Ctrl+O to expand"));
+    if (truncated) {
+      const message = retentionTruncated
+        ? this.options.expanded
+          ? "… diff truncated at retention limit"
+          : "… diff truncated · Ctrl+O to expand retained preview"
+        : "… diff truncated · Ctrl+O to expand";
+      output.push(this.theme.muted(message));
+    }
     return output;
   }
 

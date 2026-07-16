@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
 
+import { BoundedToolText } from "../packages/zcode-tui/src/bounded-tool-text.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
+import { fileDiffRetentionSize } from "../packages/zcode-tui/src/file-diff-budget.ts";
 import {
   ToolExecutionView,
   toolCard,
   toolSucceeded
 } from "../packages/zcode-tui/src/tool-view.ts";
+import {
+  MAX_RETAINED_TOOL_PAYLOAD_CHARACTERS,
+  toolPayloadSize
+} from "../packages/zcode-tui/src/tool-payload.ts";
 
 describe("TUI tool execution view", () => {
   test("renders a scannable tool summary instead of raw input JSON", () => {
@@ -33,6 +39,139 @@ describe("TUI tool execution view", () => {
     const larger = toolCard({ name: "Bash", state: "complete", result: "x".repeat(4_000) });
     expect(larger).toContain("output truncated");
     expect(larger.length).toBeLessThan(2_700);
+  });
+
+  test("keeps terminal Error messages compact after payload retention", () => {
+    const card = toolCard({ name: "Bash", state: "failed", error: new Error("boom") });
+
+    expect(card).toContain("Error: boom");
+    expect(card).not.toContain('"name": "Error"');
+    expect(card).not.toContain('"message": "boom"');
+  });
+
+  test("keeps active payloads intact and compacts them at the terminal state", () => {
+    const result = { stdout: `HEAD-${"x".repeat(1_000_000)}-TAIL`, success: true };
+    const view = new ToolExecutionView(createTheme(false), {
+      name: "Bash",
+      state: "running",
+      input: { command: "generate" },
+      result
+    });
+    const internal = view as unknown as {
+      options: {
+        error?: unknown;
+        input?: unknown;
+        inputText?: string;
+        progress?: unknown;
+        result?: unknown;
+        retainedPayloadTruncated?: boolean;
+      };
+    };
+    expect(internal.options.result).toBe(result);
+
+    view.update({
+      name: "Bash",
+      state: "complete",
+      input: { command: "generate" },
+      result
+    });
+    const size = toolPayloadSize([
+      internal.options.input,
+      internal.options.inputText,
+      internal.options.result,
+      internal.options.error,
+      internal.options.progress
+    ]);
+    const retained = JSON.stringify(internal.options.result);
+    expect(internal.options.result).not.toBe(result);
+    expect(size.characters).toBeLessThanOrEqual(MAX_RETAINED_TOOL_PAYLOAD_CHARACTERS);
+    expect(retained).toContain("HEAD-");
+    expect(retained).toContain("-TAIL");
+    expect(internal.options.retainedPayloadTruncated).toBeTrue();
+    expect(view.render(80).join("\n")).toContain("completed tool payload retained as a bounded preview");
+  });
+
+  test("materializes active bounded streams only when the dirty view renders", () => {
+    const output = new BoundedToolText();
+    let materializations = 0;
+    const value = output.value.bind(output);
+    output.value = () => {
+      materializations += 1;
+      return value();
+    };
+    const view = new ToolExecutionView(createTheme(false), {
+      name: "Bash",
+      state: "running",
+      input: { command: "stream" },
+      result: output
+    });
+
+    for (let index = 0; index < 10_000; index += 1) {
+      output.append("0123456789");
+      view.update({
+        name: "Bash",
+        state: "running",
+        input: { command: "stream" },
+        result: output
+      });
+    }
+
+    expect(materializations).toBe(0);
+    const rendered = view.render(80).join("\n");
+    expect(materializations).toBe(1);
+    expect(rendered).toContain("output characters omitted from active tool stream");
+    view.render(80);
+    expect(materializations).toBe(1);
+  });
+
+  test("keeps bounded input byte-identical below the limit and marks terminal truncation", () => {
+    const input = new BoundedToolText('{"command":"printf ok"}');
+    expect(toolCard({ name: "Bash", state: "running", inputText: input }))
+      .toBe(toolCard({ name: "Bash", state: "running", inputText: input.value() }));
+
+    input.append("x".repeat(100_000));
+    const completed = new ToolExecutionView(createTheme(false), {
+      name: "UnknownTool",
+      state: "complete",
+      inputText: input,
+      result: { success: true }
+    });
+    expect(completed.render(80).join("\n"))
+      .toContain("completed tool payload retained as a bounded preview");
+  });
+
+  test("retains bounded mutation diffs without the original content", () => {
+    const content = "x".repeat(1_000_000);
+    const input = { file_path: "src/large.ts", content };
+    const view = new ToolExecutionView(createTheme(false), {
+      name: "Write",
+      state: "complete",
+      input,
+      result: { success: true }
+    });
+    const internal = view as unknown as {
+      options: { diffs?: []; input?: unknown; retainedPayloadTruncated?: boolean };
+    };
+
+    expect(internal.options.input).not.toBe(input);
+    expect(toolPayloadSize(internal.options.input).characters)
+      .toBeLessThanOrEqual(MAX_RETAINED_TOOL_PAYLOAD_CHARACTERS);
+    expect(fileDiffRetentionSize(internal.options.diffs ?? []).characters).toBeLessThanOrEqual(250_000);
+    expect(internal.options.retainedPayloadTruncated).toBeTrue();
+  });
+
+  test("replaces oversized completed image data with a searchable omission summary", () => {
+    const data = "a".repeat(1_000_000);
+    const view = new ToolExecutionView(createTheme(false), {
+      name: "Read",
+      state: "complete",
+      result: { content: [{ type: "image", mimeType: "image/png", data }] }
+    });
+    const rendered = view.render(80).join("\n");
+
+    expect(rendered).toContain("completed tool payload retained as a bounded preview");
+    expect(view.getSearchText()).toContain("binary payload omitted: 1000000 characters");
+    expect(view.getSearchText()).not.toContain(data.slice(0, 10_000));
   });
 
   test("coalesces rapid tool progress updates until the next render", () => {

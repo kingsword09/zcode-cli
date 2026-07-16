@@ -75,4 +75,26 @@ describe("TUI assistant stream", () => {
     expect(renderedLines(transcript).join("\n").match(/Hello!/g)).toHaveLength(1);
     stream.removePart("part_1");
   });
+
+  test("releases identified part references at each turn boundary", () => {
+    const transcript = new Transcript();
+    const stream = new AssistantStream(
+      createTheme(false),
+      (component, options) => transcript.addBlock(component, options)
+    );
+    const internal = stream as unknown as {
+      partSegments: Map<string, { text: string }>;
+    };
+
+    for (let turn = 0; turn < 1_000; turn += 1) {
+      stream.beginTurn();
+      stream.append(`response ${turn}`, `part_${turn}`, `message_${turn}`);
+      expect(internal.partSegments.size).toBe(1);
+    }
+
+    expect(internal.partSegments.size).toBe(1);
+    expect(Array.from(internal.partSegments.values(), (segment) => segment.text))
+      .toEqual(["response 999"]);
+    expect(transcript.render(80).join("\n")).toContain("response 999");
+  });
 });

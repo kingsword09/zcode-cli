@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 
-import { Transcript } from "../packages/zcode-tui/src/transcript.ts";
+import {
+  MAX_RETAINED_TRANSCRIPT_BLOCKS,
+  MAX_RETAINED_TRANSCRIPT_HISTORY_CHARACTERS,
+  Transcript
+} from "../packages/zcode-tui/src/transcript.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
 describe("TUI transcript", () => {
@@ -129,5 +133,92 @@ describe("TUI transcript", () => {
     expect(transcript.movePage(1, 80)).toEqual({ current: 2, total: 2_500 });
     expect(transcript.render(80).join("\n")).toContain("line 21");
     expect(fullRenders).toBe(0);
+  });
+
+  test("reuses width presentation for stable blocks and refreshes changed content", () => {
+    let sourceLines = ["界".repeat(20)];
+    const component: Component = {
+      invalidate() {},
+      render: () => [...sourceLines]
+    };
+    const transcript = new Transcript();
+    transcript.addBlock(component);
+    const internal = transcript as unknown as {
+      blocks: Array<{ renderCache?: { lines: string[] } }>;
+    };
+
+    const firstLine = transcript.render(10)[0] ?? "";
+    expect(firstLine).toContain("界界界");
+    expect(visibleWidth(firstLine)).toBeLessThanOrEqual(10);
+    const firstCache = internal.blocks[0]?.renderCache;
+    transcript.render(10);
+    expect(internal.blocks[0]?.renderCache).toBe(firstCache);
+
+    sourceLines = ["changed"];
+    expect(transcript.render(10)[0]).toBe("changed");
+    expect(internal.blocks[0]?.renderCache).not.toBe(firstCache);
+  });
+
+  test("releases component and presentation caches when blocks leave the render window", () => {
+    const invalidations = Array<number>(301).fill(0);
+    const transcript = new Transcript();
+    for (let index = 0; index < 300; index += 1) {
+      transcript.addBlock({
+        invalidate: () => { invalidations[index] = (invalidations[index] ?? 0) + 1; },
+        render: () => [`block ${index}`]
+      });
+    }
+    transcript.render(80);
+    const internal = transcript as unknown as {
+      blocks: Array<{ renderCache?: unknown }>;
+    };
+    expect(internal.blocks[0]?.renderCache).toBeDefined();
+
+    transcript.addBlock({
+      invalidate: () => { invalidations[300] = (invalidations[300] ?? 0) + 1; },
+      render: () => ["block 300"]
+    });
+
+    expect(internal.blocks[0]?.renderCache).toBeUndefined();
+    expect(invalidations[0]).toBe(1);
+    expect(invalidations[60]).toBe(1);
+    expect(invalidations[61]).toBe(0);
+  });
+
+  test("bounds retained blocks while preserving the current render window", () => {
+    const transcript = new Transcript();
+    for (let index = 0; index < 10_000; index += 1) {
+      const text = index === 0
+        ? "content-oldest-released"
+        : index === 9_999
+          ? "content-latest-retained"
+          : `content-${index}`;
+      transcript.addBlock(new Text(text, 0, 0), { kind: "assistant", searchText: text });
+    }
+
+    expect(transcript.blockCount).toBe(MAX_RETAINED_TRANSCRIPT_BLOCKS);
+    expect(transcript.discardedBlockCount).toBe(10_000 - MAX_RETAINED_TRANSCRIPT_BLOCKS);
+    const rendered = transcript.render(80).join("\n");
+    expect(rendered).toContain("older blocks released from in-app history");
+    expect(rendered).toContain("content-latest-retained");
+    expect(rendered).not.toContain("content-oldest-released");
+    expect(transcript.searchFor("content-oldest-released")).toMatchObject({ current: 0, total: 0 });
+    expect(transcript.searchFor("content-latest-retained")).toMatchObject({ current: 1, total: 1 });
+  });
+
+  test("bounds searchable characters outside the active render window", () => {
+    const transcript = new Transcript();
+    for (let index = 0; index < 1_000; index += 1) {
+      const text = `${index}:${"x".repeat(9_995)}`;
+      transcript.addBlock({ invalidate() {}, render: () => [text] }, {
+        kind: "assistant",
+        searchText: text
+      });
+    }
+
+    expect(transcript.retainedHistoryCharacters)
+      .toBeLessThanOrEqual(MAX_RETAINED_TRANSCRIPT_HISTORY_CHARACTERS);
+    expect(transcript.blockCount).toBeLessThan(MAX_RETAINED_TRANSCRIPT_BLOCKS);
+    expect(transcript.render(80).join("\n")).toContain("999:");
   });
 });

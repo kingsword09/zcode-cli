@@ -29,6 +29,7 @@ import {
 } from "./attachments.ts";
 import { AttachmentBar } from "./attachment-bar.ts";
 import { AssistantStream } from "./assistant-stream.ts";
+import { BoundedToolText, toolTextValue } from "./bounded-tool-text.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
 import {
   colorSchemeFromRgb,
@@ -55,7 +56,7 @@ import {
   diffFileDescription,
   type DiffBrowserSource
 } from "./diff-browser.ts";
-import { FileDiffView, fileDiffsForTool } from "./file-diff-view.ts";
+import { FileDiffView, type FileDiffData } from "./file-diff-view.ts";
 import {
   formatTokens,
   goalStatusLabel,
@@ -116,6 +117,12 @@ import { InputQueue, type QueuedSubmission } from "./input-queue.ts";
 import { QueuedInputView } from "./queued-input-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
 import {
+  runtimePollInterval,
+  runtimeRefreshNeeded,
+  runtimePollStateChanged,
+  type RuntimePollState
+} from "./runtime-poll.ts";
+import {
   parseSelectionCommand,
   protectSubmission,
   redactSecrets,
@@ -162,13 +169,19 @@ import {
   isGroupedInformationTool,
   type ToolProgressData
 } from "./tool-renderers.ts";
-import { ToolExecutionView, toolSucceeded } from "./tool-view.ts";
+import {
+  compactTerminalToolOptions,
+  isTerminalToolState,
+  ToolExecutionView,
+  toolSucceeded
+} from "./tool-view.ts";
 import { Transcript } from "./transcript.ts";
 import {
   TURN_TIMER_FRAME_DURATION_MS,
   turnStatusText,
   turnTimerAnimationEnabled
 } from "./turn-status.ts";
+import { TurnPresentationRegistry } from "./turn-presentation-registry.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
 import { UpdateAvailableView, updateCommand } from "./update-available-view.ts";
 import { Divider, WelcomeBanner } from "./welcome-banner.ts";
@@ -187,11 +200,14 @@ interface ToolViewState {
   messageId?: string;
   partId?: string;
   input?: unknown;
-  inputText: string;
+  inputText: BoundedToolText;
+  outputText?: BoundedToolText;
   state: string;
   result?: unknown;
   error?: unknown;
   progress?: ToolProgressData;
+  diffs?: FileDiffData[];
+  retainedPayloadTruncated?: boolean;
 }
 
 const toolLifecycleEventKinds = new Set([
@@ -220,7 +236,6 @@ function modelRetryProgress(event: StreamEvent, phase: "scheduled" | "started"):
 }
 
 const doubleEscapeTimeoutMs = 800;
-const streamRenderIntervalMs = 50;
 const customProviderHelpCommand = "__zcode_custom_provider_help__";
 const rewindEscapeHint = "Esc again to rewind conversation";
 
@@ -304,14 +319,15 @@ class ZCodeTui {
   private turnAbortController?: AbortController;
   private currentThinking?: ThinkingView;
   private currentThinkingPartId?: string;
-  private readonly thinkingParts = new Map<string, ThinkingView>();
-  private readonly protocolPartViews = new Map<string, ProtocolPartView>();
-  private readonly protocolPartKinds = new Map<string, RestoredPart["type"]>();
-  private readonly protocolPartMessages = new Map<string, string>();
-  private readonly protocolPartTools = new Map<string, string>();
-  private readonly toolViews = new Map<string, ToolViewState>();
-  private readonly pendingToolParents = new Map<string, string>();
-  private readonly pendingToolProgress = new Map<string, ToolProgressData>();
+  private readonly presentationRegistry = new TurnPresentationRegistry<ToolViewState>();
+  private readonly thinkingParts = this.presentationRegistry.thinkingParts;
+  private readonly protocolPartViews = this.presentationRegistry.protocolPartViews;
+  private readonly protocolPartKinds = this.presentationRegistry.protocolPartKinds;
+  private readonly protocolPartMessages = this.presentationRegistry.protocolPartMessages;
+  private readonly protocolPartTools = this.presentationRegistry.protocolPartTools;
+  private readonly toolViews = this.presentationRegistry.toolViews;
+  private readonly pendingToolParents = this.presentationRegistry.pendingToolParents;
+  private readonly pendingToolProgress = this.presentationRegistry.pendingToolProgress;
   private readonly turnDiffs = new TurnDiffStore();
   private currentToolGroup?: ToolGroupView;
   private currentToolGroupBlockId?: string;
@@ -338,7 +354,6 @@ class ZCodeTui {
   private turnElapsedMilliseconds = 0;
   private turnTimingVisible = false;
   private turnTimer?: ReturnType<typeof setInterval>;
-  private streamRenderTimer?: ReturnType<typeof setTimeout>;
   private pendingTurnNotification?: TurnNotificationKind;
   private pendingTurnNotificationDetail = "";
   private goal?: GoalState;
@@ -354,7 +369,7 @@ class ZCodeTui {
   private runtimeRefreshInFlight = false;
   private runtimeRefreshPending = false;
   private runtimeRefreshTimer?: ReturnType<typeof setTimeout>;
-  private runtimePollTimer?: ReturnType<typeof setInterval>;
+  private runtimePollTimer?: ReturnType<typeof setTimeout>;
   private updateCheckAbortController?: AbortController;
   private loginRequired: boolean;
   private readonly loginWarning = new Text("", 1, 0);
@@ -451,11 +466,7 @@ class ZCodeTui {
     this.startUpdateRefresh(updateCheck);
     if (!this.loginRequired) void this.refreshGoal();
     if (!this.loginRequired) void this.refreshSessionUsage();
-    void this.refreshRuntimeState();
-    if (this.options.readRuntimeProjection || this.options.readTodos) {
-      this.runtimePollTimer = setInterval(() => void this.refreshRuntimeState(), 1_000);
-      this.runtimePollTimer.unref?.();
-    }
+    this.scheduleRuntimePoll(0);
     void this.loadHistory();
     if (this.options.subscribeWorkflowEvents) {
       this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
@@ -1087,7 +1098,7 @@ class ZCodeTui {
     this.debugEvent("session", value);
     const event = normalizeEvent(value);
     if (!event) return;
-    this.scheduleRuntimeRefresh();
+    if (runtimeRefreshNeeded(event)) this.scheduleRuntimeRefresh();
     if (this.inputQueue.handleLifecycleEvent(event)) {
       this.requestStreamRender();
       return;
@@ -1129,18 +1140,23 @@ class ZCodeTui {
       this.completeThinking(event.partId);
     } else if (event.kind === "tool_input_start") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
+      tool.input = undefined;
+      tool.inputText.clear();
       this.updateToolView(tool, "preparing");
       this.updateActivity(`preparing ${tool.name}…`, false);
     } else if (event.kind === "tool_input_delta" && event.delta) {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
-      tool.inputText += event.delta;
+      tool.inputText.append(event.delta);
       this.updateToolView(tool, "preparing");
     } else if (event.kind === "tool_input_end") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
       this.updateToolView(tool, "prepared");
     } else if (event.kind === "tool_call" || event.kind === "scheduled" || event.kind === "started") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
-      if (event.input !== undefined) tool.input = event.input;
+      if (event.input !== undefined) {
+        tool.input = event.input;
+        tool.inputText.clear();
+      }
       this.updateToolView(tool, event.kind === "scheduled" ? "queued" : "running", undefined, undefined, event.progress);
       this.updateActivity(`running ${tool.name}…`, false);
     } else if (event.kind === "progress") {
@@ -1273,10 +1289,14 @@ class ZCodeTui {
       const toolId = part.toolCallId ?? part.partId;
       if (!toolId) return;
       const tool = this.ensureToolView(toolId, part.toolName, part.partId, part.messageId);
-      if (part.input !== undefined) tool.input = part.input;
+      if (part.input !== undefined) {
+        tool.input = part.input;
+        tool.inputText.clear();
+      }
       const result = part.resultDisplay !== undefined
         ? { output: part.output, display: part.resultDisplay }
         : part.output;
+      if (part.output !== undefined || part.resultDisplay !== undefined) tool.outputText = undefined;
       this.updateToolView(tool, restoredToolState(part.status), result, part.error, {
         parentToolCallId: part.parentToolCallId,
         childToolCallId: part.childToolCallId,
@@ -1326,11 +1346,17 @@ class ZCodeTui {
     const tool = toolId ? this.toolViews.get(toolId) : undefined;
     if (!tool) return;
     if (field === "input") {
-      tool.inputText += delta;
+      tool.inputText.append(delta);
       this.updateToolView(tool, tool.state === "queued" ? "queued" : "preparing");
     } else {
-      tool.result = `${typeof tool.result === "string" ? tool.result : ""}${delta}`;
-      this.updateToolView(tool, "running", tool.result);
+      if (!tool.outputText) {
+        tool.outputText = new BoundedToolText(
+          typeof tool.result === "string" ? tool.result : ""
+        );
+        if (typeof tool.result === "string") tool.result = undefined;
+      }
+      tool.outputText.append(delta);
+      this.updateToolView(tool, "running");
     }
   }
 
@@ -1375,6 +1401,12 @@ class ZCodeTui {
 
   private beginTurn(prompt?: string): void {
     this.completeThinking();
+    this.presentationRegistry.beginTurn();
+    this.currentThinking = undefined;
+    this.currentThinkingPartId = undefined;
+    this.currentToolGroup = undefined;
+    this.currentToolGroupBlockId = undefined;
+    this.currentToolGroupMessageId = undefined;
     this.assistantStream.beginTurn();
     this.turnAssistantText = "";
     this.inputQueue.resetAutoSend();
@@ -1388,8 +1420,10 @@ class ZCodeTui {
     if (this.turnTimer) clearInterval(this.turnTimer);
     this.turnTimer = setInterval(
       () => this.updateTurnStatus(),
-      this.animateTurnTimer ? TURN_TIMER_FRAME_DURATION_MS : 1_000
+      TURN_TIMER_FRAME_DURATION_MS
     );
+    this.turnTimer.unref?.();
+    this.rescheduleRuntimePoll();
     this.updateTurnStatus();
   }
 
@@ -1398,14 +1432,7 @@ class ZCodeTui {
     this.assistantStream.clear();
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
-    this.thinkingParts.clear();
-    this.protocolPartViews.clear();
-    this.protocolPartKinds.clear();
-    this.protocolPartMessages.clear();
-    this.protocolPartTools.clear();
-    this.toolViews.clear();
-    this.pendingToolParents.clear();
-    this.pendingToolProgress.clear();
+    this.presentationRegistry.clear();
     this.turnDiffs.clear();
     this.currentToolGroup = undefined;
     this.currentToolGroupBlockId = undefined;
@@ -1593,7 +1620,7 @@ class ZCodeTui {
       nested: false,
       messageId,
       partId,
-      inputText: "",
+      inputText: new BoundedToolText(),
       state: "preparing"
     };
     this.toolViews.set(id, tool);
@@ -1619,7 +1646,10 @@ class ZCodeTui {
     progress?: ToolProgressData
   ): void {
     tool.state = state;
-    if (result !== undefined) tool.result = result;
+    if (result !== undefined) {
+      tool.result = result;
+      tool.outputText = undefined;
+    }
     if (error !== undefined) tool.error = error;
     if (progress) tool.progress = { ...tool.progress, ...progress };
     if (progress?.parentToolCallId) this.setToolParent(tool, progress.parentToolCallId);
@@ -1628,17 +1658,33 @@ class ZCodeTui {
       if (child) this.setToolParent(child, tool.id);
       else this.pendingToolParents.set(progress.childToolCallId, tool.id);
     }
-    tool.view.update({
+    const terminal = isTerminalToolState(state);
+    const visibleResult = tool.outputText ?? tool.result;
+    const succeeded = toolSucceeded(visibleResult);
+    const retained = compactTerminalToolOptions({
       name: tool.name,
       state,
       input: tool.input,
       inputText: tool.inputText,
-      result: tool.result,
+      result: visibleResult,
       error: tool.error,
-      progress: tool.progress
+      progress: tool.progress,
+      diffs: tool.diffs,
+      retainedPayloadTruncated: tool.retainedPayloadTruncated
     });
-    if (["complete", "completed", "success"].includes(state.toLowerCase()) && toolSucceeded(tool.result)) {
-      this.turnDiffs.upsertTool(tool.id, fileDiffsForTool(tool.name, tool.input, tool.result, state));
+    if (terminal) {
+      tool.input = retained.input;
+      tool.inputText.replace(toolTextValue(retained.inputText) ?? "");
+      tool.result = retained.result;
+      tool.outputText = undefined;
+      tool.error = retained.error;
+      tool.progress = retained.progress;
+      tool.diffs = retained.diffs;
+      tool.retainedPayloadTruncated = retained.retainedPayloadTruncated;
+    }
+    tool.view.update(retained);
+    if (["complete", "completed", "success"].includes(state.toLowerCase()) && succeeded) {
+      this.turnDiffs.upsertTool(tool.id, retained.diffs ?? []);
     }
   }
 
@@ -3167,18 +3213,7 @@ class ZCodeTui {
   }
 
   private requestStreamRender(): void {
-    if (this.stopped || this.streamRenderTimer) return;
-    this.streamRenderTimer = setTimeout(() => {
-      this.streamRenderTimer = undefined;
-      if (!this.stopped) this.ui.requestRender();
-    }, streamRenderIntervalMs);
-    this.streamRenderTimer.unref?.();
-  }
-
-  private cancelStreamRender(): void {
-    if (!this.streamRenderTimer) return;
-    clearTimeout(this.streamRenderTimer);
-    this.streamRenderTimer = undefined;
+    if (!this.stopped) this.ui.requestRender();
   }
 
   private scheduleRuntimeRefresh(delay = 80): void {
@@ -3189,6 +3224,24 @@ class ZCodeTui {
       void this.refreshRuntimeState();
     }, delay);
     this.runtimeRefreshTimer.unref?.();
+  }
+
+  private scheduleRuntimePoll(delay = runtimePollInterval(this.turnStartedAt !== undefined)): void {
+    if (this.stopped || (!this.options.readRuntimeProjection && !this.options.readTodos)) return;
+    if (this.runtimePollTimer) return;
+    this.runtimePollTimer = setTimeout(() => {
+      this.runtimePollTimer = undefined;
+      void this.refreshRuntimeState().finally(() => this.scheduleRuntimePoll());
+    }, delay);
+    this.runtimePollTimer.unref?.();
+  }
+
+  private rescheduleRuntimePoll(): void {
+    if (this.runtimePollTimer) {
+      clearTimeout(this.runtimePollTimer);
+      this.runtimePollTimer = undefined;
+    }
+    this.scheduleRuntimePoll();
   }
 
   private applyRuntimeProjection(projection: RuntimeProjectionSnapshot | undefined): void {
@@ -3227,17 +3280,32 @@ class ZCodeTui {
           this.options.readRuntimeProjection?.(),
           this.options.readTodos?.()
         ]);
+        const next: RuntimePollState = {
+          projection: this.runtimeProjection,
+          todos: this.todos,
+          todoGroups: this.todoGroups
+        };
         if (projectionResult.status === "fulfilled" && projectionResult.value !== undefined) {
-          this.applyRuntimeProjection(normalizeRuntimeProjection(projectionResult.value));
+          next.projection = normalizeRuntimeProjection(projectionResult.value) ?? next.projection;
           if (isRecord(projectionResult.value) && Array.isArray(projectionResult.value.todoGroups)) {
-            this.todoGroups = normalizeTodoGroups(projectionResult.value);
+            next.todoGroups = normalizeTodoGroups(projectionResult.value);
           }
         }
         if (todosResult.status === "fulfilled" && todosResult.value !== undefined) {
-          this.todos = normalizeTodos(todosResult.value);
+          next.todos = normalizeTodos(todosResult.value);
         }
-        this.updateRuntimeActivity(false);
-        this.updateMetadata();
+        const current: RuntimePollState = {
+          projection: this.runtimeProjection,
+          todos: this.todos,
+          todoGroups: this.todoGroups
+        };
+        if (runtimePollStateChanged(current, next)) {
+          this.todos = next.todos;
+          this.todoGroups = next.todoGroups;
+          if (next.projection) this.applyRuntimeProjection(next.projection);
+          else this.updateRuntimeActivity(false);
+          this.updateMetadata();
+        }
       } while (this.runtimeRefreshPending);
     } finally {
       this.runtimeRefreshInFlight = false;
@@ -3310,7 +3378,6 @@ class ZCodeTui {
   }
 
   private finishTurn(unfinishedToolState = "interrupted"): void {
-    this.cancelStreamRender();
     const notification = this.pendingTurnNotification;
     const notificationDetail = notification === "completed"
       ? this.turnAssistantText
@@ -3320,6 +3387,7 @@ class ZCodeTui {
     this.completeThinking();
     this.assistantStream.breakSegment();
     this.finalizeUnresolvedTools(unfinishedToolState);
+    this.turnDiffs.finishTurn();
     this.currentToolGroup = undefined;
     if (this.turnStartedAt !== undefined) {
       this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
@@ -3332,6 +3400,7 @@ class ZCodeTui {
     this.activity = undefined;
     this.updateTurnStatus();
     this.scheduleRuntimeRefresh(0);
+    this.rescheduleRuntimePoll();
     if (notification) void this.notifications.notify(notification, notificationDetail);
   }
 
@@ -3351,10 +3420,9 @@ class ZCodeTui {
     this.turnAbortController?.abort();
     this.updateCheckAbortController?.abort();
     if (this.turnTimer) clearInterval(this.turnTimer);
-    this.cancelStreamRender();
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
-    if (this.runtimePollTimer) clearInterval(this.runtimePollTimer);
+    if (this.runtimePollTimer) clearTimeout(this.runtimePollTimer);
     this.unsubscribeWorkflow?.();
     const elapsedMilliseconds = this.turnStartedAt === undefined
       ? this.turnElapsedMilliseconds

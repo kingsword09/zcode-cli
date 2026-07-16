@@ -315,9 +315,7 @@ for (const [label, pattern] of [
   ["OAuth HTTP diagnostic", /Login failed: OAuth HTTP error 404 \(empty or non-JSON response\)/i],
   ["resume picker", /Resume Session/i],
   ["long help output", /Use \/help <command> for details/i],
-  ["quarter-turn clock frame", /🕒 0s/i],
-  ["half-turn clock frame", /🕕 0s/i],
-  ["turn timer tick", /🕗 1s/i],
+  ["one-hertz turn timer tick", /🕐 1s/i],
   ["context remaining", /ctx 75% left/i],
   ["session tokens", /18\.5K tokens/i],
   ["active goal footer", /Goal: Active \(40K \/ 50K\)/i],
@@ -368,6 +366,10 @@ for (const [label, pattern] of [
   ["complete activity view", /Current activity[\s\S]*Verify the TUI/i]
 ] as const) {
   if (!pattern.test(plain)) throw new Error(`Missing ${label} in feature TUI smoke.\n${plain.slice(-6_000)}`);
+}
+
+if (/[🕐-🕚] 0s/u.test(plain)) {
+  throw new Error(`Turn timer animated more than once during its first second.\n${plain.slice(-6_000)}`);
 }
 
 if (!/Token usage: total=9,500 input=5,000 \(\+ 9,000 cached\) output=4,000 \(reasoning 500\)/i.test(plain)) {

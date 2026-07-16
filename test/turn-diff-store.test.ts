@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
-import { TurnDiffStore } from "../packages/zcode-tui/src/turn-diff-store.ts";
+import {
+  MAX_RETAINED_TURN_DIFFS,
+  TurnDiffStore
+} from "../packages/zcode-tui/src/turn-diff-store.ts";
+import {
+  fileDiffRetentionSize,
+  MAX_RETAINED_DIFF_CHARACTERS,
+  MAX_RETAINED_DIFF_FILES,
+  MAX_RETAINED_DIFF_LINES
+} from "../packages/zcode-tui/src/file-diff-budget.ts";
 
 const diff = (filePath: string, additions: number) => ({
   filePath,
@@ -30,5 +39,73 @@ describe("turn diff store", () => {
     const store = new TurnDiffStore();
     store.beginTurn("Read only");
     expect(store.snapshots()).toEqual([]);
+  });
+
+  test("releases completed empty turns while preserving chronological indexes", () => {
+    const store = new TurnDiffStore();
+    const internal = store as unknown as {
+      current?: unknown;
+      turns: unknown[];
+    };
+
+    for (let turn = 0; turn < 1_000; turn += 1) {
+      store.beginTurn(`Read only ${turn}`);
+      store.finishTurn();
+    }
+    expect(internal.turns).toHaveLength(0);
+    expect(internal.current).toBeUndefined();
+
+    store.beginTurn("Mutation after read-only turns");
+    store.upsertTool("call_mutation", [diff("changed.ts", 2)]);
+    store.finishTurn();
+    expect(store.snapshots()[0]).toMatchObject({
+      index: 1_001,
+      prompt: "Mutation after read-only turns"
+    });
+
+    store.clear();
+    store.beginTurn("First after clear");
+    store.upsertTool("call_after_clear", [diff("reset.ts", 1)]);
+    expect(store.snapshots()[0]?.index).toBe(1);
+  });
+
+  test("retains only the newest completed mutation turns", () => {
+    const store = new TurnDiffStore();
+    for (let turn = 1; turn <= 100; turn += 1) {
+      store.beginTurn(`Mutation ${turn}`);
+      store.upsertTool(`call_${turn}`, [diff(`file_${turn}.ts`, turn)]);
+      store.finishTurn();
+    }
+
+    const snapshots = store.snapshots();
+    expect(snapshots).toHaveLength(MAX_RETAINED_TURN_DIFFS);
+    expect(snapshots.map((snapshot) => snapshot.index)).toEqual(
+      Array.from({ length: MAX_RETAINED_TURN_DIFFS }, (_, index) => 81 + index)
+    );
+    expect(snapshots[0]?.prompt).toBe("Mutation 81");
+    expect(snapshots.at(-1)?.prompt).toBe("Mutation 100");
+  });
+
+  test("shares one retained budget across every tool in the active turn", () => {
+    const store = new TurnDiffStore();
+    store.beginTurn("Many large mutations");
+    for (let tool = 0; tool < 5; tool += 1) {
+      store.upsertTool(`call_${tool}`, [{
+        filePath: `file_${tool}.ts`,
+        additions: 1_000,
+        deletions: 0,
+        structuredPatch: [{
+          lines: Array.from({ length: 1_000 }, (_, line) => `+${tool}:${line}:${"x".repeat(180)}`)
+        }]
+      }]);
+    }
+
+    const snapshot = store.snapshots()[0]!;
+    const size = fileDiffRetentionSize(snapshot.files);
+    expect(size.files).toBeLessThanOrEqual(MAX_RETAINED_DIFF_FILES);
+    expect(size.lines).toBeLessThanOrEqual(MAX_RETAINED_DIFF_LINES);
+    expect(size.characters).toBeLessThanOrEqual(MAX_RETAINED_DIFF_CHARACTERS);
+    expect(snapshot.files.some((file) => file.filePath === "file_4.ts")).toBeTrue();
+    expect(snapshot.files.some((file) => file.truncated)).toBeTrue();
   });
 });

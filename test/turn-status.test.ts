@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import {
+  TURN_TIMER_FRAME_DURATION_MS,
   formatElapsed,
   turnStatusText,
   turnTimerAnimationEnabled,
@@ -25,12 +26,13 @@ describe("TUI turn status", () => {
   test("animates the active timer with complete stable-width clock frames", () => {
     const frames = Array.from(
       { length: 12 },
-      (_, index) => turnTimerFrame(index * 125, true)
+      (_, index) => turnTimerFrame(index * TURN_TIMER_FRAME_DURATION_MS, true)
     );
+    expect(TURN_TIMER_FRAME_DURATION_MS).toBe(1_000);
     expect(frames).toEqual(["🕛", "🕐", "🕑", "🕒", "🕓", "🕔", "🕕", "🕖", "🕗", "🕘", "🕙", "🕚"]);
     expect(frames.map(visibleWidth)).toEqual(Array(12).fill(2));
-    expect(turnTimerFrame(1_500, true)).toBe("🕛");
-    expect(turnStatusText("thinking…", 500, true, true)).toBe("thinking… ── [ 🕓 0s ]");
+    expect(turnTimerFrame(12_000, true)).toBe("🕛");
+    expect(turnStatusText("thinking…", 4_000, true, true)).toBe("thinking… ── [ 🕓 4s ]");
   });
 
   test("provides an explicit reduced-motion and basic-terminal fallback", () => {

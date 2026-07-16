@@ -10,7 +10,11 @@ import {
 } from "./renderable.ts";
 import { truncateGraphemes } from "./terminal-text.ts";
 
-const renderWindowSize = 240;
+export const TRANSCRIPT_RENDER_WINDOW_BLOCKS = 240;
+export const MAX_RETAINED_TRANSCRIPT_BLOCKS = TRANSCRIPT_RENDER_WINDOW_BLOCKS * 2;
+export const MAX_RETAINED_TRANSCRIPT_HISTORY_CHARACTERS = 2_000_000;
+
+const renderWindowSize = TRANSCRIPT_RENDER_WINDOW_BLOCKS;
 const renderWindowStep = 60;
 
 export interface TranscriptBlockOptions {
@@ -26,6 +30,13 @@ interface TranscriptBlock {
   messageId?: string;
   component: Component;
   searchText?: string | (() => string);
+  renderCache?: TranscriptBlockRenderCache;
+}
+
+interface TranscriptBlockRenderCache {
+  width: number;
+  sourceLines: string[];
+  lines: string[];
 }
 
 export interface TranscriptSearchStatus {
@@ -54,6 +65,7 @@ export class Transcript implements Component {
   private cursor?: number;
   private page = 0;
   private navigationViewportRows = 20;
+  private discardedBlocks = 0;
 
   constructor(private readonly highlightMatch: (text: string) => string = (text) => text) {}
 
@@ -62,6 +74,7 @@ export class Transcript implements Component {
     if (isExpandableComponent(component)) component.setExpanded(this.expanded);
     const existing = this.blocks.find((block) => block.id === id);
     if (existing) {
+      this.releaseBlockCache(existing);
       existing.component = component;
       existing.kind = options.kind ?? existing.kind;
       existing.messageId = options.messageId ?? existing.messageId;
@@ -84,6 +97,7 @@ export class Transcript implements Component {
   removeBlock(id: string): boolean {
     const index = this.blocks.findIndex((block) => block.id === id);
     if (index < 0) return false;
+    this.releaseBlockCache(this.blocks[index]!);
     this.blocks.splice(index, 1);
     if (this.cursor !== undefined) {
       if (this.blocks.length === 0) this.cursor = undefined;
@@ -100,6 +114,7 @@ export class Transcript implements Component {
     let removed = 0;
     for (let index = this.blocks.length - 1; index >= 0; index -= 1) {
       if (this.blocks[index]?.messageId !== messageId) continue;
+      this.releaseBlockCache(this.blocks[index]!);
       this.blocks.splice(index, 1);
       removed += 1;
       if (index < this.windowStart) this.windowStart = Math.max(0, this.windowStart - 1);
@@ -117,20 +132,23 @@ export class Transcript implements Component {
   }
 
   clear(): void {
+    for (const block of this.blocks) this.releaseBlockCache(block);
     this.blocks.length = 0;
     this.windowStart = 0;
     this.search = undefined;
     this.cursor = undefined;
+    this.discardedBlocks = 0;
   }
 
   invalidate(): void {
-    for (const block of this.blocks) block.component.invalidate();
+    for (const block of this.blocks) this.releaseBlockCache(block);
   }
 
   setExpanded(expanded: boolean): void {
     if (this.expanded === expanded) return;
     this.expanded = expanded;
     for (const block of this.blocks) {
+      block.renderCache = undefined;
       if (isExpandableComponent(block.component)) block.component.setExpanded(expanded);
     }
   }
@@ -145,6 +163,7 @@ export class Transcript implements Component {
     if (index === undefined) return undefined;
     const component = this.blocks[index]?.component;
     if (!component || !isExpandableComponent(component)) return false;
+    this.blocks[index]!.renderCache = undefined;
     component.setExpanded(!component.isExpanded());
     this.page = 0;
     return component.isExpanded();
@@ -246,6 +265,19 @@ export class Transcript implements Component {
     return this.blocks.length;
   }
 
+  get discardedBlockCount(): number {
+    return this.discardedBlocks;
+  }
+
+  get retainedHistoryCharacters(): number {
+    let characters = 0;
+    for (let index = 0; index < this.windowStart; index += 1) {
+      const block = this.blocks[index];
+      if (block) characters += this.blockSearchText(block).length;
+    }
+    return characters;
+  }
+
   render(width: number): string[] {
     const selection = this.visibleSelection();
     const headers = [selection.sticky, selection.header].filter((line): line is string => Boolean(line));
@@ -295,7 +327,9 @@ export class Transcript implements Component {
       const presented = selection.query
         ? decorated.map((line) => highlightMatches(line, selection.query!, this.highlightMatch))
         : decorated;
-      lines.push(...presented.map((line) => truncateToWidth(line, width)));
+      lines.push(...(!focused && !selection.query
+        ? this.presentStableBlock(block, presented, width)
+        : presented.map((line) => truncateToWidth(line, width))));
     }
     return lines.length > 0 ? [...lines, ""] : lines;
   }
@@ -309,10 +343,10 @@ export class Transcript implements Component {
   } {
     if (this.search) {
       if (this.search.matches.length === 0) {
-        return {
-          blocks: [],
-          startIndex: 0,
-          header: `── No transcript matches for ${JSON.stringify(this.search.query)} · /search clear ──`
+      return {
+        blocks: [],
+        startIndex: 0,
+        header: `── No transcript matches for ${JSON.stringify(this.search.query)}${this.discardedHistorySuffix()} · /search clear ──`
         };
       }
       const blockIndex = this.search.matches[this.search.cursor] ?? 0;
@@ -322,7 +356,7 @@ export class Transcript implements Component {
         blocks: this.blocks.slice(start, end),
         startIndex: start,
         query: this.search.query,
-        header: `── Search ${this.search.cursor + 1}/${this.search.matches.length}: ${this.search.query} · n/N next/prev · Esc close ──`
+        header: `── Search ${this.search.cursor + 1}/${this.search.matches.length}: ${this.search.query}${this.discardedHistorySuffix()} · n/N next/prev · Esc close ──`
       };
     }
 
@@ -334,7 +368,7 @@ export class Transcript implements Component {
         blocks: this.blocks.slice(start, end),
         startIndex: start,
         sticky: sticky ? `── Prompt: ${sticky} ──` : undefined,
-        header: `── Transcript ${this.cursor + 1}/${this.blocks.length} · Alt+Up/Down navigate · Ctrl+O expand · Esc close ──`
+        header: `── Transcript ${this.cursor + 1}/${this.blocks.length} retained${this.discardedHistorySuffix()} · Alt+Up/Down navigate · Ctrl+O expand · Esc close ──`
       };
     }
 
@@ -342,10 +376,29 @@ export class Transcript implements Component {
     return {
       blocks: this.blocks.slice(this.windowStart),
       startIndex: this.windowStart,
-      ...(hidden > 0
-        ? { header: `── ${hidden} earlier blocks remain searchable · /search <text> ──` }
+      ...(hidden > 0 || this.discardedBlocks > 0
+        ? { header: this.historyRetentionHeader(hidden) }
         : {})
     };
+  }
+
+  private discardedHistorySuffix(): string {
+    return this.discardedBlocks > 0
+      ? ` · ${this.discardedBlocks} older blocks released`
+      : "";
+  }
+
+  private historyRetentionHeader(searchableBlocks: number): string {
+    const parts = [
+      this.discardedBlocks > 0
+        ? `${this.discardedBlocks} older blocks released from in-app history`
+        : undefined,
+      searchableBlocks > 0
+        ? `${searchableBlocks} earlier blocks remain searchable`
+        : undefined,
+      "/search <text>"
+    ].filter((part): part is string => Boolean(part));
+    return `── ${parts.join(" · ")} ──`;
   }
 
   private focusedBlockIndex(): number | undefined {
@@ -389,9 +442,71 @@ export class Transcript implements Component {
   }
 
   private advanceWindow(): void {
-    if (this.blocks.length - this.windowStart <= renderWindowSize + renderWindowStep) return;
-    this.windowStart = Math.max(0, this.blocks.length - renderWindowSize);
+    const shouldAdvance = this.blocks.length - this.windowStart > renderWindowSize + renderWindowStep;
+    if (shouldAdvance) {
+      const nextWindowStart = Math.max(0, this.blocks.length - renderWindowSize);
+      for (let index = this.windowStart; index < nextWindowStart; index += 1) {
+        const block = this.blocks[index];
+        if (block) this.releaseBlockCache(block);
+      }
+      this.windowStart = nextWindowStart;
+    }
+    if (shouldAdvance || this.blocks.length > MAX_RETAINED_TRANSCRIPT_BLOCKS) {
+      this.enforceRetentionBudget();
+    }
   }
+
+  private enforceRetentionBudget(): void {
+    if (this.windowStart === 0) return;
+    const blockDiscardCount = Math.max(
+      0,
+      this.blocks.length - MAX_RETAINED_TRANSCRIPT_BLOCKS
+    );
+    let retainedCharacters = 0;
+    let characterDiscardCount = this.windowStart;
+    for (let index = this.windowStart - 1; index >= 0; index -= 1) {
+      const block = this.blocks[index]!;
+      const characters = this.blockSearchText(block).length;
+      if (retainedCharacters + characters > MAX_RETAINED_TRANSCRIPT_HISTORY_CHARACTERS) break;
+      retainedCharacters += characters;
+      characterDiscardCount = index;
+    }
+    const discardCount = Math.min(
+      this.windowStart,
+      Math.max(blockDiscardCount, characterDiscardCount)
+    );
+    if (discardCount === 0) return;
+    for (let index = 0; index < discardCount; index += 1) {
+      this.releaseBlockCache(this.blocks[index]!);
+    }
+    this.blocks.splice(0, discardCount);
+    this.windowStart -= discardCount;
+    this.discardedBlocks += discardCount;
+    if (this.cursor !== undefined) {
+      this.cursor = Math.max(0, this.cursor - discardCount);
+    }
+  }
+
+  private presentStableBlock(block: TranscriptBlock, sourceLines: string[], width: number): string[] {
+    const cache = block.renderCache;
+    if (cache?.width === width && sameLines(cache.sourceLines, sourceLines)) return cache.lines;
+    const lines = sourceLines.map((line) => truncateToWidth(line, width));
+    block.renderCache = {
+      width,
+      sourceLines: [...sourceLines],
+      lines
+    };
+    return lines;
+  }
+
+  private releaseBlockCache(block: TranscriptBlock): void {
+    block.renderCache = undefined;
+    block.component.invalidate();
+  }
+}
+
+function sameLines(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((line, index) => line === right[index]);
 }
 
 function highlightMatches(line: string, query: string, style: (text: string) => string): string {
