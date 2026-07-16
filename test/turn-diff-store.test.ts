@@ -4,6 +4,12 @@ import {
   MAX_RETAINED_TURN_DIFFS,
   TurnDiffStore
 } from "../packages/zcode-tui/src/turn-diff-store.ts";
+import {
+  fileDiffRetentionSize,
+  MAX_RETAINED_DIFF_CHARACTERS,
+  MAX_RETAINED_DIFF_FILES,
+  MAX_RETAINED_DIFF_LINES
+} from "../packages/zcode-tui/src/file-diff-budget.ts";
 
 const diff = (filePath: string, additions: number) => ({
   filePath,
@@ -78,5 +84,28 @@ describe("turn diff store", () => {
     );
     expect(snapshots[0]?.prompt).toBe("Mutation 81");
     expect(snapshots.at(-1)?.prompt).toBe("Mutation 100");
+  });
+
+  test("shares one retained budget across every tool in the active turn", () => {
+    const store = new TurnDiffStore();
+    store.beginTurn("Many large mutations");
+    for (let tool = 0; tool < 5; tool += 1) {
+      store.upsertTool(`call_${tool}`, [{
+        filePath: `file_${tool}.ts`,
+        additions: 1_000,
+        deletions: 0,
+        structuredPatch: [{
+          lines: Array.from({ length: 1_000 }, (_, line) => `+${tool}:${line}:${"x".repeat(180)}`)
+        }]
+      }]);
+    }
+
+    const snapshot = store.snapshots()[0]!;
+    const size = fileDiffRetentionSize(snapshot.files);
+    expect(size.files).toBeLessThanOrEqual(MAX_RETAINED_DIFF_FILES);
+    expect(size.lines).toBeLessThanOrEqual(MAX_RETAINED_DIFF_LINES);
+    expect(size.characters).toBeLessThanOrEqual(MAX_RETAINED_DIFF_CHARACTERS);
+    expect(snapshot.files.some((file) => file.filePath === "file_4.ts")).toBeTrue();
+    expect(snapshot.files.some((file) => file.truncated)).toBeTrue();
   });
 });

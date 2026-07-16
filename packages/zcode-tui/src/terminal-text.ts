@@ -17,6 +17,19 @@ function safeSgr(sequence: string): boolean {
   return /^\x1b\[[0-9:;]*m$/u.test(sequence);
 }
 
+function printableRunEnd(value: string, start: number): number {
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index]!;
+    const code = character.charCodeAt(0);
+    if (character === ESC || character === "\r" || code === 0x7f
+      || (code < 0x20 && character !== "\n" && character !== "\t")
+      || (code >= 0x80 && code <= 0x9f)) {
+      return index;
+    }
+  }
+  return value.length;
+}
+
 export interface SanitizeTerminalTextOptions {
   preserveSgr?: boolean;
 }
@@ -39,7 +52,7 @@ export class StreamingTerminalTextSanitizer {
   }
 
   append(value: string): string {
-    let output = "";
+    const output: string[] = [];
 
     for (let index = 0; index < value.length;) {
       const character = value[index]!;
@@ -49,6 +62,15 @@ export class StreamingTerminalTextSanitizer {
         this.skipLeadingLineFeed = false;
         if (character === "\n") {
           index += 1;
+          continue;
+        }
+      }
+
+      if (this.state === "text") {
+        const end = printableRunEnd(value, index);
+        if (end > index) {
+          output.push(value.slice(index, end));
+          index = end;
           continue;
         }
       }
@@ -74,7 +96,7 @@ export class StreamingTerminalTextSanitizer {
         if (this.sgrCandidate !== undefined) {
           if (isFinalByte(character)) {
             const sequence = `${this.sgrCandidate}${character}`;
-            if (safeSgr(sequence)) output += sequence;
+            if (safeSgr(sequence)) output.push(sequence);
           } else if (/^[0-9:;]$/u.test(character)) {
             this.sgrCandidate += character;
           } else {
@@ -120,12 +142,12 @@ export class StreamingTerminalTextSanitizer {
         continue;
       }
       if (character === "\n" || character === "\t") {
-        output += character;
+        output.push(character);
         index += 1;
         continue;
       }
       if (character === "\r") {
-        output += "\n";
+        output.push("\n");
         this.skipLeadingLineFeed = true;
         index += 1;
         continue;
@@ -135,11 +157,11 @@ export class StreamingTerminalTextSanitizer {
         continue;
       }
 
-      output += character;
+      output.push(character);
       index += 1;
     }
 
-    return output;
+    return output.join("");
   }
 
   finish(): string {

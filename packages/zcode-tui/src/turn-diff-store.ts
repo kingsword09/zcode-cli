@@ -1,4 +1,10 @@
 import type { FileDiffData } from "./file-diff-view.ts";
+import {
+  boundedFileDiffs,
+  FILE_DIFF_RETENTION_LIMITS,
+  fileDiffRetentionSize,
+  type FileDiffRetentionLimits
+} from "./file-diff-budget.ts";
 
 export const MAX_RETAINED_TURN_DIFFS = 20;
 
@@ -46,7 +52,9 @@ export class TurnDiffStore {
 
   upsertTool(toolCallId: string, diffs: FileDiffData[]): void {
     if (!this.current || diffs.length === 0) return;
-    this.current.tools.set(toolCallId, diffs);
+    this.current.tools.delete(toolCallId);
+    this.current.tools.set(toolCallId, boundedFileDiffs(diffs));
+    this.enforceCurrentBudget();
   }
 
   snapshots(): TurnDiffSnapshot[] {
@@ -68,5 +76,39 @@ export class TurnDiffStore {
     this.turns.length = 0;
     this.current = undefined;
     this.nextIndex = 1;
+  }
+
+  private enforceCurrentBudget(): void {
+    if (!this.current) return;
+    const retained: Array<[string, FileDiffData[]]> = [];
+    const remaining: FileDiffRetentionLimits = { ...FILE_DIFF_RETENTION_LIMITS };
+    let omitted = false;
+
+    for (const [toolCallId, diffs] of [...this.current.tools.entries()].reverse()) {
+      const bounded = boundedFileDiffs(diffs, remaining);
+      if (bounded.length === 0) {
+        omitted = true;
+        continue;
+      }
+      const before = fileDiffRetentionSize(diffs);
+      const after = fileDiffRetentionSize(bounded);
+      if (after.files < before.files
+        || after.lines < before.lines
+        || after.characters < before.characters) {
+        omitted = true;
+      }
+      remaining.files -= after.files;
+      remaining.lines -= after.lines;
+      remaining.characters -= after.characters;
+      retained.push([toolCallId, bounded]);
+    }
+
+    retained.reverse();
+    if (omitted && retained[0]?.[1][0]) {
+      const [toolCallId, files] = retained[0];
+      retained[0] = [toolCallId, [{ ...files[0]!, truncated: true }, ...files.slice(1)]];
+    }
+    this.current.tools.clear();
+    for (const [toolCallId, diffs] of retained) this.current.tools.set(toolCallId, diffs);
   }
 }

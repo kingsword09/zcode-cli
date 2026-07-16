@@ -9,12 +9,18 @@ import {
 import {
   fileDiffCard,
   fileDiffsForTool,
-  FileDiffView
+  FileDiffView,
+  type FileDiffData
 } from "./file-diff-view.ts";
+import { BoundedToolText, toolTextValue } from "./bounded-tool-text.ts";
 import { isPlanUpdateTool, planCard, planHasHiddenItems, PlanUpdateView } from "./plan-view.ts";
 import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
 import { asString, isRecord } from "./types.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
+import {
+  compactToolPayloads,
+  isOmittedBinaryPayload
+} from "./tool-payload.ts";
 import {
   canonicalToolName,
   isKnownTool,
@@ -33,10 +39,15 @@ export interface ToolViewOptions {
   name: string;
   state: string;
   input?: unknown;
-  inputText?: string;
+  inputText?: string | BoundedToolText;
   result?: unknown;
   error?: unknown;
   progress?: ToolProgressData;
+  diffs?: FileDiffData[];
+  activeInputOmittedCharacters?: number;
+  activeOutputOmittedCharacters?: number;
+  retainedPayloadCompacted?: true;
+  retainedPayloadTruncated?: boolean;
 }
 
 interface ToolImage {
@@ -84,13 +95,79 @@ function stringify(value: unknown): string | undefined {
 
 function parsedInput(options: ToolViewOptions): unknown {
   if (options.input !== undefined) return options.input;
-  const text = options.inputText?.trim();
+  const text = toolTextValue(options.inputText)?.trim();
   if (!text) return undefined;
   try {
     return JSON.parse(text);
   } catch {
     return text;
   }
+}
+
+function materializeToolText(options: ToolViewOptions): ToolViewOptions {
+  const activeInputOmittedCharacters = options.inputText instanceof BoundedToolText
+    && options.inputText.isTruncated()
+    ? options.inputText.omittedCharacters
+    : options.activeInputOmittedCharacters;
+  const activeOutputOmittedCharacters = options.result instanceof BoundedToolText
+    && options.result.isTruncated()
+    ? options.result.omittedCharacters
+    : options.activeOutputOmittedCharacters;
+  const inputText = toolTextValue(options.inputText);
+  const result = options.result instanceof BoundedToolText
+    ? options.result.value()
+    : options.result;
+  if (inputText === options.inputText
+    && result === options.result
+    && activeInputOmittedCharacters === options.activeInputOmittedCharacters
+    && activeOutputOmittedCharacters === options.activeOutputOmittedCharacters) {
+    return options;
+  }
+  return {
+    ...options,
+    inputText,
+    result,
+    activeInputOmittedCharacters,
+    activeOutputOmittedCharacters
+  };
+}
+
+export function isTerminalToolState(state: string): boolean {
+  return ["complete", "completed", "success", "failed", "error", "cancelled", "rejected", "interrupted"]
+    .includes(state.toLowerCase());
+}
+
+export function compactTerminalToolOptions(options: ToolViewOptions): ToolViewOptions {
+  if (options.retainedPayloadCompacted || !isTerminalToolState(options.state)) return options;
+  const activeTextTruncated = (options.inputText instanceof BoundedToolText
+      && options.inputText.isTruncated())
+    || (options.result instanceof BoundedToolText
+      && options.result.isTruncated());
+  const materialized = materializeToolText(options);
+  const input = parsedInput(materialized);
+  const diffs = materialized.diffs
+    ?? fileDiffsForTool(materialized.name, input, materialized.result, materialized.state);
+  const compacted = compactToolPayloads([
+    materialized.input,
+    materialized.inputText,
+    materialized.result,
+    materialized.error,
+    materialized.progress
+  ]);
+  return {
+    ...materialized,
+    input: compacted.values[0],
+    inputText: typeof compacted.values[1] === "string" ? compacted.values[1] : undefined,
+    result: compacted.values[2],
+    error: compacted.values[3],
+    progress: compacted.values[4] as ToolProgressData | undefined,
+    diffs: diffs.length > 0 ? diffs : undefined,
+    retainedPayloadCompacted: true,
+    retainedPayloadTruncated: options.retainedPayloadTruncated
+      || activeTextTruncated
+      || compacted.truncated
+      || undefined
+  };
 }
 
 function mutationInput(name: string, input: unknown): string | undefined {
@@ -113,6 +190,7 @@ function imageValue(value: unknown): ToolImage | undefined {
     ?? asString(value.media_type)
     ?? (source && (asString(source.mediaType) ?? asString(source.media_type)));
   if (!rawData) return undefined;
+  if (isOmittedBinaryPayload(rawData)) return undefined;
   const dataUrl = /^data:([^;]+);base64,(.+)$/su.exec(rawData);
   const data = dataUrl?.[2] ?? rawData;
   const mimeType = rawMime ?? dataUrl?.[1];
@@ -295,6 +373,24 @@ function toolText(
       : `${result.totalImages} images`));
     truncated ||= hiddenImages > 0;
   }
+  if (options.retainedPayloadTruncated) {
+    sections.push(theme.muted("… completed tool payload retained as a bounded preview"));
+    truncated = true;
+  }
+  if (!isTerminalToolState(options.state)) {
+    if (options.activeInputOmittedCharacters) {
+      sections.push(theme.muted(
+        `… ${options.activeInputOmittedCharacters} input characters omitted from active tool stream`
+      ));
+      truncated = true;
+    }
+    if (options.activeOutputOmittedCharacters) {
+      sections.push(theme.muted(
+        `… ${options.activeOutputOmittedCharacters} output characters omitted from active tool stream`
+      ));
+      truncated = true;
+    }
+  }
   const embeddedError = isRecord(options.result) ? options.result.error : undefined;
   const error = errorText(options.error ?? embeddedError);
   if (error) {
@@ -315,13 +411,13 @@ export class ToolExecutionView extends Container {
 
   constructor(private readonly theme: ZCodeTheme, options: ToolViewOptions) {
     super();
-    this.options = options;
+    this.options = compactTerminalToolOptions(options);
     this.addChild(this.card);
     this.addChild(this.imageHost);
   }
 
   update(options: ToolViewOptions): void {
-    this.options = options;
+    this.options = compactTerminalToolOptions(options);
     this.dirty = true;
   }
 
@@ -346,7 +442,14 @@ export class ToolExecutionView extends Container {
   }
 
   getSearchText(): string {
-    return [this.options.name, stringify(parsedInput(this.options)), stringify(this.options.result), errorText(this.options.error)]
+    const options = materializeToolText(this.options);
+    return [
+      options.name,
+      stringify(parsedInput(options)),
+      stringify(options.result),
+      stringify(options.diffs),
+      errorText(options.error)
+    ]
       .filter(Boolean)
       .join("\n");
   }
@@ -360,12 +463,12 @@ export class ToolExecutionView extends Container {
   }
 
   getSummary(): string | undefined {
-    return toolSummary(this.options.name, parsedInput(this.options));
+    const options = materializeToolText(this.options);
+    return toolSummary(options.name, parsedInput(options));
   }
 
   isTerminal(): boolean {
-    return ["complete", "completed", "success", "failed", "error", "cancelled", "rejected", "interrupted"]
-      .includes(this.options.state.toLowerCase());
+    return isTerminalToolState(this.options.state);
   }
 
   private ensureRebuilt(): void {
@@ -375,28 +478,30 @@ export class ToolExecutionView extends Container {
   }
 
   private rebuild(): void {
+    const options = materializeToolText(this.options);
     this.card.clear();
     this.imageHost.clear();
     this.hiddenContent = false;
-    this.card.setBgFn(stateBackground(this.options.state, this.theme));
-    const input = parsedInput(this.options);
-    if (isPlanUpdateTool(this.options.name)) {
+    this.card.setBgFn(stateBackground(options.state, this.theme));
+    const input = parsedInput(options);
+    if (isPlanUpdateTool(options.name)) {
       this.card.addChild(new PlanUpdateView(this.theme, {
-        state: this.options.state,
+        state: options.state,
         input,
-        result: this.options.result,
-        error: this.options.error,
+        result: options.result,
+        error: options.error,
         expanded: this.expanded
       }));
-      this.hiddenContent = !this.expanded && planHasHiddenItems(input, this.options.result);
+      this.hiddenContent = !this.expanded && planHasHiddenItems(input, options.result);
       return;
     }
-    const diffs = fileDiffsForTool(this.options.name, input, this.options.result, this.options.state);
+    const diffs = options.diffs
+      ?? fileDiffsForTool(options.name, input, options.result, options.state);
     if (diffs.length > 0) {
       this.card.setBgFn(undefined);
       this.card.addChild(new FileDiffView(this.theme, {
-        toolName: this.options.name,
-        state: this.options.state,
+        toolName: options.name,
+        state: options.state,
         diffs,
         expanded: this.expanded
       }));
@@ -405,7 +510,7 @@ export class ToolExecutionView extends Container {
         || diff.structuredPatch.reduce((total, hunk) => total + hunk.lines.length, 0) > 160);
       return;
     }
-    const rendered = toolText(this.options, this.theme, input, this.expanded);
+    const rendered = toolText(options, this.theme, input, this.expanded);
     this.hiddenContent = rendered.truncated;
     this.card.addChild(new Text(rendered.header, 0, 0));
     if (rendered.body) this.card.addChild(new Text(rendered.body, 1, 0));
@@ -429,19 +534,21 @@ export function toolSucceeded(value: unknown): boolean {
 
 // Pure text helper retained for focused tests and non-interactive consumers.
 export function toolCard(options: ToolViewOptions): string {
-  if (isPlanUpdateTool(options.name)) {
+  const retained = materializeToolText(compactTerminalToolOptions(options));
+  if (isPlanUpdateTool(retained.name)) {
     return planCard({
-      state: options.state,
-      input: parsedInput(options),
-      result: options.result,
-      error: options.error
+      state: retained.state,
+      input: parsedInput(retained),
+      result: retained.result,
+      error: retained.error
     });
   }
-  const input = parsedInput(options);
-  const diffs = fileDiffsForTool(options.name, input, options.result, options.state);
+  const input = parsedInput(retained);
+  const diffs = retained.diffs
+    ?? fileDiffsForTool(retained.name, input, retained.result, retained.state);
   if (diffs.length > 0) {
-    return fileDiffCard({ toolName: options.name, state: options.state, diffs });
+    return fileDiffCard({ toolName: retained.name, state: retained.state, diffs });
   }
-  const rendered = toolText(options, createTheme(false), input);
+  const rendered = toolText(retained, createTheme(false), input);
   return [rendered.header, rendered.body].filter(Boolean).join("\n");
 }

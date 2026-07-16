@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 
-import { Transcript } from "../packages/zcode-tui/src/transcript.ts";
+import {
+  MAX_RETAINED_TRANSCRIPT_BLOCKS,
+  MAX_RETAINED_TRANSCRIPT_HISTORY_CHARACTERS,
+  Transcript
+} from "../packages/zcode-tui/src/transcript.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
 describe("TUI transcript", () => {
@@ -179,5 +183,42 @@ describe("TUI transcript", () => {
     expect(invalidations[0]).toBe(1);
     expect(invalidations[60]).toBe(1);
     expect(invalidations[61]).toBe(0);
+  });
+
+  test("bounds retained blocks while preserving the current render window", () => {
+    const transcript = new Transcript();
+    for (let index = 0; index < 10_000; index += 1) {
+      const text = index === 0
+        ? "content-oldest-released"
+        : index === 9_999
+          ? "content-latest-retained"
+          : `content-${index}`;
+      transcript.addBlock(new Text(text, 0, 0), { kind: "assistant", searchText: text });
+    }
+
+    expect(transcript.blockCount).toBe(MAX_RETAINED_TRANSCRIPT_BLOCKS);
+    expect(transcript.discardedBlockCount).toBe(10_000 - MAX_RETAINED_TRANSCRIPT_BLOCKS);
+    const rendered = transcript.render(80).join("\n");
+    expect(rendered).toContain("older blocks released from in-app history");
+    expect(rendered).toContain("content-latest-retained");
+    expect(rendered).not.toContain("content-oldest-released");
+    expect(transcript.searchFor("content-oldest-released")).toMatchObject({ current: 0, total: 0 });
+    expect(transcript.searchFor("content-latest-retained")).toMatchObject({ current: 1, total: 1 });
+  });
+
+  test("bounds searchable characters outside the active render window", () => {
+    const transcript = new Transcript();
+    for (let index = 0; index < 1_000; index += 1) {
+      const text = `${index}:${"x".repeat(9_995)}`;
+      transcript.addBlock({ invalidate() {}, render: () => [text] }, {
+        kind: "assistant",
+        searchText: text
+      });
+    }
+
+    expect(transcript.retainedHistoryCharacters)
+      .toBeLessThanOrEqual(MAX_RETAINED_TRANSCRIPT_HISTORY_CHARACTERS);
+    expect(transcript.blockCount).toBeLessThan(MAX_RETAINED_TRANSCRIPT_BLOCKS);
+    expect(transcript.render(80).join("\n")).toContain("999:");
   });
 });

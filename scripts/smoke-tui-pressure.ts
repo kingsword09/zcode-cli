@@ -87,5 +87,13 @@ if (interactionError) throw interactionError;
 if (code !== 0) {
   throw new Error(`Pressure TUI exited with ${code}.\n${plainText(output).slice(-5_000)}`);
 }
+const plain = plainText(output);
+for (const [label, pattern] of [
+  ["bounded active tool input", /input characters omitted from active tool stream/i],
+  ["bounded active tool output", /output characters omitted from active tool stream/i],
+  ["bounded cancelled tool result", /completed tool payload retained as a bounded preview/i]
+] as const) {
+  if (!pattern.test(plain)) throw new Error(`Missing ${label}.\n${plain.slice(-5_000)}`);
+}
 
 console.log("TUI output-pressure input and cancellation smoke test passed.");
