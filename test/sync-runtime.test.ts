@@ -7,7 +7,8 @@ import {
   parseRuntimeLock,
   patchRuntimeOAuthHttpErrors,
   patchRuntimeTuiBridge,
-  patchRuntimeZaiDesktopOAuth
+  patchRuntimeZaiDesktopOAuth,
+  resolveArtifactUrl
 } from "../scripts/sync-runtime.ts";
 import {
   compareReleaseVersions,
@@ -176,6 +177,16 @@ describe("runtime synchronization", () => {
     expect(manifestUrl("linux", "x64")).toMatch(/update\/linux\/x64\/latest-linux\.yml$/);
     expect(manifestUrl("darwin", "arm64")).toMatch(/update\/mac\/arm64\/latest-mac\.yml$/);
     expect(manifestUrl("win32", "x64")).toMatch(/update\/win\/x64\/latest\.yml$/);
+  });
+
+  test("resolves relative and absolute updater artifact URLs", () => {
+    const manifest = manifestUrl("linux", "x64");
+    const absolute = "https://cdn-zcode.z.ai/zcode/electron/releases/3.3.6/linux-x64/ZCode.deb";
+
+    expect(resolveArtifactUrl(manifest, "ZCode.deb")).toBe(
+      "https://cdn-zcode.z.ai/zcode/electron/releases/update/linux/x64/ZCode.deb"
+    );
+    expect(resolveArtifactUrl(manifest, absolute)).toBe(absolute);
   });
 
   test("chooseArtifact selects an extractable installer", () => {

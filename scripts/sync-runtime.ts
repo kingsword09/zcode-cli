@@ -118,6 +118,10 @@ export function manifestUrl(platform: SyncOptions["platform"], arch: string): st
   return `${cdnRoot}/update/win/${arch}/latest.yml`;
 }
 
+export function resolveArtifactUrl(manifestHref: string, artifactHref: string): string {
+  return new URL(artifactHref, manifestHref).href;
+}
+
 export function chooseArtifact(manifest: UpdateManifest, platform: SyncOptions["platform"]): Artifact {
   const files = manifest.files ?? [];
   const extension = platform === "linux" ? ".deb" : platform === "darwin" ? ".zip" : ".exe";
@@ -537,7 +541,7 @@ async function resolveSource(options: SyncOptions, temporaryDirectory: string): 
   const url = manifestUrl(options.platform, options.arch);
   const manifest = parse(await fetchText(url)) as UpdateManifest;
   const artifact = chooseArtifact(manifest, options.platform);
-  const artifactUrl = `${url.slice(0, url.lastIndexOf("/") + 1)}${artifact.url}`;
+  const artifactUrl = resolveArtifactUrl(url, artifact.url);
   if (manifest.version === undefined) throw new Error("The update manifest does not contain a version.");
   const lock = parseRuntimeLock({
     schemaVersion: 1,
