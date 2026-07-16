@@ -43,12 +43,16 @@ function result(files = requiredPaths.map(packFile)): PackResult {
 }
 
 describe("release package", () => {
-  test("parses npm JSON after named tsdown build logs", () => {
+  test("parses npm 11 and npm 12 JSON after named tsdown build logs", () => {
     const expected = result();
     const output = `$ tsdown\nℹ [launcher] Build complete\nℹ [tui] Build complete\n${JSON.stringify([expected])}`;
 
     expect(parsePackResult(output)).toEqual(expected);
+    expect(parsePackResult(`$ tsdown\n${JSON.stringify({ [expected.name]: expected })}`)).toEqual(expected);
     expect(() => parsePackResult("ℹ [launcher] Build complete")).toThrow(/JSON package result/);
+    expect(() => parsePackResult(JSON.stringify({ first: expected, second: expected }))).toThrow(
+      /JSON package result/
+    );
   });
 
   test("defines one locked build, pack, and offline prepack path", async () => {

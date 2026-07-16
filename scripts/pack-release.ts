@@ -55,10 +55,15 @@ const allowedPrefixes = ["vendor/"];
 
 export function parsePackResult(stdout: string): PackResult {
   const trimmed = stdout.trim();
-  const start = trimmed.lastIndexOf("\n[") + 1;
+  const start = Math.max(trimmed.lastIndexOf("\n["), trimmed.lastIndexOf("\n{")) + 1;
   try {
-    const parsed = JSON.parse(trimmed.slice(start)) as PackResult[];
-    if (parsed.length === 1) return parsed[0]!;
+    const parsed: unknown = JSON.parse(trimmed.slice(start));
+    const results = Array.isArray(parsed)
+      ? parsed
+      : parsed !== null && typeof parsed === "object"
+        ? Object.values(parsed)
+        : [];
+    if (results.length === 1) return results[0] as PackResult;
   } catch {}
   throw new Error("npm pack did not return one JSON package result.");
 }
