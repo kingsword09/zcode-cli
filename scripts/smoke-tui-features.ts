@@ -189,6 +189,12 @@ try {
     /Retrying model request\s+·\s+1\/5\s+·\s+in 1s/i,
     featureTurnStart
   );
+  await waitFor(
+    "one-hertz turn timer tick",
+    /🕐 1s/i,
+    featureTurnStart,
+    3_000
+  );
   await sendAndWait(
     "Keep the final response concise.\r",
     "pending active-turn steer",
@@ -315,7 +321,6 @@ for (const [label, pattern] of [
   ["OAuth HTTP diagnostic", /Login failed: OAuth HTTP error 404 \(empty or non-JSON response\)/i],
   ["resume picker", /Resume Session/i],
   ["long help output", /Use \/help <command> for details/i],
-  ["one-hertz turn timer tick", /🕐 1s/i],
   ["context remaining", /ctx 75% left/i],
   ["session tokens", /18\.5K tokens/i],
   ["active goal footer", /Goal: Active \(40K \/ 50K\)/i],
