@@ -139,14 +139,11 @@ gate. Never commit the populated file, and keep its mode at `600`.
 After saving the config, no login command is required. Start the client:
 
 ```bash
-node bin/zcode.js
-```
-
-Or, after `bun link` or an npm installation:
-
-```bash
 zcode
 ```
+
+From a source checkout, use `bun run dev` instead (see
+[Development](./DEVELOPMENT.md)).
 
 Use these commands inside the TUI:
 
@@ -255,5 +252,5 @@ temporary per-shell setting:
 ```bash
 export ZCODE_TUI_NOTIFICATION_METHOD=auto       # auto|osc9|bel|native|off
 export ZCODE_TUI_NOTIFICATION_CONDITION=always  # unfocused|always
-node bin/zcode.js
+zcode
 ```
