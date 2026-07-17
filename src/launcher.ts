@@ -13,9 +13,11 @@ import {
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifestPath = join(packageRoot, "package.json");
+const extractionMetadataPath = join(packageRoot, "vendor", "extraction.json");
 const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
 const launcherPath = join(packageRoot, "bin", "zcode.js");
 const defaultModelRetryMaxRetries = "5";
+const versionArguments = new Set(["version", "--version", "-v"]);
 
 export function resolveModelRetryMaxRetries(env: NodeJS.ProcessEnv): string {
   return env.ZCODE_MODEL_RETRY_MAX_RETRIES?.trim() || defaultModelRetryMaxRetries;
@@ -25,14 +27,37 @@ export function resolveNodeExecutable(): string {
   return process.env.ZCODE_NODE?.trim() || process.execPath;
 }
 
-export function readDistributionVersion(manifestPath = packageManifestPath): string | undefined {
+function safeVersion(value: unknown): string | undefined {
+  const version = typeof value === "string" ? value.trim() : "";
+  return /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/u.test(version) ? version : undefined;
+}
+
+function readJsonVersion(path: string, key: string): string | undefined {
   try {
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { version?: unknown };
-    const version = typeof manifest.version === "string" ? manifest.version.trim() : "";
-    return /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/u.test(version) ? version : undefined;
+    const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    return safeVersion(value[key]);
   } catch {
     return undefined;
   }
+}
+
+export function readDistributionVersion(manifestPath = packageManifestPath): string | undefined {
+  return readJsonVersion(manifestPath, "version");
+}
+
+export function readRuntimeVersion(metadataPath = extractionMetadataPath): string | undefined {
+  return readJsonVersion(metadataPath, "cliVersion");
+}
+
+export function isVersionInvocation(args: string[]): boolean {
+  return args.length === 1 && versionArguments.has(args[0]!);
+}
+
+export function formatVersionOutput(distributionVersion: string, runtimeVersion: string): string {
+  return [
+    `zcode-app-cli ${safeVersion(distributionVersion) ?? "unknown"}`,
+    `zcode-runtime ${safeVersion(runtimeVersion) ?? "unknown"}`
+  ].join("\n");
 }
 
 export function normalizeLoginArgs(args: string[]): { args: string[]; checkConfiguredAccess: boolean } {
@@ -139,6 +164,17 @@ export async function main(args: string[]): Promise<number> {
       "ZCode runtime is missing. Reinstall the package or run `bun run sync:local` in the source checkout."
     );
     return 1;
+  }
+
+  if (isVersionInvocation(args)) {
+    const distributionVersion = readDistributionVersion();
+    const runtimeVersion = readRuntimeVersion();
+    if (!distributionVersion || !runtimeVersion) {
+      console.error("Unable to read npm package or bundled runtime version metadata.");
+      return 1;
+    }
+    console.log(formatVersionOutput(distributionVersion, runtimeVersion));
+    return 0;
   }
 
   try {

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { UpdateAvailableView, releaseNotesUrl, updateCommand } from "../packages/zcode-tui/src/update-available-view.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 import {
+  availableUpdateVersion,
   readStartupUpdate,
   refreshUpdateCache,
   UPDATE_CACHE_TTL_MS,
@@ -28,9 +29,15 @@ async function temporaryCachePath(): Promise<string> {
   return join(directory, ".zcode", "cli", "version.json");
 }
 
-async function writeCache(cachePath: string, latestVersion: string, lastCheckedAt: number): Promise<void> {
+async function writeCache(
+  cachePath: string,
+  latestVersion: string,
+  lastCheckedAt: number,
+  checkedVersion?: string
+): Promise<void> {
   await mkdir(dirname(cachePath), { recursive: true });
   await writeFile(cachePath, `${JSON.stringify({
+    ...(checkedVersion ? { checkedVersion } : {}),
     latestVersion,
     lastCheckedAt: new Date(lastCheckedAt).toISOString()
   })}\n`);
@@ -53,7 +60,7 @@ describe("startup update check", () => {
   test("shows a cached newer build without refreshing a fresh cache", async () => {
     const cachePath = await temporaryCachePath();
     const now = Date.parse("2026-07-14T12:00:00.000Z");
-    await writeCache(cachePath, "3.3.5-2", now - 60_000);
+    await writeCache(cachePath, "3.3.5-2", now - 60_000, "3.3.5-1");
 
     await expect(readStartupUpdate({
       cachePath,
@@ -67,10 +74,44 @@ describe("startup update check", () => {
     });
   });
 
+  test("refreshes a fresh cache when the installed package version changes", async () => {
+    const cachePath = await temporaryCachePath();
+    const now = Date.parse("2026-07-14T12:00:00.000Z");
+    await writeCache(cachePath, "3.3.5-1", now - 60_000, "3.3.5-1");
+
+    await expect(readStartupUpdate({
+      cachePath,
+      currentVersion: "3.3.5-2",
+      env: {},
+      now
+    })).resolves.toEqual({
+      availableVersion: undefined,
+      cachePath,
+      refreshRequired: true
+    });
+
+    expect(availableUpdateVersion("3.3.5-2", "3.3.5-3")).toBe("3.3.5-3");
+    expect(availableUpdateVersion("3.3.5-2", "3.3.5-2")).toBeUndefined();
+    expect(availableUpdateVersion("invalid", "3.3.5-3")).toBeUndefined();
+  });
+
+  test("refreshes a legacy cache without checked package metadata once", async () => {
+    const cachePath = await temporaryCachePath();
+    const now = Date.parse("2026-07-14T12:00:00.000Z");
+    await writeCache(cachePath, "3.3.5-1", now - 60_000);
+
+    await expect(readStartupUpdate({
+      cachePath,
+      currentVersion: "3.3.5-1",
+      env: {},
+      now
+    })).resolves.toMatchObject({ refreshRequired: true });
+  });
+
   test("keeps a stale update visible while scheduling a background refresh", async () => {
     const cachePath = await temporaryCachePath();
     const now = Date.parse("2026-07-14T12:00:00.000Z");
-    await writeCache(cachePath, "3.4.0-1", now - UPDATE_CACHE_TTL_MS - 1);
+    await writeCache(cachePath, "3.4.0-1", now - UPDATE_CACHE_TTL_MS - 1, "3.3.5-99");
 
     await expect(readStartupUpdate({
       cachePath,
@@ -112,6 +153,7 @@ describe("startup update check", () => {
 
     expect(requestedUrl).toBe(UPDATE_CHECK_URL);
     expect(JSON.parse(await readFile(cachePath, "utf8"))).toEqual({
+      checkedVersion: "3.3.5-1",
       latestVersion: "3.3.5-2",
       lastCheckedAt: "2026-07-14T12:00:00.000Z"
     });
@@ -126,7 +168,7 @@ describe("startup update check", () => {
   test("rejects registry errors without replacing the existing cache", async () => {
     const cachePath = await temporaryCachePath();
     const now = Date.parse("2026-07-14T12:00:00.000Z");
-    await writeCache(cachePath, "3.3.5-2", now - UPDATE_CACHE_TTL_MS - 1);
+    await writeCache(cachePath, "3.3.5-2", now - UPDATE_CACHE_TTL_MS - 1, "3.3.5-1");
     const before = await readFile(cachePath, "utf8");
 
     await expect(refreshUpdateCache({

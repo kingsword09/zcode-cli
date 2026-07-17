@@ -3,6 +3,7 @@ import { appendFileSync } from "node:fs";
 
 import { readConfiguredModelAccess } from "../../../src/model-access.ts";
 import {
+  availableUpdateVersion,
   readStartupUpdate,
   refreshUpdateCache,
   type StartupUpdateCheck
@@ -225,6 +226,7 @@ const toolLifecycleEventKinds = new Set([
 
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
+const updateAvailableBlockId = "update_available";
 
 function modelRetryProgress(event: StreamEvent, phase: "scheduled" | "started"): string {
   const retryNumber = phase === "started"
@@ -1520,8 +1522,8 @@ class ZCodeTui {
   }
 
   private addUpdateAvailable(currentVersion: string, latestVersion: string): void {
-    this.currentToolGroup = undefined;
     this.transcript.addBlock(new UpdateAvailableView(this.theme, currentVersion, latestVersion), {
+      id: updateAvailableBlockId,
       kind: "update",
       searchText: `Update available: ${currentVersion} -> ${latestVersion}\n${updateCommand}`
     });
@@ -1530,12 +1532,20 @@ class ZCodeTui {
 
   private startUpdateRefresh(updateCheck: StartupUpdateCheck | undefined): void {
     if (!updateCheck?.refreshRequired || !this.distributionVersion) return;
+    const currentVersion = this.distributionVersion;
     const controller = new AbortController();
     this.updateCheckAbortController = controller;
     void refreshUpdateCache({
       cachePath: updateCheck.cachePath,
-      currentVersion: this.distributionVersion,
+      currentVersion,
       signal: controller.signal
+    }).then((latestVersion) => {
+      const availableVersion = availableUpdateVersion(currentVersion, latestVersion);
+      if (availableVersion) {
+        this.addUpdateAvailable(currentVersion, availableVersion);
+      } else if (updateCheck.availableVersion && this.transcript.removeBlock(updateAvailableBlockId)) {
+        this.ui.requestRender();
+      }
     }).catch(() => {
       // Update discovery is optional and must never interrupt the TUI.
     }).finally(() => {
