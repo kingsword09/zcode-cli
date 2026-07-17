@@ -8,14 +8,20 @@ For installation as an end user, see the [main README](../README.md).
 Developing or publishing from source requires Bun 1.3 or newer. `7z` is needed
 only when downloading and extracting a remote installer.
 
-## Initial setup
+## Quick start
 
-Install dependencies and extract the already installed macOS application:
+Install dependencies, then run the client with live TypeScript and auto-sync
+from the local ZCode Desktop installation:
 
 ```bash
 bun install
-bun run sync:local
+bun run dev
 ```
+
+`bun run dev` runs `sync:local` (rebuild + extract `resources/glm` from
+`/Applications/ZCode.app`) and then starts the client through `bun bin/zcode.ts`
+with `ZCODE_NODE=node`, so source changes take effect on the next launch
+without a manual build step.
 
 ## Validation
 
@@ -40,25 +46,19 @@ Ctrl+C cancellation remain responsive during rapid Bash progress output. The
 scenarios advance from observed terminal output instead of fixed timers and do
 not make model API calls.
 
-## Running the client
+## OAuth login
 
-Start the client directly:
-
-```bash
-node bin/zcode.js
-```
-
-For the OAuth path:
+For the OAuth path, run the launcher directly with the login subcommand:
 
 ```bash
-node bin/zcode.js login --oauth
-node bin/zcode.js
+bun bin/zcode.ts login --oauth
+bun run dev
 ```
 
 To print the authorization URL without launching the browser:
 
 ```bash
-node bin/zcode.js login --oauth --no-browser
+bun bin/zcode.ts login --oauth --no-browser
 ```
 
 The URL must still be opened on the same Mac so its `zcode://` callback reaches

@@ -247,11 +247,12 @@ setup steps, retries/timeouts, theme, and turn-completion notifications, see
 
 ## Local development
 
-Install dependencies and extract the already installed macOS application:
+Install dependencies and start the client with live TypeScript and auto-sync
+from the local ZCode Desktop installation:
 
 ```bash
 bun install
-bun run sync:local
+bun run dev
 ```
 
 Run all validation layers:
@@ -261,12 +262,6 @@ bun run typecheck
 bun test
 bun run check
 bun run check:tui
-```
-
-Start the client directly:
-
-```bash
-node bin/zcode.js
 ```
 
 For the OAuth path, release workflow details, CI, and the full development
