@@ -15,7 +15,7 @@ This project is not affiliated with or endorsed by Z.ai. ZCode and its bundled
 runtime remain subject to their upstream terms. Confirm that you are allowed to
 redistribute the extracted runtime before publishing the npm package.
 
-<!-- TODO: add a screenshot or demo GIF here, e.g. ./docs/assets/screenshot.png -->
+![zcode-app-cli TUI demo](./docs/assets/demo.svg)
 
 ## Quick start
 
