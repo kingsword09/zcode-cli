@@ -25,6 +25,29 @@ export interface ChoiceItem extends SelectItem {
   preview?: Component;
 }
 
+class ChoiceItemDetails implements Component {
+  constructor(
+    private readonly item: ChoiceItem,
+    private readonly theme: ZCodeTheme
+  ) {}
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    const preview = this.item.preview?.render(safeWidth) ?? [];
+    return [
+      ...wrapTerminalText(this.theme.bold(this.item.label), safeWidth),
+      ...(this.item.description
+        ? wrapTerminalText(this.theme.muted(this.item.description), safeWidth)
+        : []),
+      ...(preview.length > 0 ? ["", ...preview] : [])
+    ];
+  }
+
+  invalidate(): void {
+    this.item.preview?.invalidate?.();
+  }
+}
+
 class ChoiceDialog implements Component {
   private filter = "";
   private selectionPreview?: Component;
@@ -240,12 +263,14 @@ export function choose(
     contentLabel?: string;
     selectedIndex?: number;
     signal?: AbortSignal;
+    showSelectedItemDetails?: boolean;
   }
 ): Promise<ChoiceItem | null> {
   if (options.items.length === 0) return Promise.resolve(null);
 
   return new Promise((resolve) => {
     const choicesByValue = new Map<string, ChoiceItem>();
+    const detailsByValue = new Map<string, Component>();
     const searchableItems = options.items.map((item, index): SelectItem => {
       const safeItem: ChoiceItem = {
         ...item,
@@ -256,18 +281,25 @@ export function choose(
       };
       const value = `${safeItem.label}\u0000${index}`;
       choicesByValue.set(value, safeItem);
+      if (options.showSelectedItemDetails) {
+        detailsByValue.set(value, new ChoiceItemDetails(safeItem, theme));
+      }
       return { value, label: safeItem.label, description: safeItem.description };
     });
+    const hasDetails = Boolean(
+      options.content
+      || options.showSelectedItemDetails
+      || options.items.some((item) => item.preview)
+    );
     const maxVisible = Math.max(1, Math.min(
       8,
       searchableItems.length,
-      Math.floor(Math.max(2, ui.terminal.rows - 8) / (options.content || options.items.some((item) => item.preview) ? 2 : 1))
+      Math.floor(Math.max(2, ui.terminal.rows - 8) / (hasDetails ? 2 : 1))
     ));
     const list = new SelectList(searchableItems, maxVisible, theme.select);
     list.setSelectedIndex(options.selectedIndex ?? 0);
     const maxContentLines = Math.max(0, ui.terminal.rows - maxVisible - 9);
     const maxExpandedContentLines = Math.max(2, maxContentLines, ui.terminal.rows - 8);
-    const hasDetails = Boolean(options.content || options.items.some((item) => item.preview));
     const dialog = new ChoiceDialog(
       sanitizeTerminalText(options.title, { preserveSgr: false }),
       sanitizeTerminalText(options.prompt, { preserveSgr: false }),
@@ -285,7 +317,10 @@ export function choose(
       maxExpandedContentLines
     );
     const previewFor = (item: SelectItem | null): Component | undefined => {
-      return item ? choicesByValue.get(item.value)?.preview : undefined;
+      if (!item) return undefined;
+      return options.showSelectedItemDetails
+        ? detailsByValue.get(item.value)
+        : choicesByValue.get(item.value)?.preview;
     };
     dialog.setSelectionPreview(previewFor(list.getSelectedItem()));
     let settled = false;

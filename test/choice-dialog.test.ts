@@ -224,6 +224,49 @@ describe("TUI choice dialog", () => {
     expect(await pending).toMatchObject({ value: "second" });
   });
 
+  test("wraps the selected item's complete label and description in a details viewport", async () => {
+    const root = new Container();
+    const host = new Container();
+    const focusState: { current: Component | null } = { current: null };
+    const ui = {
+      terminal: { rows: 24, columns: 52 },
+      requestRender() {},
+      setFocus(component: Component | null) {
+        focusState.current = component;
+      }
+    } as unknown as TUI;
+    root.addChild(host);
+
+    const firstDescription = "Reuse the deterministic offline fixture so the recording remains reproducible without provider credentials.";
+    const secondDescription = "Record a live provider session whose unique ending remains visible after moving the selection.";
+    const pending = choose(ui, host, createTheme(false), {
+      title: "Demo driver · 1/4",
+      prompt: "How should the recording be produced?",
+      contentLabel: "Option details",
+      showSelectedItemDetails: true,
+      items: [
+        {
+          value: "fixture",
+          label: "Fixture-based recording with a deliberately long recommended label",
+          description: firstDescription
+        },
+        { value: "live", label: "Live headless prompt", description: secondDescription }
+      ]
+    });
+
+    const normalized = () => root.render(52).join("\n").replace(/\s+/gu, " ");
+    expect(normalized()).toContain("Fixture-based recording with a deliberately long recommended label");
+    expect(normalized()).toContain(firstDescription);
+    expect(normalized()).not.toContain("unique ending remains visible");
+    expect(root.render(52).every((line) => visibleWidth(line) <= 52)).toBe(true);
+
+    focusState.current?.handleInput?.("\x1b[B");
+    expect(normalized()).toContain(secondDescription);
+    expect(normalized()).not.toContain("remains reproducible without provider credentials");
+    focusState.current?.handleInput?.("\r");
+    expect(await pending).toMatchObject({ value: "live" });
+  });
+
   test("keeps choice and text prompt chrome within narrow terminal widths", async () => {
     for (const width of [8, 20, 40, 60, 80, 100, 120]) {
       const choiceRoot = new Container();

@@ -2101,6 +2101,8 @@ class ZCodeTui {
         })),
         { value: "__other__", label: "Other…", description: "Enter a different answer" }
       ],
+      contentLabel: "Option details",
+      showSelectedItemDetails: true,
       signal
     });
     if (!selected) return null;
@@ -2144,6 +2146,8 @@ class ZCodeTui {
             description: `${selected.size + (custom ? 1 : 0)} selected`
           }
         ],
+        contentLabel: "Option details",
+        showSelectedItemDetails: true,
         signal
       });
       if (!choice) return null;
