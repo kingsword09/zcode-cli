@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { formatVersionOutput, readDistributionVersion } from "../src/launcher.ts";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtime = join(root, "vendor", "zcode.cjs");
 const tui = join(root, "vendor", "node_modules", "@zcode", "tui", "dist", "index.js");
@@ -91,10 +93,14 @@ const tuiImport = await execute(node, [
 if (tuiImport.code !== 0) throw new Error(`TUI import failed: ${tuiImport.stderr}`);
 
 const launcher = await execute(node, [join(root, "bin", "zcode.js"), "--version"]);
-if (launcher.code !== 0 || launcher.stdout.trim() !== version.stdout.trim()) {
+const distributionVersion = readDistributionVersion();
+const expectedLauncherVersion = distributionVersion
+  ? formatVersionOutput(distributionVersion, version.stdout.trim())
+  : undefined;
+if (launcher.code !== 0 || !expectedLauncherVersion || launcher.stdout.trim() !== expectedLauncherVersion) {
   throw new Error(`Node.js launcher check failed: ${launcher.stderr || launcher.stdout}`);
 }
 
 console.log(
-  `Runtime checks passed for ZCode CLI ${version.stdout.trim()} with Node ${nodeVersion.stdout.trim()} and pi-tui.`
+  `Runtime checks passed for ${expectedLauncherVersion.replace("\n", " / ")} with Node ${nodeVersion.stdout.trim()} and pi-tui.`
 );

@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { formatVersionOutput } from "../src/launcher.ts";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 async function execute(command: string, args: string[], cwd: string): Promise<{ code: number; stdout: string }> {
@@ -42,6 +44,9 @@ export async function smokePackagedCli(tarball: string): Promise<void> {
     if (install.code !== 0) throw new Error(`npm install smoke test failed with status ${install.code}`);
 
     const packageRoot = join(temporaryDirectory, "node_modules", "zcode-app-cli");
+    const packageManifest = JSON.parse(
+      await readFile(join(packageRoot, "package.json"), "utf8")
+    ) as { version?: string };
     const extraction = JSON.parse(
       await readFile(join(packageRoot, "vendor", "extraction.json"), "utf8")
     ) as { cliVersion?: string };
@@ -53,10 +58,13 @@ export async function smokePackagedCli(tarball: string): Promise<void> {
       ? ["/d", "/s", "/c", `\"${bin}\" --version`]
       : ["--version"];
     const version = await execute(command, commandArgs, temporaryDirectory);
-    if (version.code !== 0 || version.stdout.trim() !== extraction.cliVersion) {
+    const expectedVersion = packageManifest.version && extraction.cliVersion
+      ? formatVersionOutput(packageManifest.version, extraction.cliVersion)
+      : undefined;
+    if (version.code !== 0 || !expectedVersion || version.stdout.trim() !== expectedVersion) {
       throw new Error(`Installed zcode --version failed: ${version.stdout.trim() || `status ${version.code}`}`);
     }
-    console.log(`Installed-package smoke test passed for ZCode CLI ${version.stdout.trim()}.`);
+    console.log(`Installed-package smoke test passed for ${expectedVersion.replace("\n", " / ")}.`);
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }

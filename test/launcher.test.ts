@@ -5,8 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  formatVersionOutput,
+  isVersionInvocation,
   normalizeLoginArgs,
   readDistributionVersion,
+  readRuntimeVersion,
   resolveModelRetryMaxRetries
 } from "../src/launcher.ts";
 import { classifyZaiOAuthInvocation } from "../src/zai-oauth.ts";
@@ -29,6 +32,27 @@ describe("launcher routing", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  test("reads and labels both npm package and bundled runtime versions", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-runtime-version-"));
+    const metadata = join(directory, "extraction.json");
+    try {
+      await writeFile(metadata, JSON.stringify({ cliVersion: "0.15.2" }));
+      expect(readRuntimeVersion(metadata)).toBe("0.15.2");
+      await writeFile(metadata, JSON.stringify({ cliVersion: "bad\u001b[2J" }));
+      expect(readRuntimeVersion(metadata)).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+
+    expect(formatVersionOutput("3.3.6-3", "0.15.2")).toBe(
+      "zcode-app-cli 3.3.6-3\nzcode-runtime 0.15.2"
+    );
+    expect(isVersionInvocation(["version"])).toBe(true);
+    expect(isVersionInvocation(["--version"])).toBe(true);
+    expect(isVersionInvocation(["-v"])).toBe(true);
+    expect(isVersionInvocation(["--json", "version"])).toBe(false);
   });
 
   test("checks configured access by default and keeps an explicit OAuth escape hatch", () => {

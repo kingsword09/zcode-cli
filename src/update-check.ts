@@ -10,6 +10,7 @@ export const UPDATE_CACHE_TTL_MS = 20 * 60 * 60 * 1_000;
 export const UPDATE_CHECK_URL = "https://registry.npmjs.org/zcode-app-cli/latest";
 
 interface UpdateCache {
+  checkedVersion?: string;
   latestVersion: string;
   lastCheckedAt: string;
 }
@@ -63,7 +64,12 @@ function parseUpdateCache(value: unknown): UpdateCache | undefined {
   const cache = value as Record<string, unknown>;
   if (typeof cache.latestVersion !== "string" || !parseReleaseVersion(cache.latestVersion)) return undefined;
   if (typeof cache.lastCheckedAt !== "string" || !Number.isFinite(Date.parse(cache.lastCheckedAt))) return undefined;
+  if (cache.checkedVersion !== undefined
+    && (typeof cache.checkedVersion !== "string" || !parseReleaseVersion(cache.checkedVersion))) {
+    return undefined;
+  }
   return {
+    checkedVersion: cache.checkedVersion as string | undefined,
     latestVersion: cache.latestVersion,
     lastCheckedAt: cache.lastCheckedAt
   };
@@ -87,12 +93,21 @@ export async function readStartupUpdate(
   const cache = await readUpdateCache(cachePath);
   const now = options.now ?? Date.now();
   const checkedAt = cache ? Date.parse(cache.lastCheckedAt) : Number.NaN;
-  const refreshRequired = !cache || checkedAt < now - UPDATE_CACHE_TTL_MS;
+  const refreshRequired = !cache
+    || cache.checkedVersion !== options.currentVersion
+    || checkedAt < now - UPDATE_CACHE_TTL_MS;
   const availableVersion = cache
-    && compareReleaseVersions(cache.latestVersion, options.currentVersion) > 0
-    ? cache.latestVersion
+    ? availableUpdateVersion(options.currentVersion, cache.latestVersion)
     : undefined;
   return { availableVersion, cachePath, refreshRequired };
+}
+
+export function availableUpdateVersion(
+  currentVersion: string,
+  latestVersion: string
+): string | undefined {
+  if (!parseReleaseVersion(currentVersion) || !parseReleaseVersion(latestVersion)) return undefined;
+  return compareReleaseVersions(latestVersion, currentVersion) > 0 ? latestVersion : undefined;
 }
 
 async function writeUpdateCache(cachePath: string, cache: UpdateCache): Promise<void> {
@@ -144,6 +159,7 @@ export async function refreshUpdateCache(options: RefreshUpdateCacheOptions): Pr
       throw new Error("npm registry returned an invalid release version.");
     }
     await writeUpdateCache(options.cachePath, {
+      checkedVersion: options.currentVersion,
       latestVersion,
       lastCheckedAt: new Date(options.now ?? Date.now()).toISOString()
     });

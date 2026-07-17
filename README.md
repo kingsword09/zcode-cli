@@ -26,11 +26,14 @@ Using `@latest` is intentional because the App-aligned release format uses a
 SemVer prerelease segment such as `3.3.5-2`. The tag always points to the
 newest validated App-plus-build release.
 
-Interactive startup checks the npm `latest` tag at most once every 20 hours.
+Interactive startup checks the npm `latest` tag at most once every 20 hours for
+each installed package version. Installing a different package build triggers
+one fresh check even when an older cache entry is still within that window.
 A cached newer version is shown as a non-blocking update card with the exact
 install command and release-notes link. Missing or stale cache data is refreshed
-in the background for the next launch, so registry latency or failure never
-delays the editor. Set `ZCODE_DISABLE_UPDATE_CHECK=1` or
+in the background, and a newly discovered update is shown in the current
+session, so registry latency or failure never delays the editor. Set
+`ZCODE_DISABLE_UPDATE_CHECK=1` or
 `NO_UPDATE_NOTIFIER=1` to disable the check; CI environments skip it
 automatically.
 
@@ -547,6 +550,14 @@ zcode --version
 zcode doctor --json
 zcode --prompt "Explain this repository"
 zcode app-server
+```
+
+`zcode version`, `zcode --version` and `zcode -v` identify both packaged
+layers explicitly:
+
+```text
+zcode-app-cli 3.3.6-3
+zcode-runtime 0.15.2
 ```
 
 ## Remote extraction
