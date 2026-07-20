@@ -14,19 +14,21 @@ on:
     types:
       - closed
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: zcode-cli-publish
   cancel-in-progress: false
 
 jobs:
-  publish:
+  validate:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
       (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref_name == github.event.repository.default_branch
+      ) ||
+      (
+        github.event_name == 'pull_request' &&
         github.event.pull_request.merged == true &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         (
@@ -36,26 +38,34 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      package_name: ${{ steps.expected.outputs.package_name }}
+      package_version: ${{ steps.expected.outputs.package_version }}
+      expected_commit: ${{ steps.expected.outputs.commit }}
+      tarball: ${{ steps.package.outputs.tarball }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Prepare npm Trusted Publishing
+      - name: Prepare reproducible npm toolchain
         run: |
-          npm install --global npm@latest
+          npm install --global npm@12.0.1 --ignore-scripts
           node --version
           npm --version
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.12
 
@@ -69,8 +79,8 @@ jobs:
         id: expected
         run: |
           git ls-files --error-unmatch zcode-runtime.lock.json >/dev/null
-          PACKAGE_NAME=$(bun -e "console.log((await Bun.file('package.json').json()).name)")
-          PACKAGE_VERSION=$(bun -e "console.log((await Bun.file('package.json').json()).version)")
+          PACKAGE_NAME=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")
+          PACKAGE_VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
           echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
           echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -82,7 +92,7 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ steps.expected.outputs.package_version }}
         run: |
-          ACTUAL_VERSION=$(bun -e "console.log((await Bun.file('package.json').json()).version)")
+          ACTUAL_VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
           if [[ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]]; then
             echo "The locked release changed while rebuilding: expected ${EXPECTED_VERSION}, resolved ${ACTUAL_VERSION}." >&2
             exit 1
@@ -91,18 +101,129 @@ jobs:
 
       - name: Pack and install-test release
         id: package
-        run: bun run release:pack
+        env:
+          ARTIFACT_NAME: validated-release-${{ github.run_id }}
+        run: |
+          bun run release:pack
+          TARBALL=$(node -p "JSON.parse(require('fs').readFileSync('.release/release.json', 'utf8')).tarball")
+          [[ -f "$TARBALL" ]] || { echo "Validated tarball is missing: $TARBALL" >&2; exit 1; }
+          rm -rf release-artifact
+          mkdir release-artifact
+          cp .release/release.json "$TARBALL" release-artifact/
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload validated release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: validated-release-${{ github.run_id }}
+          path: release-artifact
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Prepare npm Trusted Publishing
+        run: |
+          npm install --global npm@12.0.1 --ignore-scripts
+          node --version
+          npm --version
+
+      - name: Download validated release
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.validate.outputs.artifact_name }}
+          path: .release
+
+      - name: Verify validated tarball
+        env:
+          EXPECTED_NAME: ${{ needs.validate.outputs.package_name }}
+          EXPECTED_VERSION: ${{ needs.validate.outputs.package_version }}
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.expected_commit }}
+          VALIDATED_TARBALL: ${{ needs.validate.outputs.tarball }}
+        run: |
+          PACKAGE_NAME=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")
+          PACKAGE_VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+          COMMIT=$(git rev-parse HEAD)
+          [[ "$PACKAGE_NAME" == "$EXPECTED_NAME" ]] || { echo "Package name changed while transferring the release." >&2; exit 1; }
+          [[ "$PACKAGE_VERSION" == "$EXPECTED_VERSION" ]] || { echo "Package version changed while transferring the release." >&2; exit 1; }
+          [[ "$COMMIT" == "$EXPECTED_COMMIT" ]] || { echo "Release commit changed while transferring the release." >&2; exit 1; }
+          git ls-files --error-unmatch zcode-runtime.lock.json >/dev/null
+          [[ -f "$VALIDATED_TARBALL" ]] || { echo "Validated tarball is missing: $VALIDATED_TARBALL" >&2; exit 1; }
+
+          node - "$VALIDATED_TARBALL" "$EXPECTED_NAME" "$EXPECTED_VERSION" <<'NODE'
+          const [tarball, expectedName, expectedVersion] = process.argv.slice(2);
+          const release = JSON.parse(require("fs").readFileSync(".release/release.json", "utf8"));
+          if (release.name !== expectedName || release.version !== expectedVersion) {
+            throw new Error("Validated release metadata does not match the checked-out package.");
+          }
+          if (release.tarball !== tarball) {
+            throw new Error(`Validated tarball path differs: ${release.tarball} != ${tarball}`);
+          }
+          NODE
+
+      - name: Rebuild tarball without project scripts
+        env:
+          VALIDATED_TARBALL: ${{ needs.validate.outputs.tarball }}
+        run: |
+          rm -rf .release/publish .release/rebuilt
+          mkdir -p .release/publish .release/rebuilt
+          tar -xzf "$VALIDATED_TARBALL" -C .release/publish
+          [[ -f .release/publish/package/package.json ]] || { echo "Validated tarball has no package root." >&2; exit 1; }
+          npm pack ./.release/publish/package \
+            --ignore-scripts \
+            --json \
+            --pack-destination .release/rebuilt > .release/rebuilt.json
+          REBUILT_TARBALL=$(find .release/rebuilt -maxdepth 1 -type f -name '*.tgz' -print -quit)
+          [[ -n "$REBUILT_TARBALL" ]] || { echo "Rebuilding the release tarball produced no archive." >&2; exit 1; }
+          if ! cmp -- "$VALIDATED_TARBALL" "$REBUILT_TARBALL"; then
+            echo "The privileged publish job produced a different tarball than the validated job." >&2
+            exit 1
+          fi
 
       - name: Inspect release state
         id: release
         shell: bash
         env:
-          EXPECTED_COMMIT: ${{ steps.expected.outputs.commit }}
-          PACKAGE_NAME: ${{ steps.expected.outputs.package_name }}
-          PACKAGE_VERSION: ${{ steps.expected.outputs.package_version }}
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.expected_commit }}
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
           PUBLISH_REQUESTED: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          compare_release_versions() {
+            LEFT_VERSION="$1" RIGHT_VERSION="$2" node - <<'NODE'
+          const parse = (value) => {
+            const match = /^(\d+)\.(\d+)\.(\d+)-([1-9]\d*)$/.exec(value.trim());
+            if (!match) throw new Error(`Invalid release version: ${value}`);
+            return match.slice(1).map(Number);
+          };
+          const left = parse(process.env.LEFT_VERSION);
+          const right = parse(process.env.RIGHT_VERSION);
+          const result = left.reduce((answer, value, index) => answer || Math.sign(value - right[index]), 0);
+          process.stdout.write(String(result));
+          NODE
+          }
+
           TAG="v${PACKAGE_VERSION}"
           PUBLISHED=false
           git fetch --tags --force origin
@@ -111,11 +232,8 @@ jobs:
           else
             LATEST_VERSION=$(npm view "${PACKAGE_NAME}@latest" version 2>/dev/null || true)
             if [[ -n "$LATEST_VERSION" ]]; then
-              IS_NEWER=$(PACKAGE_VERSION="$PACKAGE_VERSION" LATEST_VERSION="$LATEST_VERSION" bun -e '
-                import { compareReleaseVersions } from "./scripts/release-version.ts";
-                console.log(compareReleaseVersions(process.env.PACKAGE_VERSION, process.env.LATEST_VERSION) > 0);
-              ')
-              if [[ "$IS_NEWER" != "true" ]]; then
+              IS_NEWER=$(compare_release_versions "$PACKAGE_VERSION" "$LATEST_VERSION")
+              if [[ "$IS_NEWER" != "1" ]]; then
                 echo "Refusing to move latest from ${LATEST_VERSION} to ${PACKAGE_VERSION}." >&2
                 exit 1
               fi
@@ -154,26 +272,33 @@ jobs:
 
       - name: Publish to npm with Trusted Publishing
         if: steps.release.outputs.enabled == 'true' && steps.release.outputs.publish == 'true'
-        run: npm publish --access public --tag latest
+        run: npm publish ./.release/publish/package --ignore-scripts --access public --tag latest
 
       - name: Create immutable Git tag
         if: steps.release.outputs.enabled == 'true' && steps.release.outputs.create_tag == 'true'
         env:
-          PACKAGE_NAME: ${{ steps.expected.outputs.package_name }}
-          PACKAGE_VERSION: ${{ steps.expected.outputs.package_version }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.expected_commit }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git tag -a "$TAG" -m "${PACKAGE_NAME}@${PACKAGE_VERSION}"
-          git push origin "$TAG"
+          TAG_OBJECT=$(gh api --method POST "repos/${GITHUB_REPOSITORY}/git/tags" \
+            -f tag="$TAG" \
+            -f message="${PACKAGE_NAME}@${PACKAGE_VERSION}" \
+            -f object="$EXPECTED_COMMIT" \
+            -f type=commit \
+            --jq .sha)
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${TAG}" \
+            -f sha="$TAG_OBJECT" >/dev/null
 
       - name: Create GitHub Release
         if: steps.release.outputs.enabled == 'true' && steps.release.outputs.create_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          PACKAGE_NAME: ${{ steps.expected.outputs.package_name }}
-          PACKAGE_VERSION: ${{ steps.expected.outputs.package_version }}
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
           TAG: ${{ steps.release.outputs.tag }}
         run: gh release create "$TAG" --verify-tag --generate-notes --title "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
@@ -181,8 +306,8 @@ jobs:
         if: always()
         env:
           ENABLED: ${{ steps.release.outputs.enabled }}
-          PACKAGE_NAME: ${{ steps.expected.outputs.package_name }}
-          PACKAGE_VERSION: ${{ steps.expected.outputs.package_version }}
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
           PUBLISH: ${{ steps.release.outputs.publish }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
