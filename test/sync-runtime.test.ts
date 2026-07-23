@@ -8,7 +8,8 @@ import {
   patchRuntimeOAuthHttpErrors,
   patchRuntimeTuiBridge,
   patchRuntimeZaiDesktopOAuth,
-  resolveArtifactUrl
+  resolveArtifactUrl,
+  supportsMultiMessageFileRewind
 } from "../scripts/sync-runtime.ts";
 import {
   compareReleaseVersions,
@@ -200,6 +201,14 @@ describe("runtime synchronization", () => {
     expect(() => chooseArtifact({ files: [] }, "linux")).toThrow(/No \.deb artifact/);
   });
 
+  test("recognizes legacy and native multi-message file rewind support", () => {
+    expect(supportsMultiMessageFileRewind("Array.isArray(e.targetMessageIds)")).toBe(true);
+    expect(supportsMultiMessageFileRewind(
+      "e.targetMessageIds&&e.targetMessageIds.length>0"
+    )).toBe(true);
+    expect(supportsMultiMessageFileRewind("e.targetMessageId?[e.targetMessageId]:[]")).toBe(false);
+  });
+
   test("injects transcript and structured state readers into the official TUI adapter", () => {
     const runtime = [
       "function R(e,t){return f(e,{rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}",
@@ -240,5 +249,19 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);
+
+    const modernRuntime = runtimeWithApp
+      .replace(
+        "function R(e,t){return f(e,{rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}",
+        "function R(e,t){return f(e,{branchCutAfterMessageId:t.revert?.branchCutAfterMessageID,rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}"
+      )
+      .replace(
+        "function c(e,t){if(t.targetMessageId)return O(e,[t.targetMessageId]);let r=P(e,t.targetCheckpointId);return r?[r]:[]}",
+        "function c(e,t){let r=t.targetMessageIds&&t.targetMessageIds.length>0?t.targetMessageIds:t.targetMessageId?[t.targetMessageId]:[];return O(e,r)}"
+      );
+    const modernPatched = patchRuntimeTuiBridge(modernRuntime);
+    expect(modernPatched).toContain("r=await e.sessionStore.getSession(e.sessionId);return p(r?R(t,r):t)");
+    expect(modernPatched).toContain("targetMessageIds&&t.targetMessageIds.length>0");
+    expect(modernPatched).not.toContain("Array.isArray(t.targetMessageIds)");
   });
 });
