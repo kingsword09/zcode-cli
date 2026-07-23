@@ -12,7 +12,8 @@ on:
           - cli
           - upstream
   schedule:
-    - cron: "23 2 * * *"
+    - cron: "30 1 * * *"
+      timezone: "Asia/Shanghai"
 
 permissions:
   contents: write
@@ -169,3 +170,18 @@ jobs:
           if [[ -n "$PR_URL" ]]; then
             echo "Release PR: ${PR_URL}" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  keepalive:
+    # Public repositories can have scheduled workflows disabled after 60 days
+    # without repository activity. Re-enabling the workflow through the API
+    # avoids dummy commits and keeps the release schedule alive.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Keep scheduled workflow enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/prepare-release.yml/enable"

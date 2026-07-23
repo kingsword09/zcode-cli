@@ -89,11 +89,15 @@ workflows. Its updater URL and SHA-512 are committed in
 downloads the committed URL and verifies the locked SHA-512, so a later upstream
 update cannot silently change a reviewed release.
 
-The preparation workflow runs every day at 02:23 UTC in `upstream` mode. It
-creates a PR when the ZCode App version or the pinned installer changes. A
-same-version upstream repack increments the global build so npm still receives
-an immutable new version. From the Actions page, run **Prepare ZCode CLI
-release** with one of these modes:
+The preparation workflow checks upstream once per day at 01:30 in the
+`Asia/Shanghai` timezone, in `upstream` mode. [GitHub documents scheduled
+triggers as best effort](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule):
+under high Actions load a scheduled event can still be delayed or dropped. The
+preparation itself is idempotent:
+the fixed release branch is created or updated only when the runtime lock or
+package version changes. A same-version upstream repack increments the global
+build so npm still receives an immutable new version. From the Actions page,
+run **Prepare ZCode CLI release** with one of these modes:
 
 - `cli` increments the global build and also aligns with the latest App;
 - `upstream` checks for an App update without incrementing the build.
@@ -101,6 +105,18 @@ release** with one of these modes:
 The modes use `release/zcode-cli` and `release/zcode-upstream` respectively. If
 both PRs are open, merge one and rerun the other preparation mode so its version
 is recalculated from the new `main` branch.
+
+The workflow also runs a least-privilege keepalive job on scheduled events. It
+calls [GitHub's workflow-enable API](https://docs.github.com/en/rest/actions/workflows#enable-a-workflow)
+instead of creating dummy commits, which prevents the public-repository 60-day
+inactivity rule from disabling this schedule. This cannot eliminate
+platform-wide outages or dropped events; for a hard delivery deadline, use an
+external scheduler or run the workflow manually:
+
+```bash
+gh workflow run prepare-release.yml --ref main -f kind=upstream
+gh workflow enable prepare-release.yml
+```
 
 Merging either Release PR publishes automatically. **Publish ZCode CLI
 release** can also be started manually for recovery. Its `publish` checkbox can
