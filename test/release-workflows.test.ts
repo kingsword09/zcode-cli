@@ -117,9 +117,14 @@ describe("release workflows", () => {
     const releaseBuild = steps.find((step) => step.name === "Build and validate release candidate");
     const releaseMetadata = steps.find((step) => step.name === "Prepare release metadata");
     const createPullRequest = steps.find((step) => step.name === "Create or update release pull request");
+    const keepalive = workflow.jobs.keepalive!;
+    const keepaliveStep = keepalive.steps.find((step) => step.name === "Keep scheduled workflow enabled");
 
     expect(workflow.on).toHaveProperty("schedule");
     expect(workflow.on).toHaveProperty("workflow_dispatch");
+    expect(workflow.on.schedule).toEqual([
+      { cron: "30 1 * * *", timezone: "Asia/Shanghai" }
+    ]);
     expect(workflow.permissions).toEqual({ contents: "write", "pull-requests": "write" });
     expect(job.if).toContain("github.event_name == 'schedule'");
     expect(job.if).toContain("github.ref_name == github.event.repository.default_branch");
@@ -137,6 +142,13 @@ describe("release workflows", () => {
     expect(createPullRequest?.with?.["add-paths"]).toContain("package.json");
     expect(createPullRequest?.with?.["add-paths"]).toContain("zcode-runtime.lock.json");
     expect(createPullRequest?.with?.branch).toBe("${{ steps.release.outputs.branch }}");
+    expect(keepalive.if).toBe("github.event_name == 'schedule'");
+    expect(keepalive.permissions).toEqual({ actions: "write" });
+    expect(keepalive["timeout-minutes"]).toBe(5);
+    expect(keepaliveStep?.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(keepaliveStep?.run).toContain(
+      "repos/${GITHUB_REPOSITORY}/actions/workflows/prepare-release.yml/enable"
+    );
     expect(source).not.toContain("NPM_TOKEN");
     expect(source).not.toContain("npm publish");
   });
