@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { formatVersionOutput, readDistributionVersion } from "../src/launcher.ts";
+import { supportsMultiMessageFileRewind } from "./sync-runtime.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtime = join(root, "vendor", "zcode.cjs");
@@ -26,7 +27,7 @@ if (runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 
   || !runtimeSource.includes(".cancelBackgroundTask=async")
   || !runtimeSource.includes(".previewFileRewind=async e=>")
   || !runtimeSource.includes(".applyFileRewind=async e=>")
-  || !/Array\.isArray\([A-Za-z_$][\w$]*\.targetMessageIds\)/u.test(runtimeSource)
+  || !supportsMultiMessageFileRewind(runtimeSource)
   || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"/u.test(runtimeSource)
   || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u.test(runtimeSource)
   || !/sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u.test(runtimeSource)

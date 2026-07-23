@@ -132,10 +132,14 @@ export function chooseArtifact(manifest: UpdateManifest, platform: SyncOptions["
   return artifact;
 }
 
+export function supportsMultiMessageFileRewind(runtime: string): boolean {
+  return /(?:Array\.isArray\([A-Za-z_$][\w$]*\.targetMessageIds\)|[A-Za-z_$][\w$]*\.targetMessageIds&&[A-Za-z_$][\w$]*\.targetMessageIds\.length>0)/u
+    .test(runtime);
+}
+
 export function patchRuntimeTuiBridge(runtime: string): string {
   const transcriptMessageIdPattern = /\.push\(\{content:[A-Za-z_$][\w$]*,messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"\}\)/u;
   const transcriptAgentMessageIdPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u;
-  const multiMessageFileRewindPattern = /Array\.isArray\([A-Za-z_$][\w$]*\.targetMessageIds\)/u;
   const activeTranscriptPattern = /sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u;
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
     && runtime.includes(".readGoal=async()=>await(await")
@@ -147,7 +151,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && runtime.includes(".applyFileRewind=async e=>")
     && transcriptMessageIdPattern.test(runtime)
     && transcriptAgentMessageIdPattern.test(runtime)
-    && multiMessageFileRewindPattern.test(runtime)
+    && supportsMultiMessageFileRewind(runtime)
     && activeTranscriptPattern.test(runtime)
     && /loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(runtime)
     && /readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(runtime)
@@ -161,7 +165,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   let patched = runtime;
   if (!activeTranscriptPattern.test(patched)) {
-    const activeFilter = /function ([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)\{return [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\{rewindCreatedMessageId:[A-Za-z_$][\w$]*\.revert\?\.createdMessageID,rewindKeptMessageIds:[A-Za-z_$][\w$]*\.revert\?\.keptMessageIDs,rewindTargetMessageId:[A-Za-z_$][\w$]*\.revert\?\.targetMessageID\}\)\}/u.exec(patched)?.[1];
+    const activeFilter = /function ([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)\{return [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\{(?:branchCutAfterMessageId:[A-Za-z_$][\w$]*\.revert\?\.branchCutAfterMessageID,)?rewindCreatedMessageId:[A-Za-z_$][\w$]*\.revert\?\.createdMessageID,rewindKeptMessageIds:[A-Za-z_$][\w$]*\.revert\?\.keptMessageIDs,rewindTargetMessageId:[A-Za-z_$][\w$]*\.revert\?\.targetMessageID\}\)\}/u.exec(patched)?.[1];
     const transcriptLoaderPattern = /async function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{if\(!\2\.sessionStore\)return\[\];let ([A-Za-z_$][\w$]*)=await \2\.sessionStore\.messages\(\{sessionID:\2\.sessionId\}\);return ([A-Za-z_$][\w$]*)\(\3\)\}/u;
     if (!activeFilter || !transcriptLoaderPattern.test(patched)) {
       throw new Error("ZCode runtime is incompatible with the TUI bridge (active transcript anchor missing).");
@@ -198,7 +202,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
       `$1.push({content:$2,...$3.length>0?{parts:$3}:{},messageId:${messageRecord}.info.id,role:"agent"})`
     );
   }
-  if (!multiMessageFileRewindPattern.test(patched)) {
+  if (!supportsMultiMessageFileRewind(patched)) {
     const fileRewindTargetPattern = /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{if\(\3\.targetMessageId\)return ([A-Za-z_$][\w$]*)\(\2,\[\3\.targetMessageId\]\);/u;
     if (!fileRewindTargetPattern.test(patched)) {
       throw new Error("ZCode runtime is incompatible with the TUI bridge (multi-message file rewind anchor missing).");
