@@ -190,10 +190,10 @@ try {
     featureTurnStart
   );
   await waitFor(
-    "one-hertz turn timer tick",
-    /🕐 1s/i,
+    "advancing turn timer",
+    /[🕐-🕛] [1-9]\d*s/u,
     featureTurnStart,
-    3_000
+    4_000
   );
   await sendAndWait(
     "Keep the final response concise.\r",

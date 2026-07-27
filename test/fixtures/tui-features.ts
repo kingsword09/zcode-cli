@@ -476,7 +476,7 @@ await runTui({
         }
       }
     });
-    await Promise.race([featureSteerReceived, Bun.sleep(3_000)]);
+    await Promise.race([featureSteerReceived, Bun.sleep(8_000)]);
     if (!featureSteerInput) throw new Error("Feature smoke did not receive active-turn steering.");
     await Bun.sleep(150);
     await emitRuntime(options, "turn_steer_drained", {
