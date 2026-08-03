@@ -112,7 +112,55 @@ async function waitForChild(child: ChildProcess): Promise<number> {
   });
 }
 
+interface ODWResultEnvelope {
+  type: "zcode_result";
+  text: string;
+  stderr: string;
+  exitCode: number;
+  sessionId: string | null;
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+async function readChildText(stream: NodeJS.ReadableStream | null): Promise<string> {
+  if (!stream) return "";
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function runProtocolRuntime(node: string, args: string[]): Promise<number> {
+  const child = spawnChild(node, [runtimePath, ...args], {
+    cwd: process.cwd(),
+    env: runtimeEnvironment(),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    readChildText(child.stdout),
+    readChildText(child.stderr),
+    waitForChild(child)
+  ]);
+  const envelope: ODWResultEnvelope = {
+    type: "zcode_result",
+    text: stdout.trimEnd(),
+    stderr: stderr.trimEnd(),
+    exitCode: code,
+    sessionId: null,
+    costUsd: null,
+    inputTokens: null,
+    outputTokens: null
+  };
+  process.stdout.write(`${JSON.stringify(envelope)}\n`);
+  return code;
+}
+
 async function runRuntime(node: string, args: string[]): Promise<number> {
+  if (process.env.ZCODE_ODW_PROTOCOL === "1") {
+    return runProtocolRuntime(node, args);
+  }
   const child = spawnChild(node, [runtimePath, ...args], {
     cwd: process.cwd(),
     env: runtimeEnvironment(),
