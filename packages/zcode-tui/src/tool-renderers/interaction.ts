@@ -1,10 +1,10 @@
 import { asString, isRecord } from "../types.ts";
+import { sanitizeTerminalText } from "../terminal-text.ts";
 import type { SpecializedToolRenderOptions, SpecializedToolRenderResult } from "./types.ts";
 import {
   booleanField,
   directText,
   nestedRecord,
-  oneLine,
   recordString,
   safeJson,
   toolSummary
@@ -14,12 +14,22 @@ export function questionRender(options: SpecializedToolRenderOptions): Specializ
   const input = isRecord(options.input) ? options.input : undefined;
   const result = nestedRecord(options.result);
   const questions = Array.isArray(input?.questions) ? input.questions : [];
-  const answers = isRecord(result?.answers) ? result.answers : undefined;
+  const inputAnswers = isRecord(input?.answers) ? input.answers : undefined;
+  const resultAnswers = isRecord(result?.answers) ? result.answers : undefined;
+  const answers = { ...inputAnswers, ...resultAnswers };
+  const hasAnswers = Object.keys(answers).length > 0;
   const lines: string[] = [];
-  if (answers) {
+  if (hasAnswers) {
     for (const [question, answer] of Object.entries(answers)) {
       const rendered = asString(answer) ?? safeJson(answer);
-      if (rendered) lines.push(`${options.theme.muted(oneLine(question, 72))}\n${options.theme.accent(`  ${oneLine(rendered, 100)}`)}`);
+      const safeQuestion = sanitizeTerminalText(question, { preserveSgr: false }).replace(/\s+/gu, " ").trim();
+      const safeAnswer = rendered
+        ? sanitizeTerminalText(rendered, { preserveSgr: false }).trim()
+        : undefined;
+      if (safeAnswer) {
+        const indentedAnswer = safeAnswer.split("\n").map((line) => `  ${line}`).join("\n");
+        lines.push(`${options.theme.muted(safeQuestion)}\n${options.theme.accent(indentedAnswer)}`);
+      }
     }
   } else if (questions.length > 0 && options.state.toLowerCase() === "waiting_permission") {
     lines.push(options.theme.muted(`Awaiting ${questions.length} ${questions.length === 1 ? "answer" : "answers"}`));
@@ -28,7 +38,7 @@ export function questionRender(options: SpecializedToolRenderOptions): Specializ
     displayName: "Question",
     summary: toolSummary(options.name, options.input),
     body: lines.join("\n") || undefined,
-    consumesResult: Boolean(result)
+    consumesResult: Boolean(result || hasAnswers)
   };
 }
 

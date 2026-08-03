@@ -2003,6 +2003,7 @@ class ZCodeTui {
       ? contextRecord.abortSignal
       : this.turnAbortController?.signal;
     const toolName = asString(request.toolName) ?? "tool";
+    const asksUserQuestion = isAskUserQuestionTool(toolName);
     const toolCallId = asString(request.toolCallId) ?? asString(request.toolUseId) ?? asString(request.callId);
     const tool = toolCallId
       ? this.toolViews.get(toolCallId)
@@ -2010,7 +2011,7 @@ class ZCodeTui {
     if (tool) this.updateToolView(tool, "waiting_permission");
 
     let response: unknown;
-    if (isAskUserQuestionTool(toolName)) {
+    if (asksUserQuestion) {
       response = await this.requestUserQuestions(request.input, signal);
     } else if (isExitPlanModeTool(toolName)) {
       response = await this.requestPlanApproval(request.input, signal);
@@ -2022,6 +2023,10 @@ class ZCodeTui {
       const record = isRecord(response) ? response : undefined;
       const decision = asString(record?.decision)?.toLowerCase();
       const allowed = decision === "allow" || decision === "modify";
+      if (asksUserQuestion && allowed && record?.modifiedInput !== undefined) {
+        tool.input = record.modifiedInput;
+        tool.inputText.clear();
+      }
       this.updateToolView(tool, allowed ? "running" : decision === "deny" ? "rejected" : "cancelled");
     }
     return response;

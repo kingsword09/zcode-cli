@@ -1,5 +1,6 @@
 import {
   decodeKittyPrintable,
+  Editor,
   getKeybindings,
   Input,
   matchesKey,
@@ -348,7 +349,7 @@ class TextPromptDialog implements Component {
   constructor(
     private readonly title: string,
     private readonly prompt: string,
-    private readonly input: Input,
+    private readonly input: Component,
     private readonly theme: ZCodeTheme,
     private readonly help: string
   ) {}
@@ -400,6 +401,43 @@ class PromptInput extends Input {
   }
 }
 
+class PromptEditor extends Editor {
+  onEscape?: () => void;
+
+  constructor(
+    ui: TUI,
+    private readonly placeholder: string | undefined,
+    private readonly promptTheme: ZCodeTheme
+  ) {
+    super(ui, promptTheme.editor, { paddingX: 1 });
+  }
+
+  override handleInput(data: string): void {
+    if (getKeybindings().matches(data, "tui.select.cancel")) {
+      this.onEscape?.();
+      return;
+    }
+    super.handleInput(data);
+  }
+
+  override render(width: number): string[] {
+    const lines = super.render(width);
+    if (this.getText() || !this.placeholder) return lines;
+
+    const cursor = "\x1b[7m \x1b[0m";
+    const cursorLine = lines.findIndex((line) => line.includes(cursor));
+    if (cursorLine >= 0) {
+      lines[cursorLine] = truncateToWidth(
+        lines[cursorLine]!.replace(cursor, `${cursor}${this.promptTheme.muted(this.placeholder)}`),
+        width,
+        "",
+        true
+      );
+    }
+    return lines;
+  }
+}
+
 export function promptText(
   ui: TUI,
   host: Container,
@@ -415,14 +453,16 @@ export function promptText(
   }
 ): Promise<string | null> {
   return new Promise((resolve) => {
-    const input = new PromptInput(
-      options.mask === true,
-      options.placeholder
-        ? sanitizeTerminalText(options.placeholder, { preserveSgr: false })
-        : undefined,
-      theme
-    );
-    if (options.initialValue) input.setValue(options.initialValue);
+    const placeholder = options.placeholder
+      ? sanitizeTerminalText(options.placeholder, { preserveSgr: false })
+      : undefined;
+    const input = options.mask === true
+      ? new PromptInput(true, placeholder, theme)
+      : new PromptEditor(ui, placeholder, theme);
+    if (options.initialValue) {
+      if (input instanceof PromptEditor) input.setText(options.initialValue);
+      else input.setValue(options.initialValue);
+    }
     const dialog = new TextPromptDialog(
       sanitizeTerminalText(options.title, { preserveSgr: false }),
       sanitizeTerminalText(options.prompt, { preserveSgr: false }),

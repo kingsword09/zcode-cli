@@ -140,6 +140,24 @@ describe("official tool renderer registry", () => {
     expect(card).not.toContain('"questions"');
   });
 
+  test("renders complete custom answers retained in the modified question input", () => {
+    const answer = "Use the existing terminal editor so a deliberately long custom response wraps naturally and remains visible through this final marker: ANSWER_END";
+    const card = toolCard({
+      name: "AskUserQuestion",
+      state: "complete",
+      input: {
+        questions: [{ question: "How should this be handled?", header: "Approach", options: [], multiSelect: false }],
+        answers: { "How should this be handled?": answer }
+      },
+      result: { success: true }
+    });
+
+    expect(card).toContain("How should this be handled?");
+    expect(card).toContain(answer);
+    expect(card).toContain("ANSWER_END");
+    expect(card).not.toContain('"answers"');
+  });
+
   test("renders SendMessage and TaskStop as distinct tools", () => {
     const message = toolCard({
       name: "SendMessage",

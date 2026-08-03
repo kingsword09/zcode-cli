@@ -89,6 +89,38 @@ describe("TUI choice dialog", () => {
     expect(host.children).toHaveLength(0);
   });
 
+  test("wraps long unmasked input and submits the complete value", async () => {
+    const root = new Container();
+    const host = new Container();
+    const focusState: { current: Component | null } = { current: null };
+    const ui = {
+      terminal: { rows: 24, columns: 24 },
+      requestRender() {},
+      setFocus(component: Component | null) {
+        focusState.current = component;
+      }
+    } as unknown as TUI;
+    root.addChild(host);
+
+    const pending = promptText(ui, host, createTheme(false), {
+      title: "Other answer",
+      prompt: "Enter a different answer."
+    });
+    const emptyLineCount = root.render(24).length;
+    const answer = "这是一个需要自动换行并完整提交的长回答，包含中文、emoji 👨‍👩‍👧‍👦 和 unbroken-answer-marker。";
+    focusState.current?.handleInput?.(answer);
+
+    const lines = root.render(24);
+    const normalized = lines.join("").replace(/\x1b\[[0-9;]*m/gu, "").replace(/\s+/gu, "");
+    expect(lines.length).toBeGreaterThan(emptyLineCount);
+    expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
+    expect(normalized).toContain(answer.replace(/\s+/gu, ""));
+
+    focusState.current?.handleInput?.("\r");
+    expect(await pending).toBe(answer);
+    expect(host.children).toHaveLength(0);
+  });
+
   test("expands and scrolls long plan details without changing the selected action", async () => {
     const root = new Container();
     const host = new Container();
