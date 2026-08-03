@@ -1,10 +1,11 @@
 import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { constants as osConstants } from "node:os";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { constants as osConstants, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ensureUserConfig, readConfiguredModelAccess } from "./model-access.ts";
+import { ensureUserConfig, readConfiguredModelAccess, userConfigPath } from "./model-access.ts";
 import {
   classifyZaiOAuthInvocation,
   runZaiOAuthLogin,
@@ -112,6 +113,66 @@ async function waitForChild(child: ChildProcess): Promise<number> {
   });
 }
 
+export const defaultModel = "zai/glm-5.2";
+
+interface ParsedOption {
+  value: string;
+  indexes: number[];
+}
+
+function parseOption(args: string[], name: string): ParsedOption | undefined {
+  const matches: ParsedOption[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === name) {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("--")) {
+        throw new Error(`${name} requires a non-empty value`);
+      }
+      matches.push({ value, indexes: [index, index + 1] });
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith(`${name}=`)) {
+      const value = argument.slice(name.length + 1);
+      if (!value) throw new Error(`${name} requires a non-empty value`);
+      matches.push({ value, indexes: [index] });
+    }
+  }
+  if (matches.length > 1) throw new Error(`${name} may be specified only once`);
+  return matches[0];
+}
+
+export async function prepareModelOverride(
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ args: string[]; env: NodeJS.ProcessEnv; cleanup: () => Promise<void> }> {
+  const modelOption = parseOption(args, "--model");
+  if (modelOption === undefined) return { args, env: {}, cleanup: async () => {} };
+  const settingsOption = parseOption(args, "--settings");
+  const model = modelOption.value.trim();
+  if (!model) throw new Error("--model requires a non-empty provider/model identifier");
+  const sourcePath = settingsOption?.value ?? userConfigPath(env);
+  const config = JSON.parse(await readFile(sourcePath, "utf8")) as Record<string, unknown>;
+  const modelConfig = config.model && typeof config.model === "object" && !Array.isArray(config.model)
+    ? { ...(config.model as Record<string, unknown>) }
+    : {};
+  modelConfig.main = model;
+  config.model = modelConfig;
+  const directory = await mkdtemp(join(tmpdir(), "zcode-settings-"));
+  const configPath = join(directory, ".zcode", "cli", "config.json");
+  await mkdir(dirname(configPath), { recursive: true, mode: 0o700 });
+  await writeFile(configPath, `${JSON.stringify(config)}\n`, { encoding: "utf8", mode: 0o600 });
+  await chmod(configPath, 0o600);
+  const removedIndexes = new Set([...modelOption.indexes, ...(settingsOption?.indexes ?? [])]);
+  const runtimeArgs = args.filter((_, index) => !removedIndexes.has(index));
+  return {
+    args: runtimeArgs,
+    env: { HOME: directory, USERPROFILE: directory },
+    cleanup: async () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
 interface ODWResultEnvelope {
   type: "zcode_result";
   text: string;
@@ -121,6 +182,7 @@ interface ODWResultEnvelope {
   costUsd: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  telemetryAvailable: boolean;
 }
 
 async function readChildText(stream: NodeJS.ReadableStream | null): Promise<string> {
@@ -133,9 +195,10 @@ async function readChildText(stream: NodeJS.ReadableStream | null): Promise<stri
 }
 
 async function runProtocolRuntime(node: string, args: string[]): Promise<number> {
-  const child = spawnChild(node, [runtimePath, ...args], {
+  const prepared = await prepareModelOverride(args);
+  const child = spawnChild(node, [runtimePath, ...prepared.args], {
     cwd: process.cwd(),
-    env: runtimeEnvironment(),
+    env: runtimeEnvironment(prepared.env),
     stdio: ["ignore", "pipe", "pipe"]
   });
   const [stdout, stderr, code] = await Promise.all([
@@ -151,9 +214,11 @@ async function runProtocolRuntime(node: string, args: string[]): Promise<number>
     sessionId: null,
     costUsd: null,
     inputTokens: null,
-    outputTokens: null
+    outputTokens: null,
+    telemetryAvailable: false
   };
   process.stdout.write(`${JSON.stringify(envelope)}\n`);
+  await prepared.cleanup();
   return code;
 }
 
@@ -161,9 +226,10 @@ async function runRuntime(node: string, args: string[]): Promise<number> {
   if (process.env.ZCODE_ODW_PROTOCOL === "1") {
     return runProtocolRuntime(node, args);
   }
-  const child = spawnChild(node, [runtimePath, ...args], {
+  const prepared = await prepareModelOverride(args);
+  const child = spawnChild(node, [runtimePath, ...prepared.args], {
     cwd: process.cwd(),
-    env: runtimeEnvironment(),
+    env: runtimeEnvironment(prepared.env),
     stdio: "inherit"
   });
   const forwardSignal = (signal: NodeJS.Signals) => {
@@ -178,6 +244,7 @@ async function runRuntime(node: string, args: string[]): Promise<number> {
   try {
     return await waitForChild(child);
   } finally {
+    await prepared.cleanup();
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     if (process.platform !== "win32") process.off("SIGHUP", onSighup);
