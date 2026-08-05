@@ -141,6 +141,10 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const transcriptMessageIdPattern = /\.push\(\{content:[A-Za-z_$][\w$]*,messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"\}\)/u;
   const transcriptAgentMessageIdPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u;
   const activeTranscriptPattern = /sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u;
+  const activeTurnSteerPattern = /(\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\2\?\.inputId,queryId:\2\?\.queryId,expectedTurnId:\2\?\.expectedTurnId,)(?:delivery:"guide",)?(?:pendingInputId:\2\?\.pendingInputId,)?input:/u;
+  const activeTurnGuidePattern = /\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\1\?\.inputId,queryId:\1\?\.queryId,expectedTurnId:\1\?\.expectedTurnId,delivery:"guide",pendingInputId:\1\?\.pendingInputId,input:/u;
+  const interruptTurnMarker = ".interruptTurn=async e=>";
+  const queuedInputPromotionMarker = "r?.pendingInputReservationId??r?.queryId??";
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
     && runtime.includes(".readGoal=async()=>await(await")
     && runtime.includes(".readTodos=async()=>await(await")
@@ -149,6 +153,10 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && runtime.includes(".cancelBackgroundTask=async")
     && runtime.includes(".previewFileRewind=async e=>")
     && runtime.includes(".applyFileRewind=async e=>")
+    && runtime.includes(interruptTurnMarker)
+    && runtime.includes(".promoteQueuedInput=async(")
+    && runtime.includes(queuedInputPromotionMarker)
+    && activeTurnGuidePattern.test(runtime)
     && transcriptMessageIdPattern.test(runtime)
     && transcriptAgentMessageIdPattern.test(runtime)
     && supportsMultiMessageFileRewind(runtime)
@@ -160,10 +168,21 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && /cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(runtime)
     && /previewFileRewind:[A-Za-z_$][\w$]*\.previewFileRewind/u.test(runtime)
     && /applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtime)
+    && /interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(runtime)
+    && /promoteQueuedInput:[A-Za-z_$][\w$]*\.promoteQueuedInput/u.test(runtime)
     && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime);
   if (alreadyPatched) return runtime;
 
   let patched = runtime;
+  if (!activeTurnGuidePattern.test(patched)) {
+    if (!activeTurnSteerPattern.test(patched)) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (active-turn steer delivery anchor missing).");
+    }
+    patched = patched.replace(
+      activeTurnSteerPattern,
+      '$1delivery:"guide",pendingInputId:$2?.pendingInputId,input:'
+    );
+  }
   if (!activeTranscriptPattern.test(patched)) {
     const activeFilter = /function ([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)\{return [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\{(?:branchCutAfterMessageId:[A-Za-z_$][\w$]*\.revert\?\.branchCutAfterMessageID,)?rewindCreatedMessageId:[A-Za-z_$][\w$]*\.revert\?\.createdMessageID,rewindKeptMessageIds:[A-Za-z_$][\w$]*\.revert\?\.keptMessageIDs,rewindTargetMessageId:[A-Za-z_$][\w$]*\.revert\?\.targetMessageID\}\)\}/u.exec(patched)?.[1];
     const transcriptLoaderPattern = /async function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{if\(!\2\.sessionStore\)return\[\];let ([A-Za-z_$][\w$]*)=await \2\.sessionStore\.messages\(\{sessionID:\2\.sessionId\}\);return ([A-Za-z_$][\w$]*)\(\3\)\}/u;
@@ -232,6 +251,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   const [recallAssignment, bridge, , getApp] = assignment;
   const assignments: string[] = [];
+  const interruptAssignment = `${bridge}.interruptTurn=async e=>{let t=await ${getApp}(),r=e?.reservationId??"tui-steer-interrupt",o=(Array.isArray(e?.pendingInputIds)?e.pendingInputIds:[]).filter(Boolean),n=[],i=async()=>{for(let a of n)await t.releaseQueueItemReservation?.(a,r);n=[]};try{if(t.reserveQueueItem&&t.releaseQueueItemReservation)for(let a of o)if(await t.reserveQueueItem(a,r))n.push(a);else{await i();break}let a=t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:o.length>0&&n.length===o.length,reason:e?.reason??"TUI steer interrupt"})??{kind:"unsupported"};return a.kind!=="stopped"&&await i(),a}catch(a){await i();throw a}}`;
+  const promotionAssignment = `${bridge}.promoteQueuedInput=async(e,t,r)=>{let o=await ${getApp}(),n=r?.pendingInputReservationId??r?.queryId??r?.inputId??"tui-promotion",i=(Array.isArray(t)?t:[t]).filter(Boolean);if(i.length===0||!o.reserveQueueItem||!o.markQueueItemPromoting||!o.releaseQueueItemReservation||!o.removeQueueItem)return ${bridge}.sendInput(e,{...r,delivery:"start_turn"});let a=[],u=!1;try{for(let l of i){if(await o.markQueueItemPromoting(l,n)){a.push(l);continue}if(!await o.reserveQueueItem(l,n))throw new Error("TUI queued input is already reserved: "+l);a.push(l);if(!await o.markQueueItemPromoting(l,n))throw new Error("TUI queued input promotion failed: "+l)}let c=await ${bridge}.sendInput(e,{...r,delivery:"start_turn"});if(c?.kind==="rejected")return c;u=!0;for(let l of a)if(!await o.removeQueueItem(l,{reason:"promoted",reservationId:n}))throw new Error("TUI queued input promotion commit failed: "+l);return c}finally{if(!u)for(let l of a)await o.releaseQueueItemReservation(l,n)}}`;
   if (!patched.includes(".loadSessionTranscript=async()=>await(await")) {
     assignments.push(`${bridge}.loadSessionTranscript=async()=>await(await ${getApp}()).loadSessionTranscript?.()??[]`);
   }
@@ -255,6 +276,21 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!patched.includes(".applyFileRewind=async e=>")) {
     assignments.push(`${bridge}.applyFileRewind=async e=>{let t=await ${getApp}();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}`);
+  }
+  if (!patched.includes(interruptTurnMarker)) {
+    assignments.push(interruptAssignment);
+  }
+  if (!patched.includes(queuedInputPromotionMarker)) {
+    const existingPromotionStart = patched.indexOf(`${bridge}.promoteQueuedInput=async(`);
+    if (existingPromotionStart >= 0) {
+      const existingPromotionEnd = patched.indexOf(`,${bridge}.recallPreviousInput=`, existingPromotionStart);
+      if (existingPromotionEnd < 0) {
+        throw new Error("ZCode runtime is incompatible with the TUI bridge (queued-input promotion boundary missing).");
+      }
+      patched = `${patched.slice(0, existingPromotionStart)}${promotionAssignment}${patched.slice(existingPromotionEnd)}`;
+    } else {
+      assignments.push(promotionAssignment);
+    }
   }
   if (assignments.length > 0) {
     patched = patched.replace(recallAssignment, `${assignments.join(",")},${recallAssignment}`);
@@ -288,6 +324,12 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(patched)) {
     optionFields.push(`applyFileRewind:${submitBridge}.applyFileRewind`);
+  }
+  if (!/interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(patched)) {
+    optionFields.push(`interruptTurn:${submitBridge}.interruptTurn`);
+  }
+  if (!/promoteQueuedInput:[A-Za-z_$][\w$]*\.promoteQueuedInput/u.test(patched)) {
+    optionFields.push(`promoteQueuedInput:${submitBridge}.promoteQueuedInput`);
   }
   if (optionFields.length > 0) {
     patched = patched.replace(optionsAssignment, `${optionFields.join(",")},${optionsAssignment}`);

@@ -2,12 +2,46 @@ import { describe, expect, test } from "bun:test";
 
 import {
   historyText,
+  isModelCancellationEvent,
   modelLabel,
   normalizeEvent,
   restoredMessages
 } from "../packages/zcode-tui/src/events.ts";
 
 describe("ZCode event adapter", () => {
+  test("distinguishes a cancelled model request from a real model failure", () => {
+    const cancelled = normalizeEvent({
+      type: "model.network_status",
+      payload: {
+        type: "model_request_failed",
+        errorCode: "model_request_cancelled",
+        exceptionType: "AbortError",
+        message: "Model request was cancelled.",
+        reason: "cancelled",
+        retryable: false
+      }
+    });
+    const failed = normalizeEvent({
+      type: "model.network_status",
+      payload: {
+        type: "model_request_failed",
+        message: "Provider unavailable.",
+        reason: "server_error",
+        retryable: false
+      }
+    });
+
+    expect(cancelled).toMatchObject({
+      type: "model_request_failed",
+      errorCode: "model_request_cancelled",
+      exceptionType: "AbortError",
+      reason: "cancelled",
+      retryable: false
+    });
+    expect(cancelled && isModelCancellationEvent(cancelled)).toBeTrue();
+    expect(failed && isModelCancellationEvent(failed)).toBeFalse();
+  });
+
   test("normalizes protocol streaming events", () => {
     expect(normalizeEvent({
       type: "model.streaming",
@@ -162,6 +196,19 @@ describe("ZCode event adapter", () => {
 
   test("normalizes the pending and committed identities for active-turn steering", () => {
     expect(normalizeEvent({
+      method: "session/event",
+      params: {
+        type: "turn_started",
+        turnId: "turn_1",
+        payload: { inputId: "input_primary" }
+      }
+    })).toMatchObject({
+      type: "turn_started",
+      turnId: "turn_1",
+      inputId: "input_primary"
+    });
+
+    expect(normalizeEvent({
       type: "turn_steer_queued",
       payload: {
         inputId: "input_1",
@@ -171,19 +218,22 @@ describe("ZCode event adapter", () => {
     })).toMatchObject({
       type: "turn_steer_queued",
       inputId: "input_1",
-      pendingInputId: "pending_1"
+      pendingInputId: "pending_1",
+      targetTurnId: "turn_1"
     });
 
     expect(normalizeEvent({
       type: "turn_steer_drained",
       payload: {
         pendingInputIds: ["pending_1"],
-        injectedMessageIds: ["message_steer_1"]
+        injectedMessageIds: ["message_steer_1"],
+        targetTurnId: "turn_1"
       }
     })).toMatchObject({
       type: "turn_steer_drained",
       pendingInputIds: ["pending_1"],
-      injectedMessageIds: ["message_steer_1"]
+      injectedMessageIds: ["message_steer_1"],
+      targetTurnId: "turn_1"
     });
   });
 

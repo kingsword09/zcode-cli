@@ -24,9 +24,14 @@ let backgroundStatus = "running";
 let turnCompleted = false;
 let featureTurnActive = false;
 let featureSteerInput: string | undefined;
+let featurePendingInputId: string | undefined;
 let resolveFeatureSteer!: () => void;
 const featureSteerReceived = new Promise<void>((resolve) => {
   resolveFeatureSteer = resolve;
+});
+let resolveFeatureTurnFinished!: () => void;
+const featureTurnFinished = new Promise<void>((resolve) => {
+  resolveFeatureTurnFinished = resolve;
 });
 let goal = {
   status: "active",
@@ -211,6 +216,9 @@ await runTui({
         throw new Error(`Active-turn input used unexpected delivery mode: ${String(options.delivery)}`);
       }
       if (promptText === "Edit this rejected steer.") {
+        if (options.expectedTurnId !== "turn_feature") {
+          throw new Error(`Rejected steer used unexpected expected turn: ${String(options.expectedTurnId)}`);
+        }
         return {
           kind: "rejected",
           activeTurnId: "turn_feature",
@@ -220,17 +228,28 @@ await runTui({
       if (promptText !== "Keep the final response concise.") {
         throw new Error(`Unexpected active-turn steer: ${String(promptText)}`);
       }
+      if (options.expectedTurnId !== "turn_feature") {
+        throw new Error(`Active steer used unexpected expected turn: ${String(options.expectedTurnId)}`);
+      }
+      if (!options.pendingInputId) throw new Error("Active steer did not provide a stable pending input ID.");
       featureSteerInput = promptText;
-      const pendingInputId = "pending_feature_1";
+      featurePendingInputId = options.pendingInputId;
       await emitRuntime(options, "turn_steer_queued", {
         input: promptText,
         inputId: options.inputId,
-        pendingInputId,
+        pendingInputId: featurePendingInputId,
         queueLength: 1,
         targetTurnId: "turn_feature"
       });
       resolveFeatureSteer();
-      return { kind: "queued", pendingInputId, queueLength: 1, turnId: "turn_feature" };
+      await featureTurnFinished;
+      await Bun.sleep(50);
+      return {
+        kind: "queued",
+        pendingInputId: featurePendingInputId,
+        queueLength: 1,
+        turnId: "turn_feature"
+      };
     }
     if (options.delivery !== "start_turn") {
       throw new Error(`Idle input used unexpected delivery mode: ${String(options.delivery)}`);
@@ -277,6 +296,10 @@ await runTui({
       throw new Error("Feature smoke prompt did not include the selected file and image attachment.");
     }
     featureTurnActive = true;
+    await emitRuntime(options, "turn_started", {
+      inputId: options.inputId,
+      turnId: "turn_feature"
+    });
     await emitRuntime(options, "model.network_status", {
       type: "model_request_started",
       attempt: 1,
@@ -478,10 +501,11 @@ await runTui({
     });
     await Promise.race([featureSteerReceived, Bun.sleep(8_000)]);
     if (!featureSteerInput) throw new Error("Feature smoke did not receive active-turn steering.");
+    if (!featurePendingInputId) throw new Error("Feature smoke did not retain the pending input ID.");
     await Bun.sleep(150);
     await emitRuntime(options, "turn_steer_drained", {
       injectedMessageIds: ["message_steer"],
-      pendingInputIds: ["pending_feature_1"],
+      pendingInputIds: [featurePendingInputId],
       targetTurnId: "turn_feature"
     });
     await emit(options, { kind: "reasoning_delta", delta: "Synthesizing the final response." });
@@ -496,6 +520,7 @@ await runTui({
     await Bun.sleep(1_100);
     featureTurnActive = false;
     turnCompleted = true;
+    resolveFeatureTurnFinished();
     return {
       kind: "started_turn",
       result: {

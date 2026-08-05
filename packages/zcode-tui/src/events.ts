@@ -8,6 +8,8 @@ export interface StreamEvent {
   field?: "text" | "reasoning" | "input" | "output";
   messageId?: string;
   partId?: string;
+  turnId?: string;
+  targetTurnId?: string;
   inputId?: string;
   pendingInputId?: string;
   pendingInputIds?: string[];
@@ -19,6 +21,9 @@ export interface StreamEvent {
   input?: unknown;
   result?: unknown;
   error?: unknown;
+  errorCode?: string;
+  errorPhase?: string;
+  exceptionType?: string;
   message?: string;
   progress?: ToolProgressData;
   attempt?: number;
@@ -91,6 +96,9 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
       ? field.filter((item): item is string => typeof item === "string")
       : undefined;
   };
+  const envelopeString = (key: string): string | undefined => asString(body[key])
+    ?? asString(value[key])
+    ?? (params && asString(params[key]));
 
   return {
     type,
@@ -104,6 +112,8 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
       ?? asString(body.assistantMessageId)
       ?? part?.messageId,
     partId: asString(body.partId) ?? asString(body.partID) ?? part?.partId,
+    turnId: envelopeString("turnId") ?? envelopeString("turnID"),
+    targetTurnId: envelopeString("targetTurnId") ?? envelopeString("targetTurnID"),
     inputId: asString(body.inputId) ?? asString(body.inputID),
     pendingInputId: asString(body.pendingInputId) ?? asString(body.pendingInputID),
     pendingInputIds: strings("pendingInputIds") ?? strings("pendingInputIDs"),
@@ -119,6 +129,9 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
     input: body.input ?? toolCall?.input ?? (part?.type === "tool" ? part.input : undefined),
     result: body.result ?? body.output ?? (part?.type === "tool" ? part.output : undefined),
     error: error ?? (part?.type === "tool" ? part.error : undefined),
+    errorCode: asString(body.errorCode),
+    errorPhase: asString(body.errorPhase),
+    exceptionType: asString(body.exceptionType),
     message: asString(body.message) ?? (errorRecord && asString(errorRecord.message)),
     progress: {
       elapsedMs: number("elapsedMs"),
@@ -159,6 +172,14 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
     retryable: typeof body.retryable === "boolean" ? body.retryable : undefined,
     raw: value
   };
+}
+
+export function isModelCancellationEvent(event: StreamEvent): boolean {
+  return event.type === "model_request_failed" && (
+    event.reason?.toLowerCase() === "cancelled"
+    || event.errorCode?.toLowerCase() === "model_request_cancelled"
+    || event.exceptionType?.toLowerCase() === "aborterror"
+  );
 }
 
 export function responseText(value: unknown): string | undefined {

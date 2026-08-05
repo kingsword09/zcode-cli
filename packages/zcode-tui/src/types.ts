@@ -14,9 +14,17 @@ export interface PromptCallOptions {
   delivery?: "auto" | "start_turn" | "steer_active_turn";
   expectedTurnId?: string;
   inputId?: string;
+  pendingInputReservationId?: string;
+  pendingInputId?: string;
   queryId?: string;
   onEvent?: (event: unknown) => void | Promise<void>;
   requestPermission?: (request: unknown, context?: unknown) => Promise<unknown>;
+}
+
+export interface InterruptTurnOptions {
+  pendingInputIds?: string[];
+  reason?: string;
+  reservationId?: string;
 }
 
 export interface WorkspacePathSuggestionRequest {
@@ -67,7 +75,13 @@ export interface TuiOptions {
   cancelBackgroundTask?: (taskId: string) => Promise<unknown>;
   previewFileRewind?: (targetMessageIds: string[]) => Promise<unknown>;
   applyFileRewind?: (targetMessageIds: string[]) => Promise<unknown>;
+  interruptTurn?: (options: InterruptTurnOptions) => Promise<unknown>;
   sendInput?: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
+  promoteQueuedInput?: (
+    input: unknown,
+    pendingInputIds: string[],
+    options: PromptCallOptions
+  ) => Promise<unknown>;
   submitPrompt: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   setMode?: (mode: string) => Promise<unknown>;
   writeClipboardText?: (text: string) => Promise<void>;

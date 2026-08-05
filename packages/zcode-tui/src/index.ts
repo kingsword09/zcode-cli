@@ -40,6 +40,7 @@ import {
 } from "./color-scheme.ts";
 import {
   historyText,
+  isModelCancellationEvent,
   modelLabel,
   normalizeEvent,
   responseText,
@@ -240,11 +241,19 @@ function modelRetryProgress(event: StreamEvent, phase: "scheduled" | "started"):
 const doubleEscapeTimeoutMs = 800;
 const customProviderHelpCommand = "__zcode_custom_provider_help__";
 const rewindEscapeHint = "Esc again to rewind conversation";
+const recentSteerCommitGuardMs = 400;
 
 interface SendInputDisposition {
   accepted: boolean;
   pendingInputId?: string;
+  targetTurnId?: string;
   reason?: string;
+}
+
+interface PendingSteerInterrupt {
+  abortController: AbortController;
+  reservationId: string;
+  turnEpoch: number;
 }
 
 export function shouldUseNoBrowserForLogin(
@@ -319,6 +328,14 @@ class ZCodeTui {
   private queuedSelectionCommand?: QueuedSubmission;
   private readonly inputQueue: InputQueue;
   private turnAbortController?: AbortController;
+  private readonly steerAbortControllers = new Set<AbortController>();
+  private primaryTurnActive = false;
+  private primaryTurnInputId?: string;
+  private activeTurnId?: string;
+  private turnEpoch = 0;
+  private activeTurnEpoch?: number;
+  private pendingSteerInterrupt?: PendingSteerInterrupt;
+  private recentSteerCommit?: { at: number; turnEpoch: number };
   private currentThinking?: ThinkingView;
   private currentThinkingPartId?: string;
   private readonly presentationRegistry = new TurnPresentationRegistry<ToolViewState>();
@@ -410,6 +427,9 @@ class ZCodeTui {
         this.assistantStream.breakSegment();
         for (const { messageId, displayInput } of entries) {
           this.addUserMessage(displayInput, 0, messageId);
+        }
+        if (!this.inputQueue.hasPendingSteers() && this.activeTurnEpoch !== undefined) {
+          this.recentSteerCommit = { at: Date.now(), turnEpoch: this.activeTurnEpoch };
         }
       },
       onSteerDiscarded: (count, reason) => {
@@ -672,7 +692,10 @@ class ZCodeTui {
       if (this.attachmentBar.isActive()) return undefined;
       if (this.choiceDepth > 0) return undefined;
       if (this.rewindFlowActive) return { consume: true };
-      if (!matchesKey(data, "escape")) this.clearRewindEscape();
+      if (!matchesKey(data, "escape")) {
+        this.clearRewindEscape();
+        this.recentSteerCommit = undefined;
+      }
       if (matchesKey(data, "up") && this.canEnterAttachmentSelection()) {
         this.enterAttachmentSelection();
         return { consume: true };
@@ -756,6 +779,7 @@ class ZCodeTui {
       }
       if (matchesKey(data, "ctrl+c")) {
         if (this.turnAbortController) {
+          this.pendingSteerInterrupt = undefined;
           this.turnAbortController.abort();
           this.updateActivity("cancelling…");
         } else if (this.editor.getText()) {
@@ -772,8 +796,18 @@ class ZCodeTui {
       if (matchesKey(data, "escape")) {
         if (this.turnAbortController) {
           this.clearRewindEscape();
-          this.turnAbortController.abort();
-          this.updateActivity("cancelling…");
+          const pendingSteer = this.inputQueue.hasPendingSteers();
+          if (!pendingSteer && this.consumeRecentSteerCommitGuard()) {
+            this.addNotice("Message received; Esc was ignored. Press Esc again to interrupt.", "muted");
+            return { consume: true };
+          }
+          if (pendingSteer) {
+            this.requestPendingSteerInterrupt();
+          } else {
+            this.pendingSteerInterrupt = undefined;
+            this.turnAbortController.abort();
+            this.updateActivity("cancelling…");
+          }
           return { consume: true };
         }
         if (this.transcript.searchStatus() || this.transcript.cursorStatus()) {
@@ -902,7 +936,16 @@ class ZCodeTui {
     this.transcript.clearSearch();
     this.transcript.clearCursor();
 
-    const steering = this.activeSubmissions > 0;
+    const steering = this.primaryTurnActive;
+    if (!steering && this.activeSubmissions > 0) {
+      this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
+      return;
+    }
+    const turnEpoch = steering ? this.activeTurnEpoch : ++this.turnEpoch;
+    if (turnEpoch === undefined) {
+      this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
+      return;
+    }
     const attachments = !steering && !input.startsWith("/") ? [...this.pendingAttachments] : [];
     if (steering && !this.options.sendInput) {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
@@ -912,17 +955,27 @@ class ZCodeTui {
 
     const abortController = new AbortController();
     const inputId = `input_${crypto.randomUUID()}`;
+    const pendingInputId = steering ? `pending_${crypto.randomUUID()}` : undefined;
     const callOptions: PromptCallOptions = {
       abortSignal: abortController.signal,
       delivery: steering ? "steer_active_turn" : "start_turn",
+      expectedTurnId: steering ? this.activeTurnId : undefined,
       inputId,
+      pendingInputReservationId: queuedSubmission?.pendingInputReservationId,
+      pendingInputId,
       queryId: `query_${crypto.randomUUID()}`,
-      onEvent: (event) => this.onEvent(event),
+      onEvent: (event) => this.onEvent(event, turnEpoch),
       requestPermission: (request, context) => this.requestPermission(request, context)
     };
     const pendingSteer = steering
-      ? this.inputQueue.trackSteer(submission, inputId)
+      ? this.inputQueue.trackSteer(
+          submission,
+          inputId,
+          callOptions.expectedTurnId,
+          pendingInputId
+        )
       : undefined;
+    if (steering) this.recentSteerCommit = undefined;
     if (!steering) this.addUserMessage(submission.displayInput, attachments.length);
     if (submission.pending) {
       this.addNotice([
@@ -933,8 +986,18 @@ class ZCodeTui {
     }
     if (!steering) this.beginTurn(submission.displayInput);
 
-    if (!steering) this.turnAbortController = abortController;
-    this.activeSubmissions += 1;
+    if (!steering) {
+      this.turnAbortController = abortController;
+      this.primaryTurnActive = true;
+      this.primaryTurnInputId = inputId;
+      this.activeTurnId = undefined;
+      this.activeTurnEpoch = turnEpoch;
+      this.pendingSteerInterrupt = undefined;
+      this.recentSteerCommit = undefined;
+      this.activeSubmissions += 1;
+    } else {
+      this.steerAbortControllers.add(abortController);
+    }
     if (!steering || submission.status) this.updateActivity(submission.status ?? "working…");
     const notificationEligible = !steering && !input.startsWith("/");
     if (notificationEligible) this.pendingTurnNotification = "completed";
@@ -951,10 +1014,24 @@ class ZCodeTui {
         await this.handleResult(result, true, settingTargetForCommand(input));
         accepted = true;
       } else {
-        const outcome = await this.options.sendInput(promptInput(input, attachments), callOptions);
+        const preparedInput = promptInput(input, attachments);
+        const outcome = queuedSubmission?.pendingInputIds?.length && this.options.promoteQueuedInput
+          ? await this.options.promoteQueuedInput(
+              preparedInput,
+              queuedSubmission.pendingInputIds,
+              callOptions
+            )
+          : await this.options.sendInput(preparedInput, callOptions);
+        if (steering && this.activeTurnEpoch !== turnEpoch) return;
         const disposition = await this.handleSendOutcome(outcome);
+        if (steering && this.activeTurnEpoch !== turnEpoch) return;
+        if (steering && disposition.targetTurnId) this.activeTurnId = disposition.targetTurnId;
         if (pendingSteer && disposition.pendingInputId) {
-          this.inputQueue.associateSteer(pendingSteer.inputId, disposition.pendingInputId);
+          this.inputQueue.associateSteer(
+            pendingSteer.inputId,
+            disposition.pendingInputId,
+            disposition.targetTurnId
+          );
         }
         accepted = disposition.accepted;
         if (!accepted && steering) {
@@ -972,11 +1049,21 @@ class ZCodeTui {
       }
       if (!accepted && notificationEligible) this.pendingTurnNotification = undefined;
     } catch (error) {
-      if (abortController.signal.aborted) {
+      if (steering && this.activeTurnEpoch !== turnEpoch) return;
+      const interruptedForSteer = !steering
+        && this.isPendingSteerInterrupt(turnEpoch, abortController);
+      if (abortController.signal.aborted || interruptedForSteer) {
         unfinishedToolState = "cancelled";
-        if (!steering) this.inputQueue.autoSend = false;
-        if (notificationEligible) this.pendingTurnNotification = undefined;
-        this.addNotice(submission.cancelStatus ?? "Turn cancelled.", "muted");
+        if (!steering) {
+          this.inputQueue.autoSend = false;
+          if (notificationEligible) this.pendingTurnNotification = undefined;
+          this.addNotice(
+            interruptedForSteer
+              ? "Model interrupted to submit steer instructions."
+              : submission.cancelStatus ?? "Turn cancelled.",
+            "muted"
+          );
+        }
       } else {
         unfinishedToolState = "failed";
         if (!steering) this.inputQueue.autoSend = false;
@@ -985,7 +1072,7 @@ class ZCodeTui {
         let steerRecoveryDetail: string | undefined;
         if (steering) {
           const retained = this.inputQueue.findSteer(pendingSteer?.inputId);
-          if (retained?.pendingInputId) {
+          if (retained?.admitted) {
             steerRecoveryDetail = "Steer remains queued for the active turn.";
           } else if (retained) {
             const removed = this.inputQueue.removeSteer(pendingSteer?.inputId);
@@ -1005,24 +1092,116 @@ class ZCodeTui {
         );
       }
     } finally {
-      this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
-      if (this.turnAbortController === abortController) this.turnAbortController = undefined;
-      if (this.activeSubmissions === 0) {
-        nextCommand = this.queuedSelectionCommand;
-        this.queuedSelectionCommand = undefined;
-        if (!nextCommand && this.inputQueue.autoSend) {
-          nextCommand = this.inputQueue.takeNextFollowUp();
-          if (nextCommand) {
-            this.pendingTurnNotification = undefined;
-            this.pendingTurnNotificationDetail = "";
-          }
-        }
-        this.finishTurn(unfinishedToolState);
-      }
+      if (steering) this.steerAbortControllers.delete(abortController);
+      else nextCommand = this.finishPrimaryTurnSubmission(turnEpoch, abortController, unfinishedToolState);
       void this.refreshGoal();
       void this.refreshSessionUsage();
     }
     if (nextCommand) await this.submit(nextCommand.input, nextCommand);
+  }
+
+  private finishPrimaryTurnSubmission(
+    turnEpoch: number,
+    abortController: AbortController,
+    unfinishedToolState: string
+  ): QueuedSubmission | undefined {
+    this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
+    if (this.activeTurnEpoch !== turnEpoch) return undefined;
+
+    const turnFinishState = abortController.signal.aborted ? "cancelled" : unfinishedToolState;
+    const recoveryReason = turnFinishState === "cancelled"
+      ? "turn_cancelled"
+      : turnFinishState === "failed"
+        ? "turn_failed"
+        : "turn_ended";
+    const targetTurnId = this.activeTurnId;
+    const pendingSteerInterrupt = this.isPendingSteerInterrupt(turnEpoch, abortController)
+      ? this.pendingSteerInterrupt
+      : undefined;
+    const autoSendRecoveredSteers = turnFinishState === "cancelled"
+      && pendingSteerInterrupt !== undefined;
+
+    this.primaryTurnActive = false;
+    this.primaryTurnInputId = undefined;
+    this.activeTurnId = undefined;
+    this.activeTurnEpoch = undefined;
+    this.pendingSteerInterrupt = undefined;
+    this.recentSteerCommit = undefined;
+    if (this.turnAbortController === abortController) this.turnAbortController = undefined;
+    for (const controller of this.steerAbortControllers) controller.abort();
+    this.steerAbortControllers.clear();
+
+    const recoveredSteerCount = this.inputQueue.requeuePendingSteers(
+      recoveryReason,
+      targetTurnId,
+      autoSendRecoveredSteers,
+      pendingSteerInterrupt?.reservationId
+    );
+    if (autoSendRecoveredSteers && recoveredSteerCount > 0) this.inputQueue.resetAutoSend();
+
+    let nextCommand = this.queuedSelectionCommand;
+    this.queuedSelectionCommand = undefined;
+    if (!nextCommand && this.inputQueue.autoSend) {
+      nextCommand = this.inputQueue.takeNextFollowUp();
+      if (nextCommand) {
+        this.pendingTurnNotification = undefined;
+        this.pendingTurnNotificationDetail = "";
+      }
+    }
+    this.finishTurn(turnFinishState);
+    return nextCommand;
+  }
+
+  private requestPendingSteerInterrupt(): void {
+    const abortController = this.turnAbortController;
+    const turnEpoch = this.activeTurnEpoch;
+    if (!abortController || turnEpoch === undefined) return;
+    if (this.isPendingSteerInterrupt(turnEpoch, abortController)) return;
+
+    const request: PendingSteerInterrupt = {
+      abortController,
+      reservationId: `steer_interrupt_${crypto.randomUUID()}`,
+      turnEpoch
+    };
+    this.pendingSteerInterrupt = request;
+    this.updateActivity("submitting steer…");
+
+    const interruptTurn = this.options.interruptTurn;
+    if (!interruptTurn) {
+      abortController.abort();
+      return;
+    }
+
+    void interruptTurn({
+      pendingInputIds: this.inputQueue.admittedPendingInputIds(),
+      reason: "TUI interrupted the active model step to submit steer instructions.",
+      reservationId: request.reservationId
+    }).then((outcome) => {
+      if (!this.isPendingSteerInterrupt(turnEpoch, abortController)) return;
+      if (!isRecord(outcome) || asString(outcome.kind) !== "stopped") {
+        abortController.abort();
+      }
+    }).catch(() => {
+      if (this.isPendingSteerInterrupt(turnEpoch, abortController)) {
+        abortController.abort();
+      }
+    });
+  }
+
+  private isPendingSteerInterrupt(
+    turnEpoch: number,
+    abortController: AbortController
+  ): boolean {
+    const pending = this.pendingSteerInterrupt;
+    return pending?.turnEpoch === turnEpoch && pending.abortController === abortController;
+  }
+
+  private consumeRecentSteerCommitGuard(): boolean {
+    const recent = this.recentSteerCommit;
+    this.recentSteerCommit = undefined;
+    return recent !== undefined
+      && recent.turnEpoch === this.activeTurnEpoch
+      && Date.now() - recent.at <= recentSteerCommitGuardMs;
   }
 
   private async handleSendOutcome(outcome: unknown): Promise<SendInputDisposition> {
@@ -1030,16 +1209,27 @@ class ZCodeTui {
     const kind = asString(outcome.kind);
     if (kind === "started_turn") {
       await this.handleResult(outcome.result);
-      return { accepted: true };
+      const result = isRecord(outcome.result) ? outcome.result : undefined;
+      return {
+        accepted: true,
+        targetTurnId: asString(result?.turnId)
+          ?? asString(result?.targetTurnId)
+          ?? asString(outcome.turnId)
+          ?? asString(outcome.targetTurnId)
+      };
     }
     if (kind === "queued") {
       return {
         accepted: true,
-        pendingInputId: asString(outcome.pendingInputId) ?? asString(outcome.pendingInputID)
+        pendingInputId: asString(outcome.pendingInputId) ?? asString(outcome.pendingInputID),
+        targetTurnId: asString(outcome.turnId)
+          ?? asString(outcome.turnID)
+          ?? asString(outcome.targetTurnId)
       };
     } else if (kind === "rejected") {
       return {
         accepted: false,
+        targetTurnId: asString(outcome.activeTurnId) ?? asString(outcome.targetTurnId),
         reason: asString(outcome.reason) ?? "unknown reason"
       };
     }
@@ -1096,10 +1286,24 @@ class ZCodeTui {
     if (isRecord(result.selection)) await this.showSelection(result.selection);
   }
 
-  private onEvent(value: unknown): void {
+  private onEvent(value: unknown, turnEpoch?: number): void {
     this.debugEvent("session", value);
+    if (turnEpoch !== undefined && turnEpoch !== this.activeTurnEpoch) return;
     const event = normalizeEvent(value);
     if (!event) return;
+    const steerQueued = event.type === "turn_steer_queued" || event.type === "turn.steerQueued";
+    if (this.turnAbortController
+      && steerQueued
+      && event.inputId
+      && this.inputQueue.findSteer(event.inputId)
+      && event.targetTurnId
+      && !this.activeTurnId) {
+      this.activeTurnId = event.targetTurnId;
+    }
+    if ((event.type === "turn_started" || event.type === "turn.started")
+      && event.inputId === this.primaryTurnInputId) {
+      this.activeTurnId = event.turnId ?? event.targetTurnId ?? this.activeTurnId;
+    }
     if (runtimeRefreshNeeded(event)) this.scheduleRuntimeRefresh();
     if (this.inputQueue.handleLifecycleEvent(event)) {
       this.requestStreamRender();
@@ -1203,12 +1407,14 @@ class ZCodeTui {
         detail: event.message
       });
     } else if (event.type === "model_request_failed") {
-      this.updateActivity(
-        event.retryable === true ? "model request failed · waiting to retry…" : "model request failed…",
-        false
-      );
-      if (event.retryable !== true) {
-        this.addSystemEvent({ tone: "error", title: "Model request failed", detail: event.message });
+      if (!isModelCancellationEvent(event)) {
+        this.updateActivity(
+          event.retryable === true ? "model request failed · waiting to retry…" : "model request failed…",
+          false
+        );
+        if (event.retryable !== true) {
+          this.addSystemEvent({ tone: "error", title: "Model request failed", detail: event.message });
+        }
       }
     } else if (event.type === "model_stream_stalled") {
       this.updateActivity("model stream stalled · waiting to retry…", false);
@@ -3436,7 +3642,10 @@ class ZCodeTui {
   private stop(): void {
     if (this.stopped) return;
     this.stopped = true;
+    this.pendingSteerInterrupt = undefined;
     this.turnAbortController?.abort();
+    for (const controller of this.steerAbortControllers) controller.abort();
+    this.steerAbortControllers.clear();
     this.updateCheckAbortController?.abort();
     if (this.turnTimer) clearInterval(this.turnTimer);
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);

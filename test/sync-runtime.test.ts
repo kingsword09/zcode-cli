@@ -215,7 +215,7 @@ describe("runtime synchronization", () => {
       "async function L(e){if(!e.sessionStore)return[];let t=await e.sessionStore.messages({sessionID:e.sessionId});return p(t)}",
       'function p(e){let t=[];for(let r of e){if(r.info.role==="user"){let l=r.text;t.push({content:l,role:"user"});continue}let n=[],s=[],u=r.text;t.push({content:u,...s.length>0?{parts:s}:{},role:"agent"})}return t}',
       "function c(e,t){if(t.targetMessageId)return O(e,[t.targetMessageId]);let r=P(e,t.targetCheckpointId);return r?[r]:[]}",
-      "E.sendInput=async(A,$)=>{return Kvt(await S(),D,O1(t))},",
+      "E.sendInput=async(A,$)=>{let c=t.runtime.getActiveTurnInfo();if(c)return t.runtime.steerTurn({commandKind:$?.commandKind,inputId:$?.inputId,queryId:$?.queryId,expectedTurnId:$?.expectedTurnId,input:A});return Kvt(await S(),D,O1(t))},",
       "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
       "CVr(E,S,r);",
       "return c({recallPreviousInput:g.recallPreviousInput,sendInput:g.sendInput,submitPrompt:g})"
@@ -234,6 +234,21 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("E.cancelBackgroundTask=async e=>await(await S()).cancelBackgroundTask?.(e)??null");
     expect(patched).toContain("E.previewFileRewind=async e=>{let t=await S();return await t.runtime?.previewWorkspaceFileRewind?.({targetMessageIds:e})??null}");
     expect(patched).toContain("E.applyFileRewind=async e=>{let t=await S();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}");
+    expect(patched).toContain("E.interruptTurn=async e=>");
+    expect(patched).toContain("t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:");
+    expect(patched).toContain("await t.reserveQueueItem(a,r)");
+    expect(patched).toContain(
+      "expectedTurnId:$?.expectedTurnId,delivery:\"guide\",pendingInputId:$?.pendingInputId,input:A"
+    );
+    expect(patched).toContain("E.promoteQueuedInput=async(e,t,r)=>");
+    expect(patched).toContain("r?.pendingInputReservationId??r?.queryId");
+    expect(patched).toContain("i=(Array.isArray(t)?t:[t]).filter(Boolean)");
+    expect(patched).toContain("o.reserveQueueItem(l,n)");
+    expect(patched).toContain("if(await o.markQueueItemPromoting(l,n))");
+    expect(patched).toContain("o.markQueueItemPromoting(l,n)");
+    expect(patched).toContain('E.sendInput(e,{...r,delivery:"start_turn"})');
+    expect(patched).toContain('o.removeQueueItem(l,{reason:"promoted",reservationId:n})');
+    expect(patched).toContain("o.releaseQueueItemReservation(l,n)");
     expect(patched).toContain('messageId:r.info.id,role:"user"');
     expect(patched).toContain('messageId:r.info.id,role:"agent"');
     expect(patched).toContain("Array.isArray(t.targetMessageIds)");
@@ -246,6 +261,8 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("cancelBackgroundTask:g.cancelBackgroundTask");
     expect(patched).toContain("previewFileRewind:g.previewFileRewind");
     expect(patched).toContain("applyFileRewind:g.applyFileRewind");
+    expect(patched).toContain("interruptTurn:g.interruptTurn");
+    expect(patched).toContain("promoteQueuedInput:g.promoteQueuedInput");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);
