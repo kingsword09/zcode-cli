@@ -308,7 +308,7 @@ export class Transcript implements Component {
         const pages = Math.max(1, Math.ceil(totalLines / this.navigationViewportRows));
         this.page = Math.min(this.page, pages - 1);
         if (pages > 1) {
-          lines.push(truncateToWidth(`── Page ${this.page + 1}/${pages} · PageUp/PageDown scroll ──`, width));
+          lines.push(truncateToWidth(`── Page ${this.page + 1}/${pages} · ←/→ or PageUp/PageDown scroll ──`, width));
         }
         const start = this.page * this.navigationViewportRows;
         if (windowed) {

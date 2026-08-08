@@ -254,8 +254,8 @@ try {
   await sendAndWait("/search inspect\r", "transcript search", /Search 1\/\d+: inspect/i);
   await sendAndWait("n", "next transcript search match", /Search 2\/\d+: inspect/i);
   await sendAndSettle("\x1b");
-  await sendAndWait("/search Slash commands\r", "oversized transcript match", /Page 1\/\d+ · PageUp\/PageDown scroll/i);
-  await sendAndWait("\x1b[6~", "transcript PageDown", /Page 2\/\d+ · PageUp\/PageDown scroll/i);
+  await sendAndWait("/search Slash commands\r", "oversized transcript match", /Page 1\/\d+ · ←\/→ or PageUp\/PageDown scroll/i);
+  await sendAndWait("\x1b[C", "transcript scroll right", /Page 2\/\d+ · ←\/→ or PageUp\/PageDown scroll/i);
   await sendAndSettle("\x1b");
 
   await sendAndWait("/mcp\r", "MCP picker", /MCP servers/i);
@@ -357,7 +357,7 @@ for (const [label, pattern] of [
   ["status detail", /ZCode Status/i],
   ["transcript navigation", /Transcript \d+\/\d+/i],
   ["transcript search navigation", /Search 2\/\d+: inspect/i],
-  ["transcript page navigation", /Page 2\/\d+ · PageUp\/PageDown scroll/i],
+  ["transcript page navigation", /Page 2\/\d+ · ←\/→ or PageUp\/PageDown scroll/i],
   ["removed diff line", /│- const value = 1;/i],
   ["added diff line", /│\+ const value = 2;/i],
   ["final assistant response", /Feature prompt complete\./i],

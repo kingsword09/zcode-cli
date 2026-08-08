@@ -106,7 +106,7 @@ class ChoiceDialog implements Component {
         ...visibleContent,
         "",
         ...wrapTerminalText(
-          this.theme.muted("Up/Down scroll · PgUp/PgDn page · Home/End jump · Ctrl+O or Esc return"),
+          this.theme.muted("Up/Down scroll · ←/→ or PgUp/PgDn page · Home/End jump · Ctrl+O or Esc return"),
           safeWidth
         )
       ];
@@ -145,11 +145,11 @@ class ChoiceDialog implements Component {
         this.scrollContent(1);
         return;
       }
-      if (keybindings.matches(data, "tui.select.pageUp")) {
+      if (keybindings.matches(data, "tui.select.pageUp") || matchesKey(data, "left")) {
         this.scrollContent(-Math.max(1, this.contentPageSize - 1));
         return;
       }
-      if (keybindings.matches(data, "tui.select.pageDown")) {
+      if (keybindings.matches(data, "tui.select.pageDown") || matchesKey(data, "right")) {
         this.scrollContent(Math.max(1, this.contentPageSize - 1));
         return;
       }
@@ -164,11 +164,11 @@ class ChoiceDialog implements Component {
       if (keybindings.matches(data, "tui.select.cancel")) this.list.handleInput(data);
       return;
     }
-    if (keybindings.matches(data, "tui.select.pageUp")) {
+    if (keybindings.matches(data, "tui.select.pageUp") || matchesKey(data, "left")) {
       this.scrollContent(-Math.max(1, this.contentPageSize - 1));
       return;
     }
-    if (keybindings.matches(data, "tui.select.pageDown")) {
+    if (keybindings.matches(data, "tui.select.pageDown") || matchesKey(data, "right")) {
       this.scrollContent(Math.max(1, this.contentPageSize - 1));
       return;
     }
@@ -230,7 +230,7 @@ class ChoiceDialog implements Component {
       `${this.contentLabel} ${this.contentOffset + 1}–${end} of ${totalLines}`,
       above > 0 ? `↑ ${above}` : undefined,
       below > 0 ? `↓ ${below}` : undefined,
-      "PgUp/PgDn scroll"
+      "←/→ or PgUp/PgDn scroll"
     ].filter((value): value is string => Boolean(value)).join(" · ");
     return [
       ...read(this.contentOffset, end - this.contentOffset)
@@ -306,7 +306,7 @@ export function choose(
       sanitizeTerminalText(options.prompt, { preserveSgr: false }),
       sanitizeTerminalText(
         options.help ?? (hasDetails
-          ? "Type to filter · Up/Down choose · Ctrl+O details · PgUp/PgDn scroll · Enter confirm · Esc cancel"
+          ? "Type to filter · Up/Down choose · Ctrl+O details · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc cancel"
           : "Type to filter · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear"),
         { preserveSgr: false }
       ),

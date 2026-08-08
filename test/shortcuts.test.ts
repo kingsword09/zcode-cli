@@ -6,7 +6,8 @@ import {
   nextMode,
   nextPickerCommand,
   normalizedMode,
-  settingTargetForCommand
+  settingTargetForCommand,
+  transcriptPageDirection
 } from "../packages/zcode-tui/src/shortcuts.ts";
 
 describe("TUI shortcuts", () => {
@@ -44,5 +45,14 @@ describe("TUI shortcuts", () => {
     expect(nextPickerCommand(picker, "beta")).toBe("/set alpha");
     expect(nextPickerCommand(picker, "missing")).toBe("/set alpha");
     expect(nextPickerCommand({ ...picker, items: picker.items.slice(0, 1) }, "alpha")).toBeUndefined();
+  });
+
+  test("pages transcript content on key presses without repeating on Kitty releases", () => {
+    expect(transcriptPageDirection("\x1b[D")).toBe(-1);
+    expect(transcriptPageDirection("\x1b[C")).toBe(1);
+    expect(transcriptPageDirection("\x1b[5~")).toBe(-1);
+    expect(transcriptPageDirection("\x1b[6~")).toBe(1);
+    expect(transcriptPageDirection("\x1b[1;1:1C")).toBe(1);
+    expect(transcriptPageDirection("\x1b[1;1:3C")).toBeUndefined();
   });
 });

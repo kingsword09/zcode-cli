@@ -217,9 +217,9 @@ picker to return to input selection, then `Esc` again to close rewind.
 While the editor is empty, `Alt+Up` and `Alt+Down` navigate selected transcript
 blocks. `Ctrl+O` expands only the selected/search-matched block; without a
 selection it toggles all expandable content. During transcript search, `n` and
-`N` move to the next and previous match. `PageUp` and `PageDown` page through
-an oversized selected block without rendering the entire message at once.
-`Esc` leaves search or transcript navigation.
+`N` move to the next and previous match. `Left`/`Right` (or `PageUp` and
+`PageDown`) page through an oversized selected block without rendering the
+entire message at once. `Esc` leaves search or transcript navigation.
 
 ## Requirements
 

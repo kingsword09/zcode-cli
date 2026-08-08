@@ -12,6 +12,7 @@ import {
 import {
   Container,
   Editor,
+  isKeyRelease,
   Markdown,
   matchesKey,
   ProcessTerminal,
@@ -156,6 +157,7 @@ import {
   nextPickerCommand,
   normalizedMode,
   settingTargetForCommand,
+  transcriptPageDirection,
   type Mode,
   type SettingTarget
 } from "./shortcuts.ts";
@@ -692,6 +694,8 @@ class ZCodeTui {
       if (this.attachmentBar.isActive()) return undefined;
       if (this.choiceDepth > 0) return undefined;
       if (this.rewindFlowActive) return { consume: true };
+      // Input listeners run before TUI's key-release filter; avoid repeating global actions.
+      if (isKeyRelease(data)) return undefined;
       if (!matchesKey(data, "escape")) {
         this.clearRewindEscape();
         this.recentSteerCommit = undefined;
@@ -743,10 +747,11 @@ class ZCodeTui {
         this.ui.requestRender(true);
         return { consume: true };
       }
+      const transcriptPage = transcriptPageDirection(data);
       if (!this.editor.getText() && (this.transcript.searchStatus() || this.transcript.cursorStatus())
-        && (matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))) {
+        && transcriptPage !== undefined) {
         this.prepareTranscriptViewport();
-        this.transcript.movePage(matchesKey(data, "pageUp") ? -1 : 1, this.ui.terminal.columns);
+        this.transcript.movePage(transcriptPage, this.ui.terminal.columns);
         this.ui.requestRender(true);
         return { consume: true };
       }
@@ -2411,7 +2416,7 @@ class ZCodeTui {
       ],
       signal,
       contentLabel: "Plan",
-      help: "Up/Down choose · Ctrl+O full plan · PgUp/PgDn scroll · Enter confirm · Esc cancel",
+      help: "Up/Down choose · Ctrl+O full plan · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc cancel",
       content: plan ? new RichMarkdown(plan, 1, this.theme) : this.permissionPreview("ExitPlanMode", input)
     });
     if (!selected || selected.value === "deny") return { decision: "deny", reason: "Plan approval cancelled" };

@@ -1,3 +1,5 @@
+import { isKeyRelease, matchesKey } from "@earendil-works/pi-tui";
+
 import type { PickerSpec } from "./selectors.ts";
 
 export const modes = ["build", "edit", "yolo", "plan"] as const;
@@ -31,4 +33,11 @@ export function nextPickerCommand(picker: PickerSpec, currentValue?: string): st
   const currentIndex = picker.items.findIndex((item) => item.value === currentValue);
   const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % picker.items.length;
   return picker.items[nextIndex]?.command;
+}
+
+export function transcriptPageDirection(data: string): -1 | 1 | undefined {
+  if (isKeyRelease(data)) return undefined;
+  if (matchesKey(data, "pageUp") || matchesKey(data, "left")) return -1;
+  if (matchesKey(data, "pageDown") || matchesKey(data, "right")) return 1;
+  return undefined;
 }
