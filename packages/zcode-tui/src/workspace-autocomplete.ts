@@ -6,9 +6,15 @@ import {
   type SlashCommand
 } from "@earendil-works/pi-tui";
 
-import { isRecord, type ListWorkspacePathSuggestions } from "./types.ts";
+import {
+  isRecord,
+  type ListSkills,
+  type ListWorkspacePathSuggestions
+} from "./types.ts";
+import { SkillCatalog } from "./skills.ts";
 
 const workspaceSuggestionLimit = 50;
+const skillSuggestionLimit = 50;
 const controlCharacterPattern = /[\u0000-\u001f\u007f]/u;
 const windowsDrivePattern = /^[a-zA-Z]:(?:\/|$)/u;
 
@@ -18,19 +24,29 @@ interface WorkspaceAtPrefix {
   quoted: boolean;
 }
 
+interface SkillDollarPrefix {
+  prefix: string;
+  query: string;
+}
+
 /**
  * Adds official-runtime workspace suggestions to pi-tui without replacing its
- * slash-command, local path or completion-editing behavior.
+ * slash-command, local path or completion-editing behavior. Also serves the
+ * `$`-prefix skill picker by delegating to the runtime `listSkills` callback.
  */
 export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
   private readonly fallback: CombinedAutocompleteProvider;
+  private readonly skills: SkillCatalog;
+  public readonly triggerCharacters: string[] = ["$"];
 
   constructor(
     commands: (AutocompleteItem | SlashCommand)[] | undefined,
     basePath: string,
-    private readonly listWorkspacePathSuggestions?: ListWorkspacePathSuggestions
+    private readonly listWorkspacePathSuggestions?: ListWorkspacePathSuggestions,
+    skillSource?: ListSkills | SkillCatalog
   ) {
     this.fallback = new CombinedAutocompleteProvider(commands, basePath, null);
+    this.skills = skillSource instanceof SkillCatalog ? skillSource : new SkillCatalog(skillSource);
   }
 
   async getSuggestions(
@@ -40,6 +56,28 @@ export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
     options: { signal: AbortSignal; force?: boolean }
   ): Promise<AutocompleteSuggestions | null> {
     const currentLine = lines[cursorLine] ?? "";
+
+    const skillPrefix = extractSkillDollarPrefix(currentLine.slice(0, cursorCol));
+    if (skillPrefix) {
+      const skills = await this.skills.list();
+      if (options.signal.aborted) return null;
+
+      const normalizedQuery = skillPrefix.query.toLowerCase();
+      const items = skills
+        .filter((skill) => (
+          normalizedQuery.length === 0
+          || skill.name.toLowerCase().startsWith(normalizedQuery)
+          || skill.identifier.toLowerCase().startsWith(normalizedQuery)
+        ))
+        .slice(0, skillSuggestionLimit)
+        .map((skill) => ({
+          value: `$${skill.identifier}`,
+          label: skill.identifier,
+          ...(skill.description ? { description: skill.description } : {})
+        }));
+      return items.length > 0 ? { items, prefix: skillPrefix.prefix } : null;
+    }
+
     const atPrefix = extractWorkspaceAtPrefix(currentLine.slice(0, cursorCol));
     if (!atPrefix || !this.listWorkspacePathSuggestions) {
       return await this.fallback.getSuggestions(lines, cursorLine, cursorCol, options);
@@ -69,6 +107,22 @@ export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
     item: AutocompleteItem,
     prefix: string
   ): { lines: string[]; cursorLine: number; cursorCol: number } {
+    if (prefix.startsWith("$")) {
+      // Skill completions are simple identifiers; insert the value followed by a
+      // single trailing space so the user can keep typing their prompt.
+      const currentLine = lines[cursorLine] ?? "";
+      const beforePrefix = currentLine.slice(0, cursorCol - prefix.length);
+      const afterCursor = currentLine.slice(cursorCol);
+      const suffix = /^\s/u.test(afterCursor) ? "" : " ";
+      const newLine = `${beforePrefix}${item.value}${suffix}${afterCursor}`;
+      const newLines = [...lines];
+      newLines[cursorLine] = newLine;
+      return {
+        lines: newLines,
+        cursorLine,
+        cursorCol: beforePrefix.length + item.value.length + suffix.length
+      };
+    }
     return this.fallback.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
   }
 
@@ -101,6 +155,26 @@ function extractWorkspaceAtPrefix(textBeforeCursor: string): WorkspaceAtPrefix |
   }
   if (/\s/u.test(prefix) || prefix.includes('"')) return undefined;
   return { callbackToken: prefix, prefix, quoted: false };
+}
+
+function extractSkillDollarPrefix(textBeforeCursor: string): SkillDollarPrefix | undefined {
+  let marker = -1;
+  for (let index = textBeforeCursor.length - 1; index >= 0; index -= 1) {
+    if (
+      textBeforeCursor[index] === "$" &&
+      (index === 0 || textBeforeCursor[index - 1] === " " || textBeforeCursor[index - 1] === "\t")
+    ) {
+      marker = index;
+      break;
+    }
+  }
+  if (marker < 0) return undefined;
+
+  const prefix = textBeforeCursor.slice(marker);
+  // Skill tokens are simple identifiers (and qualifiedName uses ":"); they never
+  // contain whitespace or quotes. Bail out to let the fallback handle the input.
+  if (/\s/u.test(prefix) || prefix.includes('"')) return undefined;
+  return { prefix, query: prefix.slice(1) };
 }
 
 function normalizeWorkspaceSuggestions(result: unknown, preserveQuotes: boolean): AutocompleteItem[] {

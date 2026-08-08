@@ -47,6 +47,23 @@ export type ListWorkspacePathSuggestions = (
   request: WorkspacePathSuggestionRequest
 ) => Promise<WorkspacePathSuggestionResult>;
 
+export interface SkillSuggestion {
+  name: string;
+  description?: string;
+  qualifiedName?: string;
+  whenToUse?: string;
+  source?: string;
+  scope?: string;
+}
+
+export interface SkillSuggestionResult {
+  skills: SkillSuggestion[];
+  diagnostics?: unknown[];
+  totalDiscovered?: number;
+}
+
+export type ListSkills = () => Promise<SkillSuggestionResult>;
+
 export interface TuiOptions {
   initialMode?: string;
   initialModel?: unknown;
@@ -67,6 +84,7 @@ export interface TuiOptions {
   stderr?: NodeJS.WriteStream;
   loadSessionTranscript?: () => Promise<unknown>;
   listWorkspacePathSuggestions?: ListWorkspacePathSuggestions;
+  listSkills?: ListSkills;
   recallPreviousInput?: (skip: number) => Promise<unknown>;
   readGoal?: () => Promise<unknown>;
   readTodos?: () => Promise<unknown>;

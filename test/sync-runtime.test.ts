@@ -216,6 +216,7 @@ describe("runtime synchronization", () => {
       'function p(e){let t=[];for(let r of e){if(r.info.role==="user"){let l=r.text;t.push({content:l,role:"user"});continue}let n=[],s=[],u=r.text;t.push({content:u,...s.length>0?{parts:s}:{},role:"agent"})}return t}',
       "function c(e,t){if(t.targetMessageId)return O(e,[t.targetMessageId]);let r=P(e,t.targetCheckpointId);return r?[r]:[]}",
       "E.sendInput=async(A,$)=>{let c=t.runtime.getActiveTurnInfo();if(c)return t.runtime.steerTurn({commandKind:$?.commandKind,inputId:$?.inputId,queryId:$?.queryId,expectedTurnId:$?.expectedTurnId,input:A});return Kvt(await S(),D,O1(t))},",
+      'listSkills:k(()=>H(e),"listSkills"),',
       "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
       "CVr(E,S,r);",
       "return c({recallPreviousInput:g.recallPreviousInput,sendInput:g.sendInput,submitPrompt:g})"
@@ -227,6 +228,7 @@ describe("runtime synchronization", () => {
     const patched = patchRuntimeTuiBridge(runtimeWithApp);
 
     expect(patched).toContain("E.loadSessionTranscript=async()=>await(await S()).loadSessionTranscript?.()??[]");
+    expect(patched).toContain("E.listSkills=async()=>await H(e)");
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
     expect(patched).toContain("E.readTodos=async()=>await(await S()).readTodos?.()??[]");
     expect(patched).toContain("E.readRuntimeProjection=async()=>{let e=await S();return e.runtime?.getProjection?.()??null}");
@@ -263,6 +265,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("applyFileRewind:g.applyFileRewind");
     expect(patched).toContain("interruptTurn:g.interruptTurn");
     expect(patched).toContain("promoteQueuedInput:g.promoteQueuedInput");
+    expect(patched).toContain("listSkills:g.listSkills");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);

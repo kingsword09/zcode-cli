@@ -85,7 +85,7 @@ bytes.
 ## Features
 
 **Editor and input.** pi-tui differential rendering with a CJK-aware
-multi-line editor; slash-command and workspace-path completion; persisted
+multi-line editor; slash-command, workspace-path and `$` Skill completion; persisted
 prompt history through ZCode's history API; `--no-color` and `NO_COLOR`
 support.
 
@@ -144,6 +144,23 @@ Compare @src/index.ts with @"docs/design notes.md"
 Suggestions come from the official ZCode runtime, stay inside the current
 workspace and exclude common repository metadata and dependency directories.
 Paths containing spaces are inserted in the quoted `@"..."` form.
+
+### Invoking skills
+
+Type `$` at the start of the prompt or after whitespace to open the Skill
+picker. Continue typing a name, use Up/Down to choose a candidate, then press
+Tab or Enter to insert it.
+
+```text
+$audit review the current changes
+Use $browser-use:control-browser to verify the page
+```
+
+The picker uses the official runtime's Skill catalog and inserts plugin Skills
+with their qualified names. On submission, exact `$name` matches are converted
+into a request that loads each selected Skill through the runtime's `Skill`
+tool before carrying out the visible user request. Unknown `$` tokens remain
+ordinary prompt text.
 
 ### Active-turn input
 

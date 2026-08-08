@@ -19,6 +19,7 @@ let output = "";
 const temporaryHome = await mkdtemp(join(tmpdir(), "zcode-cli-smoke-"));
 const configPath = join(temporaryHome, ".zcode", "cli", "config.json");
 const updateCachePath = join(temporaryHome, ".zcode", "cli", "version.json");
+const smokeSkillPath = join(temporaryHome, ".agents", "skills", "smoke-review", "SKILL.md");
 const availableVersion = nextBuildVersion(packageVersion);
 const smokeApiKey = "smoke-api-key-not-real";
 const command = process.argv[2]
@@ -34,10 +35,19 @@ const terminal = new Bun.Terminal({
 });
 
 await mkdir(dirname(updateCachePath), { recursive: true });
+await mkdir(dirname(smokeSkillPath), { recursive: true });
 await writeFile(updateCachePath, `${JSON.stringify({
   latestVersion: availableVersion,
   lastCheckedAt: new Date().toISOString()
 })}\n`);
+await writeFile(smokeSkillPath, [
+  "---",
+  "name: smoke-review",
+  "description: Review the runtime Skill bridge.",
+  "---",
+  "",
+  "Review the requested change."
+].join("\n"));
 
 const child = Bun.spawn(command, {
   cwd: root,
@@ -158,6 +168,10 @@ try {
     || initialConfig.provider?.zai?.options?.apiKey !== undefined) {
     throw new Error("The launcher created an invalid initial config.json.");
   }
+  await sendAndWait("$smoke", "runtime skill suggestions", /smoke-review[\s\S]*Review the runtime Skill bridge\./i);
+  await sendAndWait("\r", "runtime skill completion", /\$smoke-review/i);
+  terminal.write("\x15");
+  await Bun.sleep(50);
   await sendAndWait("/login\r", "login setup picker", /Set Up Coding Plan|配置 Coding Plan/i);
   await sendAndWait("\x1b[B\x1b[B\r", "masked API key prompt", /Enter Z\.AI Coding Plan API Key|输入 Z\.AI Coding Plan API Key/i);
   await sendAndWait(smokeApiKey, "masked API key value", /\*{20,}/i);
@@ -217,6 +231,9 @@ if (!plain.includes(`Update available! ${packageVersion} → ${availableVersion}
 }
 if (!/custom provider/i.test(plain)) {
   throw new Error(`The custom-provider configuration hint was not rendered.\n${plain.slice(-4_000)}`);
+}
+if (!/smoke-review[\s\S]*Review the runtime Skill bridge\./i.test(plain)) {
+  throw new Error(`The runtime Skill picker was not rendered.\n${plain.slice(-4_000)}`);
 }
 if (!/Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan/i.test(plain)) {
   throw new Error(`The masked API-key setup did not complete.\n${plain.slice(-4_000)}`);

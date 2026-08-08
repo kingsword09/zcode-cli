@@ -133,6 +133,7 @@ import {
   type ProtectedSubmission,
   type SelectionCommand
 } from "./selection-command.ts";
+import { SkillCatalog } from "./skills.ts";
 import {
   isActiveBackgroundJob,
   normalizeRuntimeProjection,
@@ -323,6 +324,7 @@ class ZCodeTui {
   private readonly editor: Editor;
   private readonly assistantStream: AssistantStream;
   private readonly notifications: TurnNotifier;
+  private readonly skillCatalog: SkillCatalog;
   private readonly done: Promise<void>;
   private resolveDone!: () => void;
   private stopped = false;
@@ -412,6 +414,7 @@ class ZCodeTui {
     this.modelOptions = [...(options.modelOptions ?? [])];
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.loginRequired = options.loginRequired === true;
+    this.skillCatalog = new SkillCatalog(options.listSkills);
     this.ui = new TUI(new ProcessTerminal(), true);
     this.notifications = new TurnNotifier({
       writeTerminal: (data) => this.ui.terminal.write(data)
@@ -543,7 +546,8 @@ class ZCodeTui {
       new WorkspaceAutocompleteProvider(
         commands,
         this.options.workspaceDirectory ?? process.cwd(),
-        this.options.listWorkspacePathSuggestions
+        this.options.listWorkspacePathSuggestions,
+        this.skillCatalog
       )
     );
     this.editor.onSubmit = (text) => void this.submit(text);
@@ -938,6 +942,11 @@ class ZCodeTui {
       return;
     }
 
+    const skillPrompt = input.startsWith("/")
+      ? undefined
+      : await this.skillCatalog.preparePrompt(input);
+    const runtimeInput = skillPrompt?.text ?? input;
+
     this.transcript.clearSearch();
     this.transcript.clearCursor();
 
@@ -1013,13 +1022,13 @@ class ZCodeTui {
     try {
       if (input.startsWith("/") || !this.options.sendInput) {
         const result = await this.options.submitPrompt(
-          input.startsWith("/") ? input : promptInput(input, attachments),
+          input.startsWith("/") ? input : promptInput(runtimeInput, attachments),
           callOptions
         );
         await this.handleResult(result, true, settingTargetForCommand(input));
         accepted = true;
       } else {
-        const preparedInput = promptInput(input, attachments);
+        const preparedInput = promptInput(runtimeInput, attachments);
         const outcome = queuedSubmission?.pendingInputIds?.length && this.options.promoteQueuedInput
           ? await this.options.promoteQueuedInput(
               preparedInput,

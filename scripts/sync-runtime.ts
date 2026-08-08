@@ -143,6 +143,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const activeTranscriptPattern = /sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u;
   const activeTurnSteerPattern = /(\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\2\?\.inputId,queryId:\2\?\.queryId,expectedTurnId:\2\?\.expectedTurnId,)(?:delivery:"guide",)?(?:pendingInputId:\2\?\.pendingInputId,)?input:/u;
   const activeTurnGuidePattern = /\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\1\?\.inputId,queryId:\1\?\.queryId,expectedTurnId:\1\?\.expectedTurnId,delivery:"guide",pendingInputId:\1\?\.pendingInputId,input:/u;
+  const listSkillsBridgePattern = /\.listSkills=async\(\)=>await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)/u;
+  const listSkillsOptionPattern = /listSkills:[A-Za-z_$][\w$]*\.listSkills/u;
   const interruptTurnMarker = ".interruptTurn=async e=>";
   const queuedInputPromotionMarker = "r?.pendingInputReservationId??r?.queryId??";
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
@@ -170,7 +172,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && /applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtime)
     && /interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(runtime)
     && /promoteQueuedInput:[A-Za-z_$][\w$]*\.promoteQueuedInput/u.test(runtime)
-    && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime);
+    && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime)
+    && listSkillsBridgePattern.test(runtime)
+    && listSkillsOptionPattern.test(runtime);
   if (alreadyPatched) return runtime;
 
   let patched = runtime;
@@ -251,6 +255,14 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   const [recallAssignment, bridge, , getApp] = assignment;
   const assignments: string[] = [];
+  if (!listSkillsBridgePattern.test(patched)) {
+    const listSkillsFactory = /listSkills:[A-Za-z_$][\w$]*\(\(\)=>([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),"listSkills"\)/u
+      .exec(patched);
+    if (!listSkillsFactory) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (skill-list adapter anchor missing).");
+    }
+    assignments.push(`${bridge}.listSkills=async()=>await ${listSkillsFactory[1]}(${listSkillsFactory[2]})`);
+  }
   const interruptAssignment = `${bridge}.interruptTurn=async e=>{let t=await ${getApp}(),r=e?.reservationId??"tui-steer-interrupt",o=(Array.isArray(e?.pendingInputIds)?e.pendingInputIds:[]).filter(Boolean),n=[],i=async()=>{for(let a of n)await t.releaseQueueItemReservation?.(a,r);n=[]};try{if(t.reserveQueueItem&&t.releaseQueueItemReservation)for(let a of o)if(await t.reserveQueueItem(a,r))n.push(a);else{await i();break}let a=t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:o.length>0&&n.length===o.length,reason:e?.reason??"TUI steer interrupt"})??{kind:"unsupported"};return a.kind!=="stopped"&&await i(),a}catch(a){await i();throw a}}`;
   const promotionAssignment = `${bridge}.promoteQueuedInput=async(e,t,r)=>{let o=await ${getApp}(),n=r?.pendingInputReservationId??r?.queryId??r?.inputId??"tui-promotion",i=(Array.isArray(t)?t:[t]).filter(Boolean);if(i.length===0||!o.reserveQueueItem||!o.markQueueItemPromoting||!o.releaseQueueItemReservation||!o.removeQueueItem)return ${bridge}.sendInput(e,{...r,delivery:"start_turn"});let a=[],u=!1;try{for(let l of i){if(await o.markQueueItemPromoting(l,n)){a.push(l);continue}if(!await o.reserveQueueItem(l,n))throw new Error("TUI queued input is already reserved: "+l);a.push(l);if(!await o.markQueueItemPromoting(l,n))throw new Error("TUI queued input promotion failed: "+l)}let c=await ${bridge}.sendInput(e,{...r,delivery:"start_turn"});if(c?.kind==="rejected")return c;u=!0;for(let l of a)if(!await o.removeQueueItem(l,{reason:"promoted",reservationId:n}))throw new Error("TUI queued input promotion commit failed: "+l);return c}finally{if(!u)for(let l of a)await o.releaseQueueItemReservation(l,n)}}`;
   if (!patched.includes(".loadSessionTranscript=async()=>await(await")) {
@@ -330,6 +342,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/promoteQueuedInput:[A-Za-z_$][\w$]*\.promoteQueuedInput/u.test(patched)) {
     optionFields.push(`promoteQueuedInput:${submitBridge}.promoteQueuedInput`);
+  }
+  if (!listSkillsOptionPattern.test(patched)) {
+    optionFields.push(`listSkills:${submitBridge}.listSkills`);
   }
   if (optionFields.length > 0) {
     patched = patched.replace(optionsAssignment, `${optionFields.join(",")},${optionsAssignment}`);

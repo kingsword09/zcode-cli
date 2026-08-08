@@ -139,6 +139,9 @@ await runTui({
       ? { items: [{ kind: "file" as const, path: "src/index.ts" }], truncated: false }
       : { items: [], truncated: false };
   },
+  listSkills: async () => ({
+    skills: [{ name: "audit", description: "Review technical quality." }]
+  }),
   refreshWorkflowPanel: async () => workflowPanel(),
   stopWorkflow: async () => workflowPanel("cancelled"),
   readGoal: async () => goal,
@@ -289,11 +292,14 @@ await runTui({
     const attachments = Array.isArray(prompt.attachments) ? prompt.attachments : [];
     const image = attachments[0] as Record<string, unknown> | undefined;
     if (
-      promptText !== "inspect @src/index.ts" ||
+      typeof promptText !== "string" ||
+      !promptText.startsWith("Use the skill named `audit` for this turn.\n") ||
+      !promptText.includes("First call the `Skill` tool with name `audit` before doing the task.\n") ||
+      !promptText.endsWith("User request:\ninspect @src/index.ts $audit") ||
       image?.type !== "image" ||
       typeof image.content !== "string"
     ) {
-      throw new Error("Feature smoke prompt did not include the selected file and image attachment.");
+      throw new Error("Feature smoke prompt did not include the selected file, skill and image attachment.");
     }
     featureTurnActive = true;
     await emitRuntime(options, "turn_started", {

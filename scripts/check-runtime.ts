@@ -27,6 +27,7 @@ if (runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 
   || !runtimeSource.includes(".cancelBackgroundTask=async")
   || !runtimeSource.includes(".previewFileRewind=async e=>")
   || !runtimeSource.includes(".applyFileRewind=async e=>")
+  || !runtimeSource.includes(".listSkills=async()=>await")
   || !supportsMultiMessageFileRewind(runtimeSource)
   || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"/u.test(runtimeSource)
   || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u.test(runtimeSource)
@@ -38,7 +39,8 @@ if (runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 
   || !/readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtimeSource)
   || !/cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(runtimeSource)
   || !/previewFileRewind:[A-Za-z_$][\w$]*\.previewFileRewind/u.test(runtimeSource)
-  || !/applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtimeSource)) {
+  || !/applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtimeSource)
+  || !/listSkills:[A-Za-z_$][\w$]*\.listSkills/u.test(runtimeSource)) {
   throw new Error("The runtime compatibility patches are missing; run `bun run sync` again.");
 }
 

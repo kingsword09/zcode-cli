@@ -159,6 +159,8 @@ try {
   await sendAndWait("\x1b", "attachment command return", /Images · \[Image #1\] · \[Image #2\][\s\S]*↑ manage/i);
   await sendAndWait("inspect @ind", "workspace path suggestions", /index\.ts[\s\S]*src\/index\.ts/i);
   await sendAndWait("\r", "workspace path completion", /inspect @src\/index\.ts/i);
+  await sendAndWait("$au", "skill suggestions", /audit[\s\S]*Review technical quality\./i);
+  await sendAndWait("\r", "skill completion", /inspect @src\/index\.ts \$audit/i);
   await sendAndSettle("\x01");
   await sendAndWait(
     "\x1b[A",
@@ -172,7 +174,7 @@ try {
   const featureTurnStart = await sendAndWait(
     "\r",
     "submitted image turn",
-    /›\s*inspect @src\/index\.ts\s+\[1 image\][\s\S]*◇ Thought/i,
+    /›\s*inspect @src\/index\.ts \$audit\s+\[1 image\][\s\S]*◇ Thought/i,
     4_000
   );
   const activeTurnProjection = plainText(output.slice(featureTurnStart));
@@ -335,6 +337,8 @@ for (const [label, pattern] of [
   ["attachment selection", /› \[Image #2\][\s\S]*Backspace\/Delete remove/i],
   ["attachment navigation", /› \[Image #1\]/i],
   ["workspace file reference", /›\s*inspect @src\/index\.ts/i],
+  ["skill reference", /›\s*inspect @src\/index\.ts \$audit/i],
+  ["skill picker", /audit[\s\S]*Review technical quality\./i],
   ["pending active-turn steering", /Steering current turn · 1 waiting[\s\S]*Keep the final response concise\./i],
   ["committed active-turn steering", /› Keep the final response concise\./i],
   ["rejected steer fallback", /Steer was not accepted \(turn not steerable\); queued for the next turn\./i],
