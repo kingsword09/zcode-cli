@@ -64,6 +64,8 @@ export interface SkillSuggestionResult {
 
 export type ListSkills = () => Promise<SkillSuggestionResult>;
 
+export type ListPluginReferences = () => Promise<unknown>;
+
 export interface TuiOptions {
   initialMode?: string;
   initialModel?: unknown;
@@ -83,6 +85,7 @@ export interface TuiOptions {
   stdout?: NodeJS.WriteStream;
   stderr?: NodeJS.WriteStream;
   loadSessionTranscript?: () => Promise<unknown>;
+  listPluginReferences?: ListPluginReferences;
   listWorkspacePathSuggestions?: ListWorkspacePathSuggestions;
   listSkills?: ListSkills;
   recallPreviousInput?: (skip: number) => Promise<unknown>;

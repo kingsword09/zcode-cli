@@ -10,7 +10,8 @@ import {
   normalizeLoginArgs,
   readDistributionVersion,
   readRuntimeVersion,
-  resolveModelRetryMaxRetries
+  resolveModelRetryMaxRetries,
+  withDefaultBrowserUse
 } from "../src/launcher.ts";
 import { classifyZaiOAuthInvocation } from "../src/zai-oauth.ts";
 
@@ -68,6 +69,80 @@ describe("launcher routing", () => {
       args: ["login", "--no-browser"],
       checkConfiguredAccess: false
     });
+  });
+
+  test("enables Browser Use only for agent-producing runtime invocations", () => {
+    expect(withDefaultBrowserUse([])).toEqual(["--browser-use=headless"]);
+    expect(withDefaultBrowserUse(["tui"])).toEqual(["--browser-use=headless", "tui"]);
+    expect(withDefaultBrowserUse(["--cwd", "/tmp/project", "--continue"])).toEqual([
+      "--browser-use=headless",
+      "--cwd",
+      "/tmp/project",
+      "--continue"
+    ]);
+    expect(withDefaultBrowserUse(["--prompt", "inspect this page"])).toEqual([
+      "--browser-use=headless",
+      "--prompt",
+      "inspect this page"
+    ]);
+    expect(withDefaultBrowserUse(["--target=verify the site"])).toEqual([
+      "--browser-use=headless",
+      "--target=verify the site"
+    ]);
+    expect(withDefaultBrowserUse(["--print", "inspect this page"])).toEqual([
+      "--browser-use=headless",
+      "--print",
+      "inspect this page"
+    ]);
+    expect(withDefaultBrowserUse([
+      "--settings",
+      "custom.json",
+      "--permission-mode",
+      "plan",
+      "--max-turns",
+      "3",
+      "--allowed-tools",
+      "Skill",
+      "--prompt",
+      "inspect this page"
+    ])).toEqual([
+      "--browser-use=headless",
+      "--settings",
+      "custom.json",
+      "--permission-mode",
+      "plan",
+      "--max-turns",
+      "3",
+      "--allowed-tools",
+      "Skill",
+      "--prompt",
+      "inspect this page"
+    ]);
+    expect(withDefaultBrowserUse(["--browser-executable", "/opt/chrome", "tui"])).toEqual([
+      "--browser-use=headless",
+      "--browser-executable",
+      "/opt/chrome",
+      "tui"
+    ]);
+  });
+
+  test("preserves explicit Browser Use and never injects it into management commands", () => {
+    const explicit = ["--browser-use", "headless", "tui"];
+    expect(withDefaultBrowserUse(explicit)).toBe(explicit);
+    for (const args of [
+      ["plugins", "list", "--json"],
+      ["--settings", "custom.json", "plugins", "list"],
+      ["skills", "list"],
+      ["doctor"],
+      ["app-server"],
+      ["login"],
+      ["commands", "list"],
+      ["--help"],
+      ["--version"],
+      ["--unknown"]
+    ]) {
+      expect(withDefaultBrowserUse(args)).toBe(args);
+    }
   });
 
   test("routes only the plain Z.AI login command through the Desktop OAuth bridge", () => {

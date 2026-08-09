@@ -10,6 +10,8 @@ import {
   runZaiOAuthLogin,
   type OfficialLoginPayload
 } from "./zai-oauth.ts";
+import { requestAppServer } from "./app-server-client.ts";
+import { runPluginCommand } from "./plugin-cli.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifestPath = join(packageRoot, "package.json");
@@ -17,7 +19,33 @@ const extractionMetadataPath = join(packageRoot, "vendor", "extraction.json");
 const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
 const launcherPath = join(packageRoot, "bin", "zcode.js");
 const defaultModelRetryMaxRetries = "5";
+const defaultBrowserUseArgument = "--browser-use=headless";
 const versionArguments = new Set(["version", "--version", "-v"]);
+const runtimeBooleanOptions = new Set([
+  "--allow-main-worktree-yolo",
+  "--continue",
+  "--force",
+  "--force-mcs",
+  "--json",
+  "--no-browser",
+  "--no-color",
+  "--stdio",
+  "--target-replace",
+  "--verbose"
+]);
+const runtimeValueOptions = new Set([
+  "--allowed-tools",
+  "--attach",
+  "--browser-executable",
+  "--cwd",
+  "--locale",
+  "--max-turns",
+  "--mode",
+  "--permission-mode",
+  "--resume",
+  "--settings"
+]);
+const runtimeVariadicOptions = new Set(["--disallowedTools", "--disallowed-tools"]);
 
 export function resolveModelRetryMaxRetries(env: NodeJS.ProcessEnv): string {
   return env.ZCODE_MODEL_RETRY_MAX_RETRIES?.trim() || defaultModelRetryMaxRetries;
@@ -68,6 +96,80 @@ export function normalizeLoginArgs(args: string[]): { args: string[]; checkConfi
     return { args: args.filter((argument) => argument !== "--oauth"), checkConfiguredAccess: false };
   }
   return { args, checkConfiguredAccess: false };
+}
+
+function longOptionName(argument: string): string {
+  const separator = argument.indexOf("=");
+  return separator < 0 ? argument : argument.slice(0, separator);
+}
+
+export function withDefaultBrowserUse(args: string[]): string[] {
+  let agentInvocation = false;
+  let command: string | undefined;
+  let invalid = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === "--") {
+      command ??= args[index + 1];
+      break;
+    }
+    if (argument.startsWith("--")) {
+      const option = longOptionName(argument);
+      const inlineValue = option.length !== argument.length;
+      if (option === "--browser-use") return args;
+      if (option === "--help" || option === "--version") return args;
+      if (option === "--print") {
+        if (inlineValue) invalid = true;
+        else agentInvocation = true;
+        continue;
+      }
+      if (option === "--prompt" || option === "--target") {
+        agentInvocation = true;
+        if (!inlineValue) {
+          if (index + 1 >= args.length || args[index + 1]!.startsWith("-")) invalid = true;
+          else index += 1;
+        }
+        continue;
+      }
+      if (runtimeVariadicOptions.has(option)) {
+        if (!inlineValue) {
+          const firstValue = index + 1;
+          while (index + 1 < args.length && !args[index + 1]!.startsWith("-")) index += 1;
+          if (index < firstValue) invalid = true;
+        }
+        continue;
+      }
+      if (runtimeValueOptions.has(option)) {
+        if (!inlineValue) {
+          if (index + 1 >= args.length || args[index + 1]!.startsWith("-")) invalid = true;
+          else index += 1;
+        }
+        continue;
+      }
+      if (runtimeBooleanOptions.has(option) && !inlineValue) continue;
+      invalid = true;
+      continue;
+    }
+    if (argument.startsWith("-")) {
+      if (argument === "-h" || argument === "-v") return args;
+      if (argument === "-p" || argument.startsWith("-p")) {
+        agentInvocation = true;
+        if (argument === "-p") {
+          if (index + 1 >= args.length || args[index + 1]!.startsWith("-")) invalid = true;
+          else index += 1;
+        }
+        continue;
+      }
+      if (argument === "-c" || argument === "-f") continue;
+      invalid = true;
+      continue;
+    }
+    command ??= argument;
+  }
+
+  if (invalid || (!agentInvocation && command !== undefined && command !== "tui")) return args;
+  return [defaultBrowserUseArgument, ...args];
 }
 
 function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, string> {
@@ -184,6 +286,33 @@ export async function main(args: string[]): Promise<number> {
     return 1;
   }
 
+  const node = resolveNodeExecutable();
+  const pluginAbortController = new AbortController();
+  const cancelPluginCommand = () => pluginAbortController.abort();
+  process.once("SIGINT", cancelPluginCommand);
+  process.once("SIGTERM", cancelPluginCommand);
+  let pluginCommand: number | undefined;
+  try {
+    pluginCommand = await runPluginCommand(args, {
+      request: async ({ method, params, signal, workingDirectory }) => await requestAppServer({
+        method,
+        params,
+        signal: signal ?? pluginAbortController.signal,
+        transport: {
+          args: [runtimePath, "app-server"],
+          command: node,
+          cwd: workingDirectory,
+          env: runtimeEnvironment()
+        }
+      }),
+      signal: pluginAbortController.signal
+    });
+  } finally {
+    process.off("SIGINT", cancelPluginCommand);
+    process.off("SIGTERM", cancelPluginCommand);
+  }
+  if (pluginCommand !== undefined) return pluginCommand;
+
   const login = normalizeLoginArgs(args);
   const zaiOAuth = classifyZaiOAuthInvocation(args);
   if (login.checkConfiguredAccess) {
@@ -197,9 +326,6 @@ export async function main(args: string[]): Promise<number> {
       return 0;
     }
   }
-
-  const node = resolveNodeExecutable();
-
 
   if (zaiOAuth) {
     const abortController = new AbortController();
@@ -228,7 +354,7 @@ export async function main(args: string[]): Promise<number> {
   }
 
   try {
-    return await runRuntime(node, login.args);
+    return await runRuntime(node, withDefaultBrowserUse(login.args));
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     return 1;

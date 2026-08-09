@@ -8,13 +8,20 @@ import {
 
 import {
   isRecord,
+  type ListPluginReferences,
   type ListSkills,
   type ListWorkspacePathSuggestions
 } from "./types.ts";
+import {
+  isPluginReferenceValue,
+  PluginReferenceCatalog,
+  pluginReferenceSuggestions
+} from "./plugin-references.ts";
 import { SkillCatalog } from "./skills.ts";
 
 const workspaceSuggestionLimit = 50;
 const skillSuggestionLimit = 50;
+const pluginSuggestionLimit = 20;
 const controlCharacterPattern = /[\u0000-\u001f\u007f]/u;
 const windowsDrivePattern = /^[a-zA-Z]:(?:\/|$)/u;
 
@@ -31,11 +38,12 @@ interface SkillDollarPrefix {
 
 /**
  * Adds official-runtime workspace suggestions to pi-tui without replacing its
- * slash-command, local path or completion-editing behavior. Also serves the
- * `$`-prefix skill picker by delegating to the runtime `listSkills` callback.
+ * slash-command, local path or completion-editing behavior. `@` merges files
+ * with runtime-native Plugin references, while `$` selects a specific Skill.
  */
 export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
   private readonly fallback: CombinedAutocompleteProvider;
+  private readonly plugins: PluginReferenceCatalog;
   private readonly skills: SkillCatalog;
   public readonly triggerCharacters: string[] = ["$"];
 
@@ -43,10 +51,14 @@ export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
     commands: (AutocompleteItem | SlashCommand)[] | undefined,
     basePath: string,
     private readonly listWorkspacePathSuggestions?: ListWorkspacePathSuggestions,
-    skillSource?: ListSkills | SkillCatalog
+    skillSource?: ListSkills | SkillCatalog,
+    pluginSource?: ListPluginReferences | PluginReferenceCatalog
   ) {
     this.fallback = new CombinedAutocompleteProvider(commands, basePath, null);
     this.skills = skillSource instanceof SkillCatalog ? skillSource : new SkillCatalog(skillSource);
+    this.plugins = pluginSource instanceof PluginReferenceCatalog
+      ? pluginSource
+      : new PluginReferenceCatalog(pluginSource);
   }
 
   async getSuggestions(
@@ -79,25 +91,36 @@ export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
     }
 
     const atPrefix = extractWorkspaceAtPrefix(currentLine.slice(0, cursorCol));
-    if (!atPrefix || !this.listWorkspacePathSuggestions) {
+    if (!atPrefix) {
       return await this.fallback.getSuggestions(lines, cursorLine, cursorCol, options);
     }
 
-    try {
-      const result: unknown = await this.listWorkspacePathSuggestions({
-        token: atPrefix.callbackToken,
-        limit: workspaceSuggestionLimit,
-        abortSignal: options.signal
-      });
-      if (options.signal.aborted) return null;
+    const pluginQuery = atPrefix.quoted || /[\\/]/u.test(atPrefix.callbackToken)
+      ? undefined
+      : atPrefix.callbackToken.slice(1);
+    const [workspaceItems, plugins] = await Promise.all([
+      this.listWorkspacePathSuggestions
+        ? this.listWorkspacePathSuggestions({
+            token: atPrefix.callbackToken,
+            limit: workspaceSuggestionLimit,
+            abortSignal: options.signal
+          })
+            .then((result) => normalizeWorkspaceSuggestions(result, atPrefix.quoted))
+            .catch(() => [])
+        : this.fallback.getSuggestions(lines, cursorLine, cursorCol, options)
+            .then((suggestions) => suggestions?.items ?? [])
+            .catch(() => []),
+      pluginQuery === undefined ? Promise.resolve([]) : this.plugins.list()
+    ]);
+    if (options.signal.aborted) return null;
 
-      const items = normalizeWorkspaceSuggestions(result, atPrefix.quoted);
-      return items.length > 0 ? { items, prefix: atPrefix.prefix } : null;
-    } catch {
-      // Completion is optional UI assistance; runtime search failures must not
-      // interrupt editing or prompt submission.
-      return null;
-    }
+    const items = [
+      ...(pluginQuery === undefined
+        ? []
+        : pluginReferenceSuggestions(plugins, pluginQuery, pluginSuggestionLimit)),
+      ...workspaceItems
+    ];
+    return items.length > 0 ? { items, prefix: atPrefix.prefix } : null;
   }
 
   applyCompletion(
@@ -107,9 +130,9 @@ export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
     item: AutocompleteItem,
     prefix: string
   ): { lines: string[]; cursorLine: number; cursorCol: number } {
-    if (prefix.startsWith("$")) {
-      // Skill completions are simple identifiers; insert the value followed by a
-      // single trailing space so the user can keep typing their prompt.
+    if (prefix.startsWith("$") || isPluginReferenceValue(item.value)) {
+      // Skill and Plugin completions are complete tokens. Plugin values use the
+      // runtime's Markdown link protocol rather than a synthetic @name token.
       const currentLine = lines[cursorLine] ?? "";
       const beforePrefix = currentLine.slice(0, cursorCol - prefix.length);
       const afterCursor = currentLine.slice(cursorCol);

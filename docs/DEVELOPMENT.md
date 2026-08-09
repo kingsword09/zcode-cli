@@ -90,7 +90,35 @@ zcode --version
 zcode doctor --json
 zcode --prompt "Explain this repository"
 zcode app-server
+zcode plugins list --json
+zcode plugins discover --json
 ```
+
+Marketplace and install commands are launcher-owned adapters over the
+runtime's public `app-server` NDJSON methods. Keep protocol framing in
+`src/app-server-client.ts` and command parsing in `src/plugin-cli.ts`; do not
+add these operations to the minified runtime bridge. The TUI queries
+`plugins/referenceCatalog` through the same client and inserts native
+`plugin://` links for `@` Plugin completion.
+
+Browser automation is enabled by the launcher only for agent-producing
+invocations:
+
+```bash
+zcode
+zcode --prompt "Inspect https://example.com"
+zcode --print "Inspect https://example.com"
+zcode --browser-use=headless --browser-executable /path/to/chromium
+```
+
+The npm package supplies the runtime-compatible `playwright-core` library but
+does not download a browser binary. Keep the executable discovery and launch
+logic in the official runtime; use `--browser-executable` for environments
+where the system Chrome/Chromium path is non-standard.
+
+Keep the injection classifier covered when runtime global options change. Do
+not add the flag to protocol or management commands; the runtime rejects it
+outside TUI, `--prompt` and `--target` invocations.
 
 `zcode version`, `zcode --version` and `zcode -v` identify both packaged
 layers explicitly:

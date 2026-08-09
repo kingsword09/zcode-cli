@@ -79,10 +79,13 @@ export async function validatePackageTree(base = root): Promise<void> {
     "bin/zcode.ts",
     "config.example.json",
     "package.json",
+    "src/app-server-client.ts",
     "src/command.ts",
     "src/darwin-oauth-callback.ts",
     "src/launcher.ts",
     "src/model-access.ts",
+    "src/plugin-cli.ts",
+    "src/plugin-protocol.ts",
     "src/zai-oauth.ts",
     "tsdown.config.ts",
     "vendor/extraction.json",
@@ -124,6 +127,9 @@ export async function validatePackageTree(base = root): Promise<void> {
   }
   if (packageJson.dependencies?.zigpty !== undefined || packageJson.dependencies?.bun !== undefined) {
     throw new Error("The published package must not depend on a second PTY runtime or Bun.");
+  }
+  if (packageJson.dependencies?.["playwright-core"] !== "1.59.1") {
+    throw new Error("The published package must pin the runtime-compatible playwright-core version.");
   }
 
   const lock = parseRuntimeLock(JSON.parse(await readFile(join(base, "zcode-runtime.lock.json"), "utf8")));

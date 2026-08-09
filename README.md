@@ -36,6 +36,7 @@ defaults. Choose one of the three model-access paths in
 - [Architecture](#architecture)
 - [Features](#features)
 - [Workspace integration](#workspace-integration)
+- [Plugin management](#plugin-management)
 - [Requirements](#requirements)
 - [Configuration](#configuration)
 - [Local development](#local-development)
@@ -85,9 +86,9 @@ bytes.
 ## Features
 
 **Editor and input.** pi-tui differential rendering with a CJK-aware
-multi-line editor; slash-command, workspace-path and `$` Skill completion; persisted
-prompt history through ZCode's history API; `--no-color` and `NO_COLOR`
-support.
+multi-line editor; slash-command, unified `@` workspace/Plugin references and
+`$` Skill completion; persisted prompt history through ZCode's history API;
+`--no-color` and `NO_COLOR` support.
 
 **Streaming and conversation.** Streamed assistant text from official ZCode
 session events; `/mode`, `/model`, `/resume`, `/plugins` and other upstream
@@ -145,6 +146,23 @@ Suggestions come from the official ZCode runtime, stay inside the current
 workspace and exclude common repository metadata and dependency directories.
 Paths containing spaces are inserted in the quoted `@"..."` form.
 
+### Referencing plugins
+
+The same `@` picker includes enabled, unambiguous Plugins that expose at least
+one Skill, connected MCP server or Subagent. Plugin rows are labelled with an
+`@name` and their marketplace. Selecting one inserts the runtime's native
+Markdown reference:
+
+```text
+Use [@browser-use](plugin://browser-use@zcode-plugins-official) to check this page
+```
+
+The terminal editor shows the Markdown source because it has no desktop-style
+inline chips. The runtime resolves the link against the active session and
+adds only that Plugin's live capabilities as metadata. A Plugin reference does
+not install, enable, authorize or force the use of any capability. Disabled,
+ambiguous or stale references are ignored by the runtime.
+
 ### Invoking skills
 
 Type `$` at the start of the prompt or after whitespace to open the Skill
@@ -161,6 +179,10 @@ with their qualified names. On submission, exact `$name` matches are converted
 into a request that loads each selected Skill through the runtime's `Skill`
 tool before carrying out the visible user request. Unknown `$` tokens remain
 ordinary prompt text.
+
+Use `@plugin` when the whole Plugin is relevant, including its MCP servers or
+Subagents. Use `$plugin:skill` when one exact Skill must be loaded before the
+task starts.
 
 ### Active-turn input
 
@@ -237,6 +259,83 @@ selection it toggles all expandable content. During transcript search, `n` and
 `N` move to the next and previous match. `Left`/`Right` (or `PageUp` and
 `PageDown`) page through an oversized selected block without rendering the
 entire message at once. `Esc` leaves search or transcript navigation.
+
+## Plugin management
+
+Built-in Plugins such as Browser Use, document skills and Skill Creator are
+seeded by the official runtime. Existing installed-plugin commands continue to
+use the runtime directly:
+
+```bash
+zcode plugins list --json
+zcode plugins enable <plugin-id>
+zcode plugins disable <plugin-id>
+zcode plugins uninstall <plugin-id> --force
+```
+
+The npm launcher adds marketplace operations by calling the runtime's public
+`app-server` protocol; it does not patch or reimplement the Plugin subsystem.
+Run `zcode plugins --help` for the full command list. A typical third-party
+installation is:
+
+```bash
+zcode plugins discover
+zcode plugins marketplace add owner/repository --dry-run
+zcode plugins marketplace add owner/repository
+zcode plugins describe plugin-name@marketplace-name
+zcode plugins install plugin-name@marketplace-name --dry-run
+zcode plugins install plugin-name@marketplace-name
+```
+
+Marketplace addition and installation validate first, display the Plugin's
+components and dependency closure, and ask for confirmation. Use `--yes` only
+for intentional non-interactive execution, `--json` for structured output and
+`--scope user|workspace` to choose installation scope. Marketplace Git access
+behind a proxy uses `ZCODE_HTTP_PROXY`.
+
+Plugins with configuration can load options from a JSON file without exposing
+values in the process argument list:
+
+```bash
+zcode plugins configure plugin-name@marketplace-name \
+  --options-file ./plugin-options.json --dry-run
+zcode plugins configure plugin-name@marketplace-name \
+  --options-file ./plugin-options.json
+```
+
+Keep files containing secrets private. Install, update, configure, enable and
+disable changes apply to new sessions.
+
+### Browser Use in the CLI
+
+The launcher enables the CLI-managed headless Chromium backend by default for
+TUI, `--prompt`, `--print` and `--target` sessions. This makes an enabled
+`browser-use` Plugin usable from the normal `zcode` command without a separate
+startup flag:
+
+```bash
+zcode
+zcode --prompt \
+  'Use $browser-use:control-browser to inspect https://example.com'
+```
+
+The explicit `--browser-use=headless` form remains supported, including with
+`--browser-executable <path>` when Chromium needs to be selected manually.
+The managed backend still requires a usable local Chrome/Chromium executable;
+if automatic discovery fails, pass its absolute path with
+`--browser-executable`.
+The launcher never injects Browser Use into `plugins`, `skills`, `doctor`,
+`app-server` or other management commands. Existing sessions must be restarted
+before the backend becomes available.
+
+The managed browser is an ephemeral headless context. It does not reuse the
+ZCode Desktop in-app browser profile, cookies or login state, so public search
+engines may close connections or request verification more often, especially
+on VPN, proxy or shared egress IPs. `--browser-executable` only selects the
+Chrome/Chromium binary; it does not make the browser headful or persistent.
+For general fact finding, avoid forcing Browser Use when a search capability is
+available. Use direct page URLs where possible, and use the Desktop in-app
+browser for interactive login or verification flows.
 
 ## Requirements
 

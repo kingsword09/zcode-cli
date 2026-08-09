@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -11,13 +12,30 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtime = join(root, "vendor", "zcode.cjs");
 const tui = join(root, "vendor", "node_modules", "@zcode", "tui", "dist", "index.js");
 const node = process.env.ZCODE_NODE || Bun.which("node");
+const require = createRequire(import.meta.url);
 
 if (!existsSync(runtime)) throw new Error("vendor/zcode.cjs is missing; run `bun run sync` first.");
 if (!existsSync(tui)) throw new Error("The local @zcode/tui adapter is missing; run `bun run sync` first.");
 if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode runtime.");
 
+const packageManifest = await Bun.file(join(root, "package.json")).json() as {
+  dependencies?: Record<string, unknown>;
+};
+const playwrightManifest = await Bun.file(require.resolve("playwright-core/package.json")).json() as {
+  version?: unknown;
+};
+if (packageManifest.dependencies?.["playwright-core"] !== "1.59.1"
+  || playwrightManifest.version !== packageManifest.dependencies["playwright-core"]) {
+  throw new Error("The runtime-compatible playwright-core dependency is missing or has the wrong version.");
+}
+
 const runtimeSource = await Bun.file(runtime).text();
-if (runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')
+if (!runtimeSource.includes('"plugin://"')
+  || !runtimeSource.includes('return await import("playwright-core")')
+  || !runtimeSource.includes('pluginsReferenceCatalog:"plugins/referenceCatalog"')
+  || !runtimeSource.includes('pluginsMarketplaceAdd:"plugins/marketplace/add"')
+  || !runtimeSource.includes('pluginsInstall:"plugins/install"')
+  || runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')
   || !runtimeSource.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
   || !runtimeSource.includes(".loadSessionTranscript=async()=>await(await")
   || !runtimeSource.includes(".readGoal=async()=>await(await")

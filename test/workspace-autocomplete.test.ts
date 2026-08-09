@@ -201,4 +201,59 @@ describe("workspace @ autocomplete", () => {
     expect(root?.items[0]?.value).toBe("@源码/入口.ts");
     expect(unicode?.prefix).toBe("@入口");
   });
+
+  test("merges enabled Plugins into @ completion and inserts their native reference", async () => {
+    const provider = new WorkspaceAutocompleteProvider(
+      [],
+      process.cwd(),
+      async () => ({
+        items: [{ kind: "file", path: "browser-notes.md" }],
+        truncated: false
+      }),
+      undefined,
+      async () => ({
+        authority: "workspace",
+        plugins: [{
+          conflictingPluginIds: [],
+          enabled: true,
+          marketplace: "zcode-plugins-official",
+          mcpServerNames: [],
+          name: "browser-use",
+          pluginId: "browser-use@zcode-plugins-official",
+          skillQualifiedNames: ["browser-use:control-browser"],
+          subagentNames: []
+        }]
+      })
+    );
+    const input = "Use @bro";
+    const suggestions = await provider.getSuggestions([input], 0, input.length, { signal: signal() });
+
+    expect(suggestions).toEqual({
+      prefix: "@bro",
+      items: [
+        {
+          value: "[@browser-use](plugin://browser-use@zcode-plugins-official)",
+          label: "@browser-use",
+          description: "Plugin | zcode-plugins-official | 1 skill"
+        },
+        {
+          value: "@browser-notes.md",
+          label: "browser-notes.md",
+          description: "browser-notes.md"
+        }
+      ]
+    });
+
+    const completion = provider.applyCompletion(
+      [input],
+      0,
+      input.length,
+      suggestions!.items[0]!,
+      suggestions!.prefix
+    );
+    expect(completion.lines).toEqual([
+      "Use [@browser-use](plugin://browser-use@zcode-plugins-official) "
+    ]);
+    expect(completion.cursorCol).toBe(completion.lines[0]!.length);
+  });
 });

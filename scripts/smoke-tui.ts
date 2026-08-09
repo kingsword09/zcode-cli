@@ -168,6 +168,18 @@ try {
     || initialConfig.provider?.zai?.options?.apiKey !== undefined) {
     throw new Error("The launcher created an invalid initial config.json.");
   }
+  await sendAndWait(
+    "@bro",
+    "runtime Plugin suggestions",
+    /@browser-use[\s\S]*Plugin \| zcode-plugins-official \| 2 skills/i
+  );
+  await sendAndWait(
+    "\r",
+    "runtime Plugin completion",
+    /\[@browser-use\]\(plugin:\/\/browser-use@zcode-plugins-official\)/i
+  );
+  terminal.write("\x15");
+  await Bun.sleep(50);
   await sendAndWait("$smoke", "runtime skill suggestions", /smoke-review[\s\S]*Review the runtime Skill bridge\./i);
   await sendAndWait("\r", "runtime skill completion", /\$smoke-review/i);
   terminal.write("\x15");
@@ -234,6 +246,9 @@ if (!/custom provider/i.test(plain)) {
 }
 if (!/smoke-review[\s\S]*Review the runtime Skill bridge\./i.test(plain)) {
   throw new Error(`The runtime Skill picker was not rendered.\n${plain.slice(-4_000)}`);
+}
+if (!/\[@browser-use\]\(plugin:\/\/browser-use@zcode-plugins-official\)/i.test(plain)) {
+  throw new Error(`The runtime Plugin reference was not completed.\n${plain.slice(-4_000)}`);
 }
 if (!/Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan/i.test(plain)) {
   throw new Error(`The masked API-key setup did not complete.\n${plain.slice(-4_000)}`);

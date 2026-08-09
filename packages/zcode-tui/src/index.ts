@@ -77,6 +77,7 @@ import {
   type UserQuestion
 } from "./interactions.ts";
 import { PermissionPreview } from "./permission-view.ts";
+import { createRuntimePluginReferenceLister } from "./plugin-references.ts";
 import {
   formatWorkflowPanel,
   isMcpPickerRequest,
@@ -542,12 +543,14 @@ class ZCodeTui {
     this.ui.addChild(this.status);
 
     const commands = this.autocompleteCommands();
+    const workspaceDirectory = this.options.workspaceDirectory ?? process.cwd();
     this.editor.setAutocompleteProvider(
       new WorkspaceAutocompleteProvider(
         commands,
-        this.options.workspaceDirectory ?? process.cwd(),
+        workspaceDirectory,
         this.options.listWorkspacePathSuggestions,
-        this.skillCatalog
+        this.skillCatalog,
+        this.options.listPluginReferences ?? createRuntimePluginReferenceLister(workspaceDirectory)
       )
     );
     this.editor.onSubmit = (text) => void this.submit(text);

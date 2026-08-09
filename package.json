@@ -1,6 +1,6 @@
 {
   "name": "zcode-app-cli",
-  "version": "3.6.5-9",
+  "version": "3.7.3-9",
   "description": "Unofficial terminal client for the ZCode agent runtime",
   "keywords": [
     "agent",
@@ -68,7 +68,8 @@
     "provenance": true
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.80.6"
+    "@earendil-works/pi-tui": "^0.80.6",
+    "playwright-core": "1.59.1"
   },
   "devDependencies": {
     "beautiful-mermaid": "^1.1.3",

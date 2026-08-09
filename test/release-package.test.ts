@@ -69,6 +69,7 @@ describe("release package", () => {
     expect(packageJson.engines).toEqual({ node: ">=22.19.0" });
     expect(packageJson.dependencies.zigpty).toBeUndefined();
     expect(packageJson.dependencies.bun).toBeUndefined();
+    expect(packageJson.dependencies["playwright-core"]).toBe("1.59.1");
     expect(packageJson.homepage).toBe("https://github.com/kingsword09/zcode-cli#readme");
     expect(packageJson.bugs.url).toBe("https://github.com/kingsword09/zcode-cli/issues");
     expect(packageJson.repository).toEqual({
@@ -117,7 +118,10 @@ describe("release package", () => {
       bin: { zcode: "bin/zcode.js" },
       files: ["bin/zcode.js", "vendor", "config.example.json", "zcode-runtime.lock.json", "README.md", "LICENSE"],
       publishConfig: { access: "public", provenance: true },
-      dependencies: { "@earendil-works/pi-tui": "^0.80.6" }
+      dependencies: {
+        "@earendil-works/pi-tui": "^0.80.6",
+        "playwright-core": "1.59.1"
+      }
     };
     const tuiPackage = {
       name: "@zcode/tui",
@@ -131,10 +135,13 @@ describe("release package", () => {
       "bin/zcode.ts": "export {};\n",
       "config.example.json": "{}\n",
       "package.json": `${JSON.stringify(packageJson)}\n`,
+      "src/app-server-client.ts": "export {};\n",
       "src/command.ts": "export {};\n",
       "src/darwin-oauth-callback.ts": "export {};\n",
       "src/launcher.ts": "export {};\n",
       "src/model-access.ts": "export {};\n",
+      "src/plugin-cli.ts": "export {};\n",
+      "src/plugin-protocol.ts": "export {};\n",
       "src/zai-oauth.ts": "export {};\n",
       "tsdown.config.ts": "export default [];\n",
       "packages/zcode-tui/dist/index.js": "export const value = 1;\n",
