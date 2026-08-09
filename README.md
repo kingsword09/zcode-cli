@@ -1,6 +1,7 @@
 # zcode-app-cli
 
 [![npm version](https://img.shields.io/npm/v/zcode-app-cli.svg?label=npm)](https://www.npmjs.com/package/zcode-app-cli)
+[![npm downloads](https://img.shields.io/npm/dm/zcode-app-cli.svg)](https://www.npmjs.com/package/zcode-app-cli)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 Unofficial terminal client for the official agent runtime shipped with ZCode Desktop.
