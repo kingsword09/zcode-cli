@@ -76,7 +76,9 @@ export class ProtocolPartView implements Component {
       ];
     }
     if (this.part.type === "retry") {
-      return [`${this.theme.warning("↻")} ${this.theme.bold("Retrying model request")} ${this.theme.muted(sanitizeTerminalText(this.part.text, { preserveSgr: false }))}`];
+      const text = sanitizeTerminalText(this.part.text, { preserveSgr: false });
+      const line = `${this.theme.warning("↻")} ${this.theme.bold("Retrying model request")}`;
+      return text ? [`${line} ${this.theme.muted(text)}`] : [line];
     }
     if (this.part.type === "compaction") {
       const reason = this.part.reason ? sanitizeTerminalText(this.part.reason, { preserveSgr: false }) : undefined;

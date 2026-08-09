@@ -232,6 +232,7 @@ const toolLifecycleEventKinds = new Set([
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
 const updateAvailableBlockId = "update_available";
+const modelRetryBlockIdPrefix = "model_retry_status";
 
 function modelRetryProgress(event: StreamEvent, phase: "scheduled" | "started"): string {
   const retryNumber = phase === "started"
@@ -339,6 +340,7 @@ class ZCodeTui {
   private activeTurnId?: string;
   private turnEpoch = 0;
   private activeTurnEpoch?: number;
+  private modelRetryBlockId?: string;
   private pendingSteerInterrupt?: PendingSteerInterrupt;
   private recentSteerCommit?: { at: number; turnEpoch: number };
   private currentThinking?: ThinkingView;
@@ -1422,7 +1424,7 @@ class ZCodeTui {
         title: event.type === "streamRecovery.updated" ? "Recovering model stream" : "Retrying model request",
         summary: [retry, delay].filter(Boolean).join(" · "),
         detail: event.message
-      });
+      }, this.modelRetryBlockId);
     } else if (event.type === "model_request_failed") {
       if (!isModelCancellationEvent(event)) {
         this.updateActivity(
@@ -1627,6 +1629,7 @@ class ZCodeTui {
   private beginTurn(prompt?: string): void {
     this.completeThinking();
     this.presentationRegistry.beginTurn();
+    this.modelRetryBlockId = `${modelRetryBlockIdPrefix}_${this.turnEpoch}`;
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
     this.currentToolGroup = undefined;
@@ -1738,9 +1741,12 @@ class ZCodeTui {
     this.ui.requestRender();
   }
 
-  private addSystemEvent(event: SystemEventData): void {
+  private addSystemEvent(event: SystemEventData, blockId?: string): void {
     this.currentToolGroup = undefined;
-    this.transcript.addBlock(new SystemEventView(this.theme, event), { kind: "system-event" });
+    this.transcript.addBlock(new SystemEventView(this.theme, event), {
+      id: blockId,
+      kind: "system-event"
+    });
     this.ui.requestRender();
   }
 
