@@ -112,6 +112,28 @@ export function parseRuntimeLock(value: unknown): RuntimeLock {
   };
 }
 
+function compareAppVersions(left: string, right: string): number {
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  for (let index = 0; index < leftParts.length; index += 1) {
+    const difference = leftParts[index]! - rightParts[index]!;
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+export function selectRuntimeLock(candidate: RuntimeLock, current?: RuntimeLock): RuntimeLock {
+  if (
+    current
+    && current.platform === candidate.platform
+    && current.arch === candidate.arch
+    && compareAppVersions(current.appVersion, candidate.appVersion) > 0
+  ) {
+    return current;
+  }
+  return candidate;
+}
+
 export function manifestUrl(platform: SyncOptions["platform"], arch: string): string {
   if (platform === "darwin") return `${cdnRoot}/update/mac/${arch}/latest-mac.yml`;
   if (platform === "linux") return `${cdnRoot}/update/linux/${arch}/latest-linux.yml`;
@@ -604,7 +626,7 @@ async function resolveSource(options: SyncOptions, temporaryDirectory: string): 
   const artifact = chooseArtifact(manifest, options.platform);
   const artifactUrl = resolveArtifactUrl(url, artifact.url);
   if (manifest.version === undefined) throw new Error("The update manifest does not contain a version.");
-  const lock = parseRuntimeLock({
+  const candidate = parseRuntimeLock({
     schemaVersion: 1,
     appVersion: String(manifest.version),
     platform: options.platform,
@@ -612,6 +634,16 @@ async function resolveSource(options: SyncOptions, temporaryDirectory: string): 
     url: artifactUrl,
     sha512: artifact.sha512
   });
+  const currentLockPath = join(root, "zcode-runtime.lock.json");
+  const current = existsSync(currentLockPath)
+    ? parseRuntimeLock(JSON.parse(await readFile(currentLockPath, "utf8")))
+    : undefined;
+  const lock = selectRuntimeLock(candidate, current);
+  if (lock === current) {
+    console.log(
+      `Keeping locked runtime ${current.appVersion}; the ${options.platform}-${options.arch} manifest reports older ${candidate.appVersion}.`
+    );
+  }
   return resolveLockedSource(lock, temporaryDirectory);
 }
 

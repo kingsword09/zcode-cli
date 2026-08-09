@@ -9,6 +9,7 @@ import {
   patchRuntimeTuiBridge,
   patchRuntimeZaiDesktopOAuth,
   resolveArtifactUrl,
+  selectRuntimeLock,
   supportsMultiMessageFileRewind
 } from "../scripts/sync-runtime.ts";
 import {
@@ -77,6 +78,27 @@ describe("runtime synchronization", () => {
     expect(parseRuntimeLock(lock)).toEqual(lock);
     expect(() => parseRuntimeLock({ ...lock, url: "http://example.com/zcode.deb" })).toThrow(/HTTPS/);
     expect(() => parseRuntimeLock({ ...lock, sha512: `${lock.sha512.slice(0, -2)}!!` })).toThrow(/SHA-512/);
+  });
+
+  test("does not downgrade a newer lock when a release manifest lags behind", () => {
+    const candidate = parseRuntimeLock({
+      schemaVersion: 1,
+      appVersion: "3.6.5",
+      platform: "linux",
+      arch: "x64",
+      url: "https://example.com/3.6.5.deb",
+      sha512: Buffer.alloc(64, 6).toString("base64")
+    });
+    const current = parseRuntimeLock({
+      ...candidate,
+      appVersion: "3.7.3",
+      url: "https://example.com/3.7.3.deb",
+      sha512: Buffer.alloc(64, 7).toString("base64")
+    });
+
+    expect(selectRuntimeLock(candidate, current)).toBe(current);
+    expect(selectRuntimeLock(current, candidate)).toBe(current);
+    expect(selectRuntimeLock(candidate, { ...current, arch: "arm64" })).toBe(candidate);
   });
 
   test("preserves the HTTP status when an OAuth error body is not JSON", () => {

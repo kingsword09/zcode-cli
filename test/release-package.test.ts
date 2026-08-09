@@ -79,6 +79,15 @@ describe("release package", () => {
     expect(packageJson.keywords).toEqual(expect.arrayContaining(["cli", "node", "terminal", "tui", "zcode"]));
   });
 
+  test("syncs the runtime before running runtime-backed integration tests", async () => {
+    const source = await Bun.file(new URL("../scripts/build-release.ts", import.meta.url)).text();
+    const syncStep = source.indexOf('await run(["run", latest ? "sync" : "sync:locked"]);');
+    const testStep = source.indexOf('await run(["test"]);');
+
+    expect(syncStep).toBeGreaterThan(-1);
+    expect(testStep).toBeGreaterThan(syncStep);
+  });
+
   test("accepts reviewed paths and rejects omissions or development files", () => {
     const packageJson = { name: "zcode-app-cli", version: "3.3.5-1" };
 

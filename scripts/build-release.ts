@@ -21,8 +21,8 @@ if (args.some((arg) => arg !== "--latest")) throw new Error(`Unknown argument: $
 const latest = args.includes("--latest");
 
 await run(["run", "typecheck"]);
-await run(["test"]);
 await run(["run", latest ? "sync" : "sync:locked"]);
+await run(["test"]);
 await run(["run", "check"]);
 await run(["run", "check:tui"]);
 await run(["scripts/check-package.ts"]);
