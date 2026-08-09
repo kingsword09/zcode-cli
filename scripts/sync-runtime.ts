@@ -12,6 +12,10 @@ import { syncedReleaseVersion } from "./release-version.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cdnRoot = "https://cdn-zcode.z.ai/zcode/electron/releases";
+const updateServiceRoot = "https://zcode.z.ai";
+const updateServiceManifestPath = "/api/v1/releases/electron/manifest";
+const stableReleaseChannel = "1";
+const updateManifestAccept = "application/x-yaml,text/yaml,text/plain,*/*";
 
 export interface SyncOptions {
   platform: "darwin" | "linux" | "win32";
@@ -46,6 +50,14 @@ export interface RuntimeLock {
   url: string;
   sha512: string;
 }
+
+export interface RuntimeManifestResolution {
+  lock: RuntimeLock;
+  source: "service" | "static";
+  url: string;
+}
+
+type ManifestFetcher = (url: string, init?: RequestInit) => Promise<string>;
 
 export function parseArgs(argv: string[]): SyncOptions {
   const result: SyncOptions = { platform: "linux", arch: "x64" };
@@ -140,6 +152,23 @@ export function manifestUrl(platform: SyncOptions["platform"], arch: string): st
   return `${cdnRoot}/update/win/${arch}/latest.yml`;
 }
 
+export function serviceReleasePlatform(platform: SyncOptions["platform"], arch: string): string {
+  const releasePlatform = platform === "darwin"
+    ? "darwin"
+    : platform === "win32" ? "windows" : "linux";
+  const releaseArch = arch === "arm64"
+    ? "aarch64"
+    : arch === "x64" ? "x86_64" : arch === "ia32" ? "x86" : arch;
+  return `${releasePlatform}-${releaseArch}`;
+}
+
+export function serviceManifestUrl(platform: SyncOptions["platform"], arch: string): string {
+  const url = new URL(updateServiceManifestPath, updateServiceRoot);
+  url.searchParams.set("platform", serviceReleasePlatform(platform, arch));
+  url.searchParams.set("channel", stableReleaseChannel);
+  return url.href;
+}
+
 export function resolveArtifactUrl(manifestHref: string, artifactHref: string): string {
   return new URL(artifactHref, manifestHref).href;
 }
@@ -152,6 +181,64 @@ export function chooseArtifact(manifest: UpdateManifest, platform: SyncOptions["
     throw new Error(`No ${extension} artifact with sha512 was found in the update manifest.`);
   }
   return artifact;
+}
+
+function parseUpdateManifest(contents: string, url: string): UpdateManifest {
+  const manifest: unknown = parse(contents);
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error(`The update manifest at ${url} is not an object.`);
+  }
+  return manifest as UpdateManifest;
+}
+
+async function runtimeLockFromManifest(
+  options: Pick<SyncOptions, "platform" | "arch">,
+  url: string,
+  artifactBaseUrl: string,
+  fetcher: ManifestFetcher,
+  init?: RequestInit
+): Promise<RuntimeLock> {
+  const manifest = parseUpdateManifest(await fetcher(url, init), url);
+  const artifact = chooseArtifact(manifest, options.platform);
+  if (manifest.version === undefined) throw new Error("The update manifest does not contain a version.");
+  return parseRuntimeLock({
+    schemaVersion: 1,
+    appVersion: String(manifest.version),
+    platform: options.platform,
+    arch: options.arch,
+    url: resolveArtifactUrl(artifactBaseUrl, artifact.url),
+    sha512: artifact.sha512
+  });
+}
+
+export async function resolveLatestRuntimeLock(
+  options: Pick<SyncOptions, "platform" | "arch">,
+  fetcher: ManifestFetcher = fetchText
+): Promise<RuntimeManifestResolution> {
+  const serviceUrl = serviceManifestUrl(options.platform, options.arch);
+  const releasePlatform = serviceReleasePlatform(options.platform, options.arch);
+  try {
+    const lock = await runtimeLockFromManifest(
+      options,
+      serviceUrl,
+      new URL("/", serviceUrl).href,
+      fetcher,
+      {
+        headers: {
+          Accept: updateManifestAccept,
+          "X-Platform": releasePlatform,
+          "X-Release-Channel": stableReleaseChannel
+        }
+      }
+    );
+    return { lock, source: "service", url: serviceUrl };
+  } catch (error) {
+    const fallbackUrl = manifestUrl(options.platform, options.arch);
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`Stable update service manifest failed (${reason}); falling back to ${fallbackUrl}.`);
+    const lock = await runtimeLockFromManifest(options, fallbackUrl, fallbackUrl, fetcher);
+    return { lock, source: "static", url: fallbackUrl };
+  }
 }
 
 export function supportsMultiMessageFileRewind(runtime: string): boolean {
@@ -459,8 +546,8 @@ export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
   return `${runtime.slice(0, insertionPoint)}${branch}${runtime.slice(insertionPoint)}`;
 }
 
-async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, { redirect: "follow" });
+async function fetchText(url: string, init?: RequestInit): Promise<string> {
+  const response = await fetch(url, { ...init, redirect: "follow" });
   if (!response.ok) throw new Error(`GET ${url} failed: ${response.status} ${response.statusText}`);
   return response.text();
 }
@@ -621,19 +708,11 @@ async function resolveSource(options: SyncOptions, temporaryDirectory: string): 
     return resolveLockedSource(lock, temporaryDirectory);
   }
 
-  const url = manifestUrl(options.platform, options.arch);
-  const manifest = parse(await fetchText(url)) as UpdateManifest;
-  const artifact = chooseArtifact(manifest, options.platform);
-  const artifactUrl = resolveArtifactUrl(url, artifact.url);
-  if (manifest.version === undefined) throw new Error("The update manifest does not contain a version.");
-  const candidate = parseRuntimeLock({
-    schemaVersion: 1,
-    appVersion: String(manifest.version),
-    platform: options.platform,
-    arch: options.arch,
-    url: artifactUrl,
-    sha512: artifact.sha512
-  });
+  const resolved = await resolveLatestRuntimeLock(options);
+  const candidate = resolved.lock;
+  console.log(
+    `Resolved stable ZCode App ${candidate.appVersion} from the ${resolved.source} manifest ${resolved.url}.`
+  );
   const currentLockPath = join(root, "zcode-runtime.lock.json");
   const current = existsSync(currentLockPath)
     ? parseRuntimeLock(JSON.parse(await readFile(currentLockPath, "utf8")))

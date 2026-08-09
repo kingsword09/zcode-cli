@@ -23,7 +23,9 @@ bun run sync:locked
 
 The synchronization command:
 
-1. reads the official updater manifest;
+1. reads the public stable-channel manifest used by ZCode Desktop, with the
+   static CDN manifest as a fallback only when the service response is
+   unavailable or invalid;
 2. downloads the matching installer;
 3. verifies its SHA-512 from the manifest;
 4. extracts `resources/glm`;
@@ -88,6 +90,13 @@ workflows. Its updater URL and SHA-512 are committed in
 `zcode-runtime.lock.json`. Preparation resolves the latest manifest; publishing
 downloads the committed URL and verifies the locked SHA-512, so a later upstream
 update cannot silently change a reviewed release.
+
+The scheduled workflow follows the Desktop stable channel (`channel=1`) without
+credentials or a personal `device_mid`. Static `latest-*.yml` files can lag the
+service and are therefore recovery inputs, not the primary update signal. If
+upstream rolls its stable channel back, synchronization keeps a newer committed
+lock instead of silently downgrading it; adopting a rollback requires an
+explicit maintainer review of `zcode-runtime.lock.json`.
 
 The preparation workflow checks upstream once per day at 01:30 in the
 `Asia/Shanghai` timezone, in `upstream` mode. [GitHub documents scheduled

@@ -9,7 +9,10 @@ import {
   patchRuntimeTuiBridge,
   patchRuntimeZaiDesktopOAuth,
   resolveArtifactUrl,
+  resolveLatestRuntimeLock,
   selectRuntimeLock,
+  serviceManifestUrl,
+  serviceReleasePlatform,
   supportsMultiMessageFileRewind
 } from "../scripts/sync-runtime.ts";
 import {
@@ -196,10 +199,92 @@ describe("runtime synchronization", () => {
     });
   });
 
-  test("manifestUrl maps supported updater channels", () => {
+  test("maps supported static updater manifests", () => {
     expect(manifestUrl("linux", "x64")).toMatch(/update\/linux\/x64\/latest-linux\.yml$/);
     expect(manifestUrl("darwin", "arm64")).toMatch(/update\/mac\/arm64\/latest-mac\.yml$/);
     expect(manifestUrl("win32", "x64")).toMatch(/update\/win\/x64\/latest\.yml$/);
+  });
+
+  test("maps platforms to the Desktop stable update service", () => {
+    expect(serviceReleasePlatform("linux", "x64")).toBe("linux-x86_64");
+    expect(serviceReleasePlatform("darwin", "arm64")).toBe("darwin-aarch64");
+    expect(serviceReleasePlatform("win32", "ia32")).toBe("windows-x86");
+    expect(serviceManifestUrl("linux", "x64")).toBe(
+      "https://zcode.z.ai/api/v1/releases/electron/manifest?platform=linux-x86_64&channel=1"
+    );
+  });
+
+  test("resolves the latest runtime from the Desktop stable update service", async () => {
+    const calls: Array<{ init?: RequestInit; url: string }> = [];
+    const sha512 = Buffer.alloc(64, 7).toString("base64");
+    const result = await resolveLatestRuntimeLock(
+      { platform: "linux", arch: "x64" },
+      async (url, init) => {
+        calls.push({ url, init });
+        return JSON.stringify({
+          version: "3.7.3",
+          files: [{
+            url: "/zcode/electron/releases/3.7.3/linux-x64/ZCode-3.7.3-linux-x64.deb",
+            sha512
+          }]
+        });
+      }
+    );
+
+    expect(result).toEqual({
+      source: "service",
+      url: serviceManifestUrl("linux", "x64"),
+      lock: {
+        schemaVersion: 1,
+        appVersion: "3.7.3",
+        platform: "linux",
+        arch: "x64",
+        url: "https://zcode.z.ai/zcode/electron/releases/3.7.3/linux-x64/ZCode-3.7.3-linux-x64.deb",
+        sha512
+      }
+    });
+    expect(calls).toHaveLength(1);
+    const headers = new Headers(calls[0]!.init?.headers);
+    expect(headers.get("Accept")).toContain("application/x-yaml");
+    expect(headers.get("X-Platform")).toBe("linux-x86_64");
+    expect(headers.get("X-Release-Channel")).toBe("1");
+    expect(headers.get("X-Device-Mid")).toBeNull();
+  });
+
+  test("falls back to the static manifest when the service manifest is unusable", async () => {
+    const calls: string[] = [];
+    const sha512 = Buffer.alloc(64, 6).toString("base64");
+    const result = await resolveLatestRuntimeLock(
+      { platform: "linux", arch: "x64" },
+      async (url) => {
+        calls.push(url);
+        if (calls.length === 1) {
+          return JSON.stringify({
+            version: "3.7.3",
+            files: [{ url: "ZCode.AppImage", sha512 }]
+          });
+        }
+        return JSON.stringify({
+          version: "3.6.5",
+          files: [{ url: "ZCode-3.6.5-linux-x64.deb", sha512 }]
+        });
+      }
+    );
+
+    const fallbackUrl = manifestUrl("linux", "x64");
+    expect(calls).toEqual([serviceManifestUrl("linux", "x64"), fallbackUrl]);
+    expect(result).toEqual({
+      source: "static",
+      url: fallbackUrl,
+      lock: {
+        schemaVersion: 1,
+        appVersion: "3.6.5",
+        platform: "linux",
+        arch: "x64",
+        url: "https://cdn-zcode.z.ai/zcode/electron/releases/update/linux/x64/ZCode-3.6.5-linux-x64.deb",
+        sha512
+      }
+    });
   });
 
   test("resolves relative and absolute updater artifact URLs", () => {
