@@ -336,18 +336,18 @@ try {
     /Timer foreground complete; background still running\./i,
     timerTurnStart
   );
-  const timerForegroundSettled = output.length;
   await waitFor(
     "aggregate timer continuing after foreground",
-    /[🕐-🕛] [1-9]\d*s/u,
-    timerForegroundSettled,
-    1_600
+    /Timer foreground complete; background still running\.[\s\S]*[🕐-🕛] [1-9]\d*s/u,
+    timerTurnStart,
+    4_000
   );
+  const timerForegroundSettled = output.length;
   await waitFor(
     "aggregate timer settling after background failure",
     /✓ [1-9]\d*s/u,
     timerForegroundSettled,
-    3_000
+    5_000
   );
   await sendAndWait("/goal pause\r", "paused goal", /Goal: Paused \(\/goal resume\)/i);
   await sendAndWait("/resume\r", "resume picker", /Resume Session/i);

@@ -453,7 +453,7 @@ await runTui({
             status: "failed"
           }
         });
-      }, 1_800).unref?.();
+      }, 3_500).unref?.();
       return {
         kind: "started_turn",
         result: {
