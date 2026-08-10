@@ -117,8 +117,9 @@ Mermaid previews with source fallback for unsupported or oversized diagrams.
 **Inspection and navigation.** `/diff` browser for current Git changes and
 per-turn file changes; `/context` prompt-composition, cache and context-usage
 details; `/status` session, runtime, goal, MCP and workspace details;
-`/activity` and `/tasks` for active tools and background tasks; searchable
-transcript navigation with per-block expansion, selected-block copying and
+`/activity` and a task center for background status, output, agent conversations
+and recovery; searchable transcript navigation with per-block expansion,
+selected-block copying and
 `n`/`N` match traversal; persistent active-tool, background-task and open-plan
 activity between the transcript and editor.
 
@@ -246,13 +247,33 @@ picker to return to input selection, then `Esc` again to close rewind.
 /context                      inspect context usage and source composition
 /status                       inspect detailed runtime and session status
 /activity                     inspect every active tool and open task
-/tasks                        inspect or stop background tasks
+/tasks                        inspect and manage background tasks
+/tasks message <id> <text>    send guidance to a running background agent
+/tasks resume <id> [text]     resume a stopped or failed background agent
+/tasks stop <id>              stop a running background task
 /search <text>                search retained transcript blocks
 /search next|prev|clear       navigate or close transcript search
 /transcript latest            select the latest transcript block
 /transcript next|prev|close   navigate or leave transcript selection
 /copy                         copy the selected block, or the latest response
 ```
+
+The task center keeps autonomous task output out of the foreground transcript.
+The main conversation receives only compact completion, reply and failure
+notices; select the task to inspect its output and task-scoped activity. Agent
+tasks can receive messages while running, and the official runtime resumes a
+terminal agent from its saved child session when messaged. Bash tasks expose a
+reviewable rerun request because a stopped process cannot continue from an
+execution checkpoint. Saved final task output remains available after a TUI
+restart, with large files limited to their latest 64 KiB. Workflow tasks open
+their existing run panel and controls.
+
+Agent calls that finish within one second remain ordinary foreground tools so
+their result can feed the current response directly. Longer Agent calls move to
+the task center automatically, releasing the foreground turn while they keep
+running. Set `subagents.autoBackgroundMs` to a different positive duration, or
+to `0` to disable automatic backgrounding. An explicit
+`run_in_background: true` still backgrounds an Agent immediately.
 
 While the editor is empty, `Alt+Up` and `Alt+Down` navigate selected transcript
 blocks. `Ctrl+O` expands only the selected/search-matched block; without a

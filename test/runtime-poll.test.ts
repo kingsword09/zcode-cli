@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ACTIVE_RUNTIME_POLL_INTERVAL_MS,
   IDLE_RUNTIME_POLL_INTERVAL_MS,
+  runtimeActivityActive,
   runtimePollInterval,
   runtimeRefreshNeeded,
   runtimePollStateChanged,
@@ -30,6 +31,21 @@ describe("runtime polling", () => {
     expect(runtimePollInterval(false)).toBe(IDLE_RUNTIME_POLL_INTERVAL_MS);
     expect(ACTIVE_RUNTIME_POLL_INTERVAL_MS).toBe(1_000);
     expect(IDLE_RUNTIME_POLL_INTERVAL_MS).toBe(5_000);
+  });
+
+  test("keeps polling while tools or background jobs remain active", () => {
+    expect(runtimeActivityActive(normalizeRuntimeProjection({
+      activeToolCalls: [{ toolCallId: "tool-1", toolName: "Bash", status: "running" }],
+      backgroundJobs: []
+    }))).toBeTrue();
+    expect(runtimeActivityActive(normalizeRuntimeProjection({
+      activeToolCalls: [],
+      backgroundJobs: [{ taskId: "task-1", status: "running" }]
+    }))).toBeTrue();
+    expect(runtimeActivityActive(normalizeRuntimeProjection({
+      activeToolCalls: [],
+      backgroundJobs: [{ taskId: "task-1", status: "failed" }]
+    }))).toBeFalse();
   });
 
   test("does not report a change for equivalent normalized snapshots", () => {

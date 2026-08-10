@@ -5,8 +5,14 @@ import {
   manifestUrl,
   parseArgs,
   parseRuntimeLock,
+  patchRuntimeAgentAutoBackground,
+  patchRuntimeBackgroundTaskProjection,
+  patchRuntimeDetachedAgentLifecycle,
+  patchRuntimeProviderRetryClassification,
+  patchRuntimeTerminalToolProjection,
   patchRuntimeOAuthHttpErrors,
   patchRuntimeTuiBridge,
+  patchRuntimeTuiWarnings,
   patchRuntimeZaiDesktopOAuth,
   resolveArtifactUrl,
   resolveLatestRuntimeLock,
@@ -338,13 +344,22 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("E.listSkills=async()=>await H(e)");
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
     expect(patched).toContain("E.readTodos=async()=>await(await S()).readTodos?.()??[]");
-    expect(patched).toContain("E.readRuntimeProjection=async()=>{let e=await S();return e.runtime?.getProjection?.()??null}");
+    expect(patched).toContain("E.readRuntimeProjection=async()=>{let e=await S(),t=await e.runtime?.getProjection?.();if(!t)return null;");
+    expect(patched).toContain(".filter(o=>o.isBackgrounded===!0).map(o=>");
+    expect(patched).toContain("backgroundTaskDetails:r");
     expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
     expect(patched).toContain("E.cancelBackgroundTask=async e=>await(await S()).cancelBackgroundTask?.(e)??null");
+    expect(patched).toContain("E.subscribeSessionEvents=e=>{let t=!1,r;S().then(o=>{t||(r=o.runtime?.subscribeEvents?.({onSessionEvent:e}))});return()=>{t=!0,r?.()}}");
+    expect(patched).toContain("E.sendBackgroundTaskMessage=async e=>");
+    expect(patched).toContain('if(e?.restart===!0&&o.status==="running")');
+    expect(patched).toContain("await r.subagentPort.stopTask(e.taskId)");
+    expect(patched).toContain("r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.()");
     expect(patched).toContain("E.previewFileRewind=async e=>{let t=await S();return await t.runtime?.previewWorkspaceFileRewind?.({targetMessageIds:e})??null}");
     expect(patched).toContain("E.applyFileRewind=async e=>{let t=await S();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}");
     expect(patched).toContain("E.interruptTurn=async e=>");
     expect(patched).toContain("t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:");
+    expect(patched).toContain('e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId');
+    expect(patched).toContain("t.runtime.getActiveForegroundExecutionId()!==void 0");
     expect(patched).toContain("await t.reserveQueueItem(a,r)");
     expect(patched).toContain(
       "expectedTurnId:$?.expectedTurnId,delivery:\"guide\",pendingInputId:$?.pendingInputId,input:A"
@@ -373,8 +388,12 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("interruptTurn:g.interruptTurn");
     expect(patched).toContain("promoteQueuedInput:g.promoteQueuedInput");
     expect(patched).toContain("listSkills:g.listSkills");
+    expect(patched).toContain("subscribeSessionEvents:g.subscribeSessionEvents");
+    expect(patched).toContain("sendBackgroundTaskMessage:g.sendBackgroundTaskMessage");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
+    const previousInterruptPatch = patched.replace("e?.waitForIdle===!0", "e?.waitForIdle===!1");
+    expect(patchRuntimeTuiBridge(previousInterruptPatch)).toContain("e?.waitForIdle===!0");
     expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);
 
     const modernRuntime = runtimeWithApp
@@ -390,5 +409,130 @@ describe("runtime synchronization", () => {
     expect(modernPatched).toContain("r=await e.sessionStore.getSession(e.sessionId);return p(r?R(t,r):t)");
     expect(modernPatched).toContain("targetMessageIds&&t.targetMessageIds.length>0");
     expect(modernPatched).not.toContain("Array.isArray(t.targetMessageIds)");
+  });
+
+  test("filters cache-control warnings from the TUI stderr stream", () => {
+    const runtime = "function UKn(e,t){if(LKn.test(i)||BKn.test(i)){return i}}";
+    const patched = patchRuntimeTuiWarnings(runtime);
+    expect(patched).toContain('i.includes("AI SDK Warning")&&i.includes("cacheControl breakpoint limit")');
+    expect(patchRuntimeTuiWarnings(patched)).toBe(patched);
+  });
+
+  test("does not retry provider model lookup failures reported with HTTP 503", () => {
+    const runtime = [
+      'const CS=()=>true,XBr=e=>e.providerMessage,eUr=e=>e.providerCode,AWo=e=>e.responseStatus,ZBr=()=>undefined;',
+      'const lr={ModelNotFound:"model_not_found"},Ht={InvalidRequest:"invalid_request"},fn={NetworkError:"network_error"};',
+      "function QBr(e,t,r){if(!CS(e))return;let o=XBr(e),n=eUr(e),i=AWo(e,t),a=n?ZBr(n):void 0;",
+      "if(a)return a;return i>=500?{retryable:!0,statusCode:i}:{retryable:!1,statusCode:i}}"
+    ].join("");
+    const patched = patchRuntimeProviderRetryClassification(runtime);
+    expect(patched).toContain(
+      'if(n==="model_not_found")return{code:lr.ModelNotFound,message:o,reason:Ht.InvalidRequest,retryReason:fn.NetworkError,retryable:!1'
+    );
+    const classify = new Function(`${patched};return QBr;`)() as (
+      error: { providerCode: string; providerMessage: string; responseStatus: number }
+    ) => { code?: string; retryable: boolean; statusCode: number };
+    expect(classify({
+      providerCode: "model_not_found",
+      providerMessage: "No available channel for model GLM-5.2",
+      responseStatus: 503
+    })).toMatchObject({ code: "model_not_found", retryable: false, statusCode: 503 });
+    expect(classify({
+      providerCode: "server_error",
+      providerMessage: "Temporary upstream failure",
+      responseStatus: 503
+    })).toMatchObject({ retryable: true, statusCode: 503 });
+    expect(patchRuntimeProviderRetryClassification(patched)).toBe(patched);
+    expect(patchRuntimeProviderRetryClassification("runtime without the classifier anchor")).toBe(
+      "runtime without the classifier anchor"
+    );
+  });
+
+  test("auto-backgrounds long Agent calls while preserving explicit configuration", () => {
+    const runtime = "function delay(){return{autoBackgroundMs:this.config.subagents?.autoBackgroundMs,outputRootDir:'tasks'}}";
+    const patched = patchRuntimeAgentAutoBackground(runtime);
+    const delay = new Function(`${patched};return delay;`)() as () => { autoBackgroundMs?: number };
+
+    expect(delay.call({ config: {} }).autoBackgroundMs).toBe(1_000);
+    expect(delay.call({ config: { subagents: { autoBackgroundMs: 0 } } }).autoBackgroundMs).toBe(0);
+    expect(patchRuntimeAgentAutoBackground(patched)).toBe(patched);
+    expect(() => patchRuntimeAgentAutoBackground("incompatible runtime")).toThrow(/incompatible/);
+  });
+
+  test("contains failures from the detached background Agent lifecycle", async () => {
+    const runtime = [
+      "async function run(){throw void 0}",
+      "async function start(){",
+      "let d={promise:Promise.resolve(),reject(){}},h={dispose(){}};",
+      "run({onSessionStartFailed:d.reject},h.dispose);try{await d.promise}catch{}",
+      "let q={promise:Promise.resolve(),reject(){}},x={dispose(){}};",
+      "run({onSessionStartFailed:q.reject},x.dispose);try{await q.promise}catch{}",
+      "await Promise.resolve();await Promise.resolve()",
+      "}"
+    ].join("");
+    const patched = patchRuntimeDetachedAgentLifecycle(runtime);
+    const diagnostics: unknown[][] = [];
+    const start = new Function(
+      "console",
+      `${patched};return start;`
+    )({ error: (...values: unknown[]) => diagnostics.push(values) }) as () => Promise<void>;
+
+    await start();
+    expect(diagnostics).toEqual([
+      ["Detached background agent lifecycle failed", "unknown rejection"],
+      ["Detached background agent lifecycle failed", "unknown rejection"]
+    ]);
+    expect(patchRuntimeDetachedAgentLifecycle(patched)).toBe(patched);
+    expect(() => patchRuntimeDetachedAgentLifecycle("incompatible runtime")).toThrow(/incompatible/);
+  });
+
+  test("keeps foreground agents out of the background task projection", () => {
+    const runtime = "function project(e){return Object.values(e.runtime?.runtimeTaskRegistry?.all?.()??{}).map(o=>o.taskId)}";
+    const patched = patchRuntimeBackgroundTaskProjection(runtime);
+    const project = new Function(`${patched};return project;`)() as (app: unknown) => string[];
+    const app = {
+      runtime: {
+        runtimeTaskRegistry: {
+          all: () => ({
+            foreground: { taskId: "foreground", isBackgrounded: false },
+            background: { taskId: "background", isBackgrounded: true }
+          })
+        }
+      }
+    };
+
+    expect(project(app)).toEqual(["background"]);
+    expect(patchRuntimeBackgroundTaskProjection(patched)).toBe(patched);
+    expect(() => patchRuntimeBackgroundTaskProjection("incompatible runtime")).toThrow(/incompatible/);
+  });
+
+  test("clears stale active tools when a runtime turn settles", () => {
+    const runtime = [
+      'function complete(e){return{...e,status:"idle",totalTokenCount:e.totalTokenCount+1}}',
+      'function fail(e){return{...e,status:"error",lastError:{message:"failed"}}}'
+    ].join("");
+    const patched = patchRuntimeTerminalToolProjection(runtime);
+    const load = new Function(`${patched};return {complete,fail};`)() as {
+      complete: (state: Record<string, unknown>) => Record<string, unknown>;
+      fail: (state: Record<string, unknown>) => Record<string, unknown>;
+    };
+    const state = {
+      activeToolCalls: [{ toolCallId: "stale", status: "running" }],
+      currentTurnId: "turn-1",
+      totalTokenCount: 0
+    };
+
+    expect(load.complete(state)).toMatchObject({
+      activeToolCalls: [],
+      currentTurnId: undefined,
+      status: "idle"
+    });
+    expect(load.fail(state)).toMatchObject({
+      activeToolCalls: [],
+      currentTurnId: undefined,
+      status: "error"
+    });
+    expect(patchRuntimeTerminalToolProjection(patched)).toBe(patched);
+    expect(() => patchRuntimeTerminalToolProjection("incompatible runtime")).toThrow(/incompatible/);
   });
 });

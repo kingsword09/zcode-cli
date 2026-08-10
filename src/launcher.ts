@@ -1,6 +1,15 @@
 import { spawn as spawnChild, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { constants as osConstants } from "node:os";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync
+} from "node:fs";
+import { constants as osConstants, homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +29,7 @@ const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
 const launcherPath = join(packageRoot, "bin", "zcode.js");
 const defaultModelRetryMaxRetries = "5";
 const defaultBrowserUseArgument = "--browser-use=headless";
+const tuiRuntimeLogLimitBytes = 2 * 1024 * 1024;
 const versionArguments = new Set(["version", "--version", "-v"]);
 const runtimeBooleanOptions = new Set([
   "--allow-main-worktree-yolo",
@@ -103,10 +113,20 @@ function longOptionName(argument: string): string {
   return separator < 0 ? argument : argument.slice(0, separator);
 }
 
-export function withDefaultBrowserUse(args: string[]): string[] {
+interface RuntimeInvocationInspection {
+  agentInvocation: boolean;
+  command?: string;
+  explicitBrowserUse: boolean;
+  invalid: boolean;
+  passthrough: boolean;
+}
+
+function inspectRuntimeInvocation(args: string[]): RuntimeInvocationInspection {
   let agentInvocation = false;
   let command: string | undefined;
+  let explicitBrowserUse = false;
   let invalid = false;
+  let passthrough = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!;
@@ -117,8 +137,18 @@ export function withDefaultBrowserUse(args: string[]): string[] {
     if (argument.startsWith("--")) {
       const option = longOptionName(argument);
       const inlineValue = option.length !== argument.length;
-      if (option === "--browser-use") return args;
-      if (option === "--help" || option === "--version") return args;
+      if (option === "--browser-use") {
+        explicitBrowserUse = true;
+        if (!inlineValue) {
+          if (index + 1 >= args.length || args[index + 1]!.startsWith("-")) invalid = true;
+          else index += 1;
+        }
+        continue;
+      }
+      if (option === "--help" || option === "--version") {
+        passthrough = true;
+        continue;
+      }
       if (option === "--print") {
         if (inlineValue) invalid = true;
         else agentInvocation = true;
@@ -152,7 +182,10 @@ export function withDefaultBrowserUse(args: string[]): string[] {
       continue;
     }
     if (argument.startsWith("-")) {
-      if (argument === "-h" || argument === "-v") return args;
+      if (argument === "-h" || argument === "-v") {
+        passthrough = true;
+        continue;
+      }
       if (argument === "-p" || argument.startsWith("-p")) {
         agentInvocation = true;
         if (argument === "-p") {
@@ -168,8 +201,26 @@ export function withDefaultBrowserUse(args: string[]): string[] {
     command ??= argument;
   }
 
-  if (invalid || (!agentInvocation && command !== undefined && command !== "tui")) return args;
+  return { agentInvocation, command, explicitBrowserUse, invalid, passthrough };
+}
+
+export function withDefaultBrowserUse(args: string[]): string[] {
+  const invocation = inspectRuntimeInvocation(args);
+  if (invocation.explicitBrowserUse
+    || invocation.passthrough
+    || invocation.invalid
+    || (!invocation.agentInvocation
+      && invocation.command !== undefined
+      && invocation.command !== "tui")) return args;
   return [defaultBrowserUseArgument, ...args];
+}
+
+export function isTuiRuntimeInvocation(args: string[]): boolean {
+  const invocation = inspectRuntimeInvocation(args);
+  return !invocation.agentInvocation
+    && !invocation.invalid
+    && !invocation.passthrough
+    && (invocation.command === undefined || invocation.command === "tui");
 }
 
 function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, string> {
@@ -198,7 +249,10 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
   return typeof number === "number" ? 128 + number : 1;
 }
 
-async function waitForChild(child: ChildProcess): Promise<number> {
+async function waitForChild(
+  child: ChildProcess,
+  onError: (error: Error) => void = (error) => console.error("Error: " + error.message)
+): Promise<number> {
   return await new Promise((resolveExit) => {
     let settled = false;
     const finish = (code: number) => {
@@ -207,20 +261,74 @@ async function waitForChild(child: ChildProcess): Promise<number> {
       resolveExit(code);
     };
     child.once("error", (error) => {
-      console.error(`Error: ${error.message}`);
+      onError(error);
       finish(1);
     });
     child.once("exit", (code, signal) => finish(code ?? signalExitCode(signal)));
   });
 }
 
+interface TuiRuntimeDiagnosticState {
+  bytes: number;
+  initialized: boolean;
+  path?: string;
+  writeFailed: boolean;
+}
+
+function appendTuiRuntimeDiagnostic(chunk: Buffer | string, state: TuiRuntimeDiagnosticState): void {
+  if (state.bytes >= tuiRuntimeLogLimitBytes) return;
+  const text = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  try {
+    const path = state.path ?? (process.env.ZCODE_TUI_RUNTIME_LOG?.trim()
+      || join(homedir(), ".zcode", "cli", "tui-runtime.log"));
+    state.path = path;
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    if (!state.initialized) {
+      state.initialized = true;
+      const existingBytes = existsSync(path) ? statSync(path).size : 0;
+      if (existingBytes >= tuiRuntimeLogLimitBytes) {
+        const rotated = `${path}.1`;
+        if (existsSync(rotated)) unlinkSync(rotated);
+        renameSync(path, rotated);
+        chmodSync(rotated, 0o600);
+      } else {
+        state.bytes = existingBytes;
+      }
+    }
+    const bounded = text.subarray(0, tuiRuntimeLogLimitBytes - state.bytes);
+    if (bounded.byteLength === 0) return;
+    appendFileSync(path, bounded, { mode: 0o600 });
+    chmodSync(path, 0o600);
+    state.bytes += bounded.byteLength;
+  } catch {
+    state.writeFailed = true;
+  }
+}
+
+function tuiRuntimeFailureMessage(code: number, state: TuiRuntimeDiagnosticState): string {
+  const diagnostic = state.path && !state.writeFailed
+    ? ` Diagnostics: ${state.path}`
+    : " Runtime diagnostics could not be written.";
+  return `Error: ZCode runtime exited with status ${code}.${diagnostic}\n`;
+}
+
 async function runRuntime(node: string, args: string[]): Promise<number> {
+  const tuiInvocation = isTuiRuntimeInvocation(args);
   const child = spawnChild(node, [runtimePath, ...args], {
     cwd: process.cwd(),
     env: runtimeEnvironment(),
-    stdio: "inherit"
+    stdio: tuiInvocation ? ["inherit", "inherit", "pipe"] : "inherit"
   });
+  const diagnosticState: TuiRuntimeDiagnosticState = {
+    bytes: 0,
+    initialized: false,
+    writeFailed: false
+  };
+  const onDiagnostic = (chunk: Buffer | string) => appendTuiRuntimeDiagnostic(chunk, diagnosticState);
+  child.stderr?.on("data", onDiagnostic);
+  let forwardedSignal = false;
   const forwardSignal = (signal: NodeJS.Signals) => {
+    forwardedSignal = true;
     if (!child.killed) child.kill(signal);
   };
   const onSigint = () => forwardSignal("SIGINT");
@@ -230,8 +338,18 @@ async function runRuntime(node: string, args: string[]): Promise<number> {
   process.once("SIGTERM", onSigterm);
   if (process.platform !== "win32") process.once("SIGHUP", onSighup);
   try {
-    return await waitForChild(child);
+    const code = await waitForChild(
+      child,
+      tuiInvocation
+        ? (error) => appendTuiRuntimeDiagnostic((error.stack ?? error.message) + "\n", diagnosticState)
+        : undefined
+    );
+    if (tuiInvocation && code !== 0 && !forwardedSignal) {
+      process.stderr.write(tuiRuntimeFailureMessage(code, diagnosticState));
+    }
+    return code;
   } finally {
+    child.stderr?.off("data", onDiagnostic);
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     if (process.platform !== "win32") process.off("SIGHUP", onSighup);

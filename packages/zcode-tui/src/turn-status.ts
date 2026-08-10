@@ -3,6 +3,7 @@ export const TURN_TIMER_FRAME_DURATION_MS = 1_000;
 // Unicode clock faces form a complete, same-style rotation with stable terminal width.
 const turnTimerFrames = ["🕛", "🕐", "🕑", "🕒", "🕓", "🕔", "🕕", "🕖", "🕗", "🕘", "🕙", "🕚"] as const;
 const settledTurnTimerFrame = "🕛";
+const completedTurnTimerFrame = "✓";
 const reducedMotionValues = new Set(["1", "true", "yes", "on"]);
 
 export function turnTimerAnimationEnabled(
@@ -36,9 +37,11 @@ export function turnStatusText(
   activity: string | undefined,
   elapsedMilliseconds: number,
   showElapsed = true,
-  animateTimer = false
+  animateTimer = false,
+  completed = false
 ): string | undefined {
   if (!showElapsed) return activity;
-  const elapsed = `[ ${turnTimerFrame(elapsedMilliseconds, animateTimer)} ${formatElapsed(elapsedMilliseconds)} ]`;
+  const frame = completed ? completedTurnTimerFrame : turnTimerFrame(elapsedMilliseconds, animateTimer);
+  const elapsed = `[ ${frame} ${formatElapsed(elapsedMilliseconds)} ]`;
   return activity ? `${activity} ── ${elapsed}` : elapsed;
 }

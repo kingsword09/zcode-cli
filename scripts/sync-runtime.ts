@@ -16,6 +16,7 @@ const updateServiceRoot = "https://zcode.z.ai";
 const updateServiceManifestPath = "/api/v1/releases/electron/manifest";
 const stableReleaseChannel = "1";
 const updateManifestAccept = "application/x-yaml,text/yaml,text/plain,*/*";
+export const defaultAgentAutoBackgroundMs = 1_000;
 
 export interface SyncOptions {
   platform: "darwin" | "linux" | "win32";
@@ -246,6 +247,87 @@ export function supportsMultiMessageFileRewind(runtime: string): boolean {
     .test(runtime);
 }
 
+/** Suppress known cache-control warnings before they reach the TUI stderr stream. */
+export function patchRuntimeTuiWarnings(runtime: string): string {
+  const suppression = 'i.includes("AI SDK Warning")&&i.includes("cacheControl breakpoint limit")';
+  if (runtime.includes(suppression)) return runtime;
+  const anchor = "if(LKn.test(i)||BKn.test(i)){";
+  if (!runtime.includes(anchor)) return runtime;
+  return runtime.replace(anchor, "if(LKn.test(i)||BKn.test(i)||" + suppression + "){");
+}
+
+/** Prevent provider model lookup failures from being retried as generic 5xx errors. */
+export function patchRuntimeProviderRetryClassification(runtime: string): string {
+  const classification = 'if(n==="model_not_found")return{code:lr.ModelNotFound,message:o,reason:Ht.InvalidRequest,retryReason:fn.NetworkError,retryable:!1,retryAfterMs:r,statusCode:i};';
+  if (runtime.includes(classification)) return runtime;
+  const anchor = 'function QBr(e,t,r){if(!CS(e))return;let o=XBr(e),n=eUr(e),i=AWo(e,t),a=n?ZBr(n):void 0;';
+  if (!runtime.includes(anchor)) return runtime;
+  return runtime.replace(anchor, anchor + classification);
+}
+
+/** Keep short Agent calls inline, but detach long-running agents from the foreground turn. */
+export function patchRuntimeAgentAutoBackground(runtime: string): string {
+  const marker = "autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:";
+  if (runtime.includes(marker)) return runtime;
+  const anchor = "autoBackgroundMs:this.config.subagents?.autoBackgroundMs,outputRootDir:";
+  if (!runtime.includes(anchor)) {
+    throw new Error("ZCode runtime is incompatible with the Agent auto-background patch.");
+  }
+  return runtime.replace(anchor, marker);
+}
+
+/** Keep a detached Agent lifecycle failure from terminating the entire CLI process. */
+export function patchRuntimeDetachedAgentLifecycle(runtime: string): string {
+  const marker = 'Detached background agent lifecycle failed';
+  const detachedRunnerPattern = /(onSessionStartFailed:([A-Za-z_$][\w$]*)\.reject\},[A-Za-z_$][\w$]*\.dispose)\);try\{await \2\.promise\}/gu;
+  const patched = runtime.replace(
+    detachedRunnerPattern,
+    '$1).catch(e=>{console.error("Detached background agent lifecycle failed",e??"unknown rejection")});try{await $2.promise}'
+  );
+  if (patched !== runtime) return patched;
+  if (!runtime.includes(marker)) {
+    throw new Error("ZCode runtime is incompatible with the detached Agent lifecycle patch.");
+  }
+  return runtime;
+}
+
+/** Clear tool projection entries when their owning turn reaches a terminal state. */
+export function patchRuntimeTerminalToolProjection(runtime: string): string {
+  const completedMarker = 'status:"idle",currentTurnId:void 0,activeToolCalls:[],totalTokenCount:';
+  const failedMarker = 'status:"error",currentTurnId:void 0,activeToolCalls:[],lastError:';
+  let patched = runtime;
+  if (!patched.includes(completedMarker)) {
+    const anchor = 'status:"idle",totalTokenCount:';
+    if (!patched.includes(anchor)) {
+      throw new Error("ZCode runtime is incompatible with the terminal tool projection patch.");
+    }
+    patched = patched.replace(anchor, completedMarker);
+  }
+  if (!patched.includes(failedMarker)) {
+    const anchor = 'status:"error",lastError:';
+    if (!patched.includes(anchor)) {
+      throw new Error("ZCode runtime is incompatible with the terminal tool projection patch.");
+    }
+    patched = patched.replace(anchor, failedMarker);
+  }
+  return patched;
+}
+
+/** Exclude foreground Agent calls from the TUI background task projection. */
+export function patchRuntimeBackgroundTaskProjection(runtime: string): string {
+  const filteredProjectionPattern = /runtimeTaskRegistry\?\.all\?\.\(\)\?\?\{\}\)\.filter\(([A-Za-z_$][\w$]*)=>\1\.isBackgrounded===!0\)\.map\(/u;
+  if (filteredProjectionPattern.test(runtime)) return runtime;
+  const projectionPattern = /Object\.values\(([A-Za-z_$][\w$]*)\.runtime\?\.runtimeTaskRegistry\?\.all\?\.\(\)\?\?\{\}\)\.map\(([A-Za-z_$][\w$]*)=>/u;
+  const projection = projectionPattern.exec(runtime);
+  if (!projection) {
+    throw new Error("ZCode runtime is incompatible with the background task projection patch.");
+  }
+  return runtime.replace(
+    projectionPattern,
+    `Object.values($1.runtime?.runtimeTaskRegistry?.all?.()??{}).filter($2=>$2.isBackgrounded===!0).map($2=>`
+  );
+}
+
 export function patchRuntimeTuiBridge(runtime: string): string {
   const transcriptMessageIdPattern = /\.push\(\{content:[A-Za-z_$][\w$]*,messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"\}\)/u;
   const transcriptAgentMessageIdPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u;
@@ -254,17 +336,25 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const activeTurnGuidePattern = /\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\1\?\.inputId,queryId:\1\?\.queryId,expectedTurnId:\1\?\.expectedTurnId,delivery:"guide",pendingInputId:\1\?\.pendingInputId,input:/u;
   const listSkillsBridgePattern = /\.listSkills=async\(\)=>await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)/u;
   const listSkillsOptionPattern = /listSkills:[A-Za-z_$][\w$]*\.listSkills/u;
+  const sessionEventsBridgePattern = /\.subscribeSessionEvents=[A-Za-z_$][\w$]*=>/u;
+  const sessionEventsOptionPattern = /subscribeSessionEvents:[A-Za-z_$][\w$]*\.subscribeSessionEvents/u;
+  const taskMessageBridgePattern = /\.sendBackgroundTaskMessage=async [A-Za-z_$][\w$]*=>/u;
+  const taskMessageOptionPattern = /sendBackgroundTaskMessage:[A-Za-z_$][\w$]*\.sendBackgroundTaskMessage/u;
+  const taskMessageRestartMarker = "e?.restart===!0";
   const interruptTurnMarker = ".interruptTurn=async e=>";
+  const interruptWaitForIdleMarker = "e?.waitForIdle===!0";
   const queuedInputPromotionMarker = "r?.pendingInputReservationId??r?.queryId??";
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
     && runtime.includes(".readGoal=async()=>await(await")
     && runtime.includes(".readTodos=async()=>await(await")
     && runtime.includes(".readRuntimeProjection=async()=>")
+    && runtime.includes("backgroundTaskDetails")
     && runtime.includes(".readSessionUsage=async()=>await(await")
     && runtime.includes(".cancelBackgroundTask=async")
     && runtime.includes(".previewFileRewind=async e=>")
     && runtime.includes(".applyFileRewind=async e=>")
     && runtime.includes(interruptTurnMarker)
+    && runtime.includes(interruptWaitForIdleMarker)
     && runtime.includes(".promoteQueuedInput=async(")
     && runtime.includes(queuedInputPromotionMarker)
     && activeTurnGuidePattern.test(runtime)
@@ -283,7 +373,12 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && /promoteQueuedInput:[A-Za-z_$][\w$]*\.promoteQueuedInput/u.test(runtime)
     && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime)
     && listSkillsBridgePattern.test(runtime)
-    && listSkillsOptionPattern.test(runtime);
+    && listSkillsOptionPattern.test(runtime)
+    && sessionEventsBridgePattern.test(runtime)
+    && sessionEventsOptionPattern.test(runtime)
+    && taskMessageBridgePattern.test(runtime)
+    && taskMessageOptionPattern.test(runtime)
+    && runtime.includes(taskMessageRestartMarker);
   if (alreadyPatched) return runtime;
 
   let patched = runtime;
@@ -364,6 +459,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   const [recallAssignment, bridge, , getApp] = assignment;
   const assignments: string[] = [];
+  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}(),t=await e.runtime?.getProjection?.();if(!t)return null;let r=Object.values(e.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.completedAt}));return{...t,backgroundTaskDetails:r}}`;
+  const taskMessageAssignment = `${bridge}.sendBackgroundTaskMessage=async e=>{let t=await ${getApp}(),r=t.runtime,o=r?.runtimeTaskRegistry?.get?.(e?.taskId);if(!r?.subagentPort?.sendMessage)throw new Error("Background agent messaging is unavailable in this runtime.");if(!o||(o.type??o.taskType)!=="local_agent")throw new Error("The selected task is not a local agent.");if(typeof e?.message!=="string"||!e.message.trim())throw new Error("Enter a message for the background agent.");let n=e.message.trim().slice(0,2e4),i=(typeof e.summary==="string"?e.summary:n).replace(/\\s+/g," ").trim().slice(0,200);if(e?.restart===!0&&o.status==="running"){if(!r.subagentPort.stopTask)throw new Error("Background agent restart is unavailable in this runtime.");await r.subagentPort.stopTask(e.taskId),o=r.runtimeTaskRegistry?.get?.(e.taskId);if(!o)throw new Error("The background agent stopped but could not be restored.")}return await r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.(),turnId:o.turnId??"tui-task-message",parentToolCallId:o.parentToolCallId??"tui-task-message",to:o.agentId??e.taskId,summary:i,message:n,workingDirectory:o.workingDirectory??r.workingDirectory,workspaceRoot:o.workspaceRoot??r.workingDirectory,trace:o.traceContext??r.rootTraceContext})}`;
   if (!listSkillsBridgePattern.test(patched)) {
     const listSkillsFactory = /listSkills:[A-Za-z_$][\w$]*\(\(\)=>([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),"listSkills"\)/u
       .exec(patched);
@@ -372,7 +469,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     }
     assignments.push(`${bridge}.listSkills=async()=>await ${listSkillsFactory[1]}(${listSkillsFactory[2]})`);
   }
-  const interruptAssignment = `${bridge}.interruptTurn=async e=>{let t=await ${getApp}(),r=e?.reservationId??"tui-steer-interrupt",o=(Array.isArray(e?.pendingInputIds)?e.pendingInputIds:[]).filter(Boolean),n=[],i=async()=>{for(let a of n)await t.releaseQueueItemReservation?.(a,r);n=[]};try{if(t.reserveQueueItem&&t.releaseQueueItemReservation)for(let a of o)if(await t.reserveQueueItem(a,r))n.push(a);else{await i();break}let a=t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:o.length>0&&n.length===o.length,reason:e?.reason??"TUI steer interrupt"})??{kind:"unsupported"};return a.kind!=="stopped"&&await i(),a}catch(a){await i();throw a}}`;
+  const interruptAssignment = `${bridge}.interruptTurn=async e=>{let t=await ${getApp}(),r=e?.reservationId??"tui-steer-interrupt",o=(Array.isArray(e?.pendingInputIds)?e.pendingInputIds:[]).filter(Boolean),n=[],i=async()=>{for(let a of n)await t.releaseQueueItemReservation?.(a,r);n=[]};try{if(t.reserveQueueItem&&t.releaseQueueItemReservation)for(let a of o)if(await t.reserveQueueItem(a,r))n.push(a);else{await i();break}let a=t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:o.length>0&&n.length===o.length,reason:e?.reason??"TUI steer interrupt"})??{kind:"unsupported"};if(a.kind==="stopped"&&e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId){let u=Date.now()+5e3;for(;t.runtime.getActiveForegroundExecutionId()!==void 0;){if(Date.now()>=u)throw new Error("Timed out waiting for background result processing to stop.");await new Promise(l=>setTimeout(l,25))}}return a.kind!=="stopped"&&await i(),a}catch(a){await i();throw a}}`;
   const promotionAssignment = `${bridge}.promoteQueuedInput=async(e,t,r)=>{let o=await ${getApp}(),n=r?.pendingInputReservationId??r?.queryId??r?.inputId??"tui-promotion",i=(Array.isArray(t)?t:[t]).filter(Boolean);if(i.length===0||!o.reserveQueueItem||!o.markQueueItemPromoting||!o.releaseQueueItemReservation||!o.removeQueueItem)return ${bridge}.sendInput(e,{...r,delivery:"start_turn"});let a=[],u=!1;try{for(let l of i){if(await o.markQueueItemPromoting(l,n)){a.push(l);continue}if(!await o.reserveQueueItem(l,n))throw new Error("TUI queued input is already reserved: "+l);a.push(l);if(!await o.markQueueItemPromoting(l,n))throw new Error("TUI queued input promotion failed: "+l)}let c=await ${bridge}.sendInput(e,{...r,delivery:"start_turn"});if(c?.kind==="rejected")return c;u=!0;for(let l of a)if(!await o.removeQueueItem(l,{reason:"promoted",reservationId:n}))throw new Error("TUI queued input promotion commit failed: "+l);return c}finally{if(!u)for(let l of a)await o.releaseQueueItemReservation(l,n)}}`;
   if (!patched.includes(".loadSessionTranscript=async()=>await(await")) {
     assignments.push(`${bridge}.loadSessionTranscript=async()=>await(await ${getApp}()).loadSessionTranscript?.()??[]`);
@@ -383,8 +480,10 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".readTodos=async()=>await(await")) {
     assignments.push(`${bridge}.readTodos=async()=>await(await ${getApp}()).readTodos?.()??[]`);
   }
-  if (!patched.includes(".readRuntimeProjection=async()=>")) {
-    assignments.push(`${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}();return e.runtime?.getProjection?.()??null}`);
+  if (!patched.includes("backgroundTaskDetails")) {
+    const existingProjection = `${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}();return e.runtime?.getProjection?.()??null}`;
+    if (patched.includes(existingProjection)) patched = patched.replace(existingProjection, projectionAssignment);
+    else assignments.push(projectionAssignment);
   }
   if (!patched.includes(".readSessionUsage=async()=>await(await")) {
     assignments.push(`${bridge}.readSessionUsage=async()=>await(await ${getApp}()).readSessionUsage?.()??null`);
@@ -398,8 +497,32 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".applyFileRewind=async e=>")) {
     assignments.push(`${bridge}.applyFileRewind=async e=>{let t=await ${getApp}();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}`);
   }
+  if (!sessionEventsBridgePattern.test(patched)) {
+    assignments.push(`${bridge}.subscribeSessionEvents=e=>{let t=!1,r;${getApp}().then(o=>{t||(r=o.runtime?.subscribeEvents?.({onSessionEvent:e}))});return()=>{t=!0,r?.()}}`);
+  }
+  if (!taskMessageBridgePattern.test(patched)) {
+    assignments.push(taskMessageAssignment);
+  } else if (!patched.includes(taskMessageRestartMarker)) {
+    const existingTaskMessageStart = patched.indexOf(`${bridge}.sendBackgroundTaskMessage=async e=>`);
+    const existingTaskMessageEnd = existingTaskMessageStart < 0
+      ? -1
+      : patched.indexOf(`,${bridge}.`, existingTaskMessageStart);
+    if (existingTaskMessageStart < 0 || existingTaskMessageEnd < 0) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (task-message boundary missing).");
+    }
+    patched = `${patched.slice(0, existingTaskMessageStart)}${taskMessageAssignment}${patched.slice(existingTaskMessageEnd)}`;
+  }
   if (!patched.includes(interruptTurnMarker)) {
     assignments.push(interruptAssignment);
+  } else if (!patched.includes(interruptWaitForIdleMarker)) {
+    const existingInterruptStart = patched.indexOf(`${bridge}.interruptTurn=async e=>`);
+    const existingInterruptEnd = existingInterruptStart < 0
+      ? -1
+      : patched.indexOf(`,${bridge}.`, existingInterruptStart);
+    if (existingInterruptStart < 0 || existingInterruptEnd < 0) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (interrupt boundary missing).");
+    }
+    patched = `${patched.slice(0, existingInterruptStart)}${interruptAssignment}${patched.slice(existingInterruptEnd)}`;
   }
   if (!patched.includes(queuedInputPromotionMarker)) {
     const existingPromotionStart = patched.indexOf(`${bridge}.promoteQueuedInput=async(`);
@@ -454,6 +577,12 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!listSkillsOptionPattern.test(patched)) {
     optionFields.push(`listSkills:${submitBridge}.listSkills`);
+  }
+  if (!sessionEventsOptionPattern.test(patched)) {
+    optionFields.push(`subscribeSessionEvents:${submitBridge}.subscribeSessionEvents`);
+  }
+  if (!taskMessageOptionPattern.test(patched)) {
+    optionFields.push(`sendBackgroundTaskMessage:${submitBridge}.sendBackgroundTaskMessage`);
   }
   if (optionFields.length > 0) {
     patched = patched.replace(optionsAssignment, `${optionFields.join(",")},${optionsAssignment}`);
@@ -609,7 +738,21 @@ async function installTuiBridge(nextVendor: string): Promise<void> {
   const runtime = await readFile(runtimePath, "utf8");
   await writeFile(
     runtimePath,
-    patchRuntimeZaiDesktopOAuth(patchRuntimeOAuthHttpErrors(patchRuntimeTuiBridge(runtime)))
+    patchRuntimeZaiDesktopOAuth(
+      patchRuntimeOAuthHttpErrors(
+        patchRuntimeAgentAutoBackground(
+          patchRuntimeDetachedAgentLifecycle(
+            patchRuntimeTerminalToolProjection(
+              patchRuntimeProviderRetryClassification(
+                patchRuntimeTuiWarnings(
+                  patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
+                )
+              )
+            )
+          )
+        )
+      )
+    )
   );
 }
 

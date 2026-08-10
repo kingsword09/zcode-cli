@@ -25,6 +25,7 @@ export interface InterruptTurnOptions {
   pendingInputIds?: string[];
   reason?: string;
   reservationId?: string;
+  waitForIdle?: boolean;
 }
 
 export interface WorkspacePathSuggestionRequest {
@@ -94,6 +95,12 @@ export interface TuiOptions {
   readRuntimeProjection?: () => Promise<unknown>;
   readSessionUsage?: () => Promise<unknown>;
   cancelBackgroundTask?: (taskId: string) => Promise<unknown>;
+  sendBackgroundTaskMessage?: (options: {
+    taskId: string;
+    message: string;
+    summary: string;
+    restart?: boolean;
+  }) => Promise<unknown>;
   previewFileRewind?: (targetMessageIds: string[]) => Promise<unknown>;
   applyFileRewind?: (targetMessageIds: string[]) => Promise<unknown>;
   interruptTurn?: (options: InterruptTurnOptions) => Promise<unknown>;
@@ -111,6 +118,7 @@ export interface TuiOptions {
   refreshWorkflowPanel?: (options: { runId?: string }) => Promise<unknown>;
   stopWorkflow?: (options: { runId: string }) => Promise<unknown>;
   subscribeWorkflowEvents?: (listener: (event: unknown) => void) => (() => void) | void;
+  subscribeSessionEvents?: (listener: (event: unknown) => void | Promise<void>) => (() => void) | void;
 }
 
 export function isRecord(value: unknown): value is UnknownRecord {

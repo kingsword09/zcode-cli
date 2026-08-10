@@ -168,6 +168,24 @@ Project-level overrides are read from `zcode.json` or `.zcode/config.json` in
 the working directory. Running `/model` does not call the provider, so it is a
 safe configuration check before the first prompt.
 
+### Background agents
+
+Long-running Agent calls automatically detach from the foreground turn after
+one second and remain available through `/tasks`. Short Agent calls stay inline
+so the current response can use their result without a notification round trip.
+Configure the threshold in milliseconds:
+
+```json
+{
+  "subagents": {
+    "autoBackgroundMs": 1000
+  }
+}
+```
+
+Set the value to `0` to disable automatic backgrounding. Agent tool calls that
+use `run_in_background: true` detach immediately regardless of this threshold.
+
 ### Request retries and stalled streams
 
 The CLI leaves retry classification and execution to the official ZCode
@@ -192,6 +210,20 @@ Existing configs are never overwritten, so update this field manually if an
 older generated file still contains `600000`. Retryable timeouts, dropped
 streams, rate limits and server/network errors are retried and shown in the
 TUI. Authentication and invalid-request responses remain non-retryable.
+
+## Runtime diagnostics
+
+The interactive TUI captures runtime `stderr` so background diagnostics cannot
+overwrite terminal rendering. A non-zero runtime exit prints its status and the
+diagnostic path after the TUI stops. The active log is capped at 2 MB and rotated
+to `.1` on the next launch; both files use owner-only permissions.
+
+The default path is `~/.zcode/cli/tui-runtime.log`. Override it when collecting
+diagnostics in an isolated environment:
+
+```bash
+ZCODE_TUI_RUNTIME_LOG=/tmp/zcode-tui-runtime.log zcode
+```
 
 ## Theme
 

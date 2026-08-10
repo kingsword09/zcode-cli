@@ -21,8 +21,13 @@ if (process.argv[2] === "login") {
 let model = "alpha/model";
 let effort = "low";
 let backgroundStatus = "running";
+let agentStatus = "failed";
+let agentMessageCount = 0;
+let timerTaskStatus: "failed" | "running" | undefined;
 let turnCompleted = false;
 let featureTurnActive = false;
+let stuckBackgroundHandoff = false;
+let sessionEventListener: ((event: unknown) => void | Promise<void>) | undefined;
 let featureSteerInput: string | undefined;
 let featurePendingInputId: string | undefined;
 let resolveFeatureSteer!: () => void;
@@ -101,6 +106,90 @@ async function emitRuntime(options: PromptCallOptions, type: string, payload: un
   await options.onEvent?.({ type, payload });
 }
 
+async function emitSessionEvent(
+  event: unknown,
+  submissionListener?: (event: unknown) => void | Promise<void>
+): Promise<void> {
+  await sessionEventListener?.(event);
+  await submissionListener?.(event);
+}
+
+async function emitBackgroundResultTurn(
+  turnId: string,
+  eventPrefix: string,
+  text: string,
+  inputSource: "background_task" | "subagent_message",
+  duplicateText = false,
+  submissionListener?: (event: unknown) => void | Promise<void>
+): Promise<void> {
+  await emitSessionEvent({
+    id: `${eventPrefix}_start`, type: "turn_started", turnId,
+    payload: { inputSource }
+  }, submissionListener);
+  const textEvent = {
+    id: `${eventPrefix}_text`, type: "model.streaming", turnId,
+    payload: {
+      kind: "text_delta",
+      delta: text,
+      messageId: `${eventPrefix}_message`,
+      partId: `${eventPrefix}_part`
+    }
+  };
+  await emitSessionEvent(textEvent, submissionListener);
+  if (duplicateText) await emitSessionEvent(textEvent, submissionListener);
+  await emitSessionEvent({
+    id: `${eventPrefix}_complete`, type: "turn_complete", turnId, payload: {}
+  }, submissionListener);
+}
+
+async function runBackgroundCompletionTurn(
+  submissionListener?: (event: unknown) => void | Promise<void>
+): Promise<void> {
+  await emitSessionEvent({
+    id: "event_agent_reply",
+    type: "subagent_message",
+    payload: {
+      agentId: "agent_feature",
+      agentType: "reviewer",
+      message: "Background agent reply stored in task activity."
+    }
+  }, submissionListener);
+  await emitBackgroundResultTurn(
+    "turn_agent_handoff",
+    "event_agent_handoff",
+    "Task-scoped agent handoff completed.",
+    "subagent_message",
+    true,
+    submissionListener
+  );
+  await emitSessionEvent({
+    id: "event_background_task_failed",
+    type: "background_task_completed",
+    payload: { taskId: "agent_feature", taskKind: "local_agent", status: "failed" }
+  }, submissionListener);
+  await emitSessionEvent({
+    id: "event_background_failure_start", type: "turn_started", turnId: "turn_background_failure",
+    payload: { inputSource: "background_task", originMeta: { workId: "agent_feature" } }
+  }, submissionListener);
+  await emitSessionEvent({
+    id: "event_background_failure_reasoning", type: "model.streaming", turnId: "turn_background_failure",
+    payload: { kind: "reasoning_delta", delta: "Background-only reasoning must stay in task activity." }
+  }, submissionListener);
+  await emitSessionEvent({
+    id: "event_background_failure_tool", type: "model.streaming", turnId: "turn_background_failure",
+    payload: { kind: "tool_input_start", toolCallId: "background_fetch", toolName: "Fetch" }
+  }, submissionListener);
+  await emitSessionEvent({
+    id: "event_background_failure_text", type: "model.streaming", turnId: "turn_background_failure",
+    payload: { kind: "text_delta", delta: "Coordinator began processing the failed task result." }
+  }, submissionListener);
+  await Bun.sleep(400);
+  await emitSessionEvent({
+    id: "event_background_failure", type: "turn_error", turnId: "turn_background_failure",
+    payload: { error: { message: "Background result failed visibly." } }
+  }, submissionListener);
+}
+
 await runTui({
   version: "feature-smoke",
   theme: process.env.ZCODE_TUI_TEST_THEME,
@@ -166,23 +255,100 @@ await runTui({
       ]
     },
     activeToolCalls: [],
-    backgroundTasks: [{
-      taskId: "bg_feature",
-      toolName: "Bash",
-      description: turnCompleted ? "Feature background audit · turn complete" : "Feature background audit",
-      command: "bun test",
-      status: backgroundStatus,
-      cancellable: true,
-      pid: 4242,
-      startedAt: Date.now() - 5_000,
-      stdoutBytes: 512,
-      stdoutTail: "Background audit running"
-    }]
+    backgroundTasks: [
+      {
+        taskId: "bg_feature",
+        taskKind: "bash",
+        toolName: "Bash",
+        description: turnCompleted ? "Feature background audit · turn complete" : "Feature background audit",
+        command: "bun test",
+        status: backgroundStatus,
+        cancellable: true,
+        pid: 4242,
+        startedAt: Date.now() - 5_000,
+        stdoutBytes: 512,
+        stdoutTail: "Background audit running"
+      },
+      {
+        taskId: "agent_feature",
+        toolName: "Agent",
+        description: "Review task recovery",
+        status: agentStatus,
+        cancellable: agentStatus === "running",
+        startedAt: Date.now() - 4_000
+      },
+      ...(timerTaskStatus ? [{
+        taskId: "timer_feature",
+        toolName: "Agent",
+        description: "Verify aggregate task timing",
+        status: timerTaskStatus,
+        cancellable: timerTaskStatus === "running",
+        startedAt: Date.now() - 1_000
+      }] : [])
+    ],
+    backgroundTaskDetails: [
+      {
+        taskId: "agent_feature",
+        taskKind: "local_agent",
+        agentId: "agent_feature",
+        agentType: "reviewer",
+        childSessionId: "child_feature",
+        parentSessionId: "feature-session",
+        turnId: "turn_feature",
+        prompt: "Review the recovery path and report findings.",
+        error: agentStatus === "failed" ? "The first attempt lost its provider connection." : undefined,
+        status: agentStatus
+      },
+      ...(timerTaskStatus ? [{
+        taskId: "timer_feature",
+        taskKind: "local_agent",
+        agentId: "timer_feature",
+        agentType: "reviewer",
+        childSessionId: "child_timer_feature",
+        parentSessionId: "feature-session",
+        turnId: "turn_timer_feature",
+        prompt: "Verify aggregate task timing.",
+        error: timerTaskStatus === "failed" ? "Expected timer fixture failure." : undefined,
+        status: timerTaskStatus
+      }] : [])
+    ]
   }),
   cancelBackgroundTask: async (taskId) => {
     if (taskId !== "bg_feature") throw new Error(`Unexpected background task: ${taskId}`);
     backgroundStatus = "cancelled";
     return { cancelled: true, status: backgroundStatus, taskId };
+  },
+  sendBackgroundTaskMessage: async ({ taskId, message, summary, restart }) => {
+    if (taskId !== "agent_feature") throw new Error(`Unexpected agent task: ${taskId}`);
+    agentMessageCount += 1;
+    const expectedMessage = agentMessageCount === 1
+      ? "Fix the recovery issue and rerun the focused test."
+      : "Restart from the saved state and finish the remaining verification.";
+    if (message !== expectedMessage) throw new Error(`Unexpected agent message: ${message}`);
+    if (summary !== message) throw new Error(`Unexpected agent summary: ${summary}`);
+    if (restart !== (agentMessageCount === 2)) {
+      throw new Error(`Unexpected restart flag for agent message ${agentMessageCount}.`);
+    }
+    agentStatus = "running";
+    return {
+      status: "success",
+      delivery: "resumed_background",
+      taskId,
+      message: restart
+        ? `Agent "${taskId}" restarted in the background.`
+        : `Agent "${taskId}" resumed in the background.`
+    };
+  },
+  interruptTurn: async ({ pendingInputIds, reason, reservationId, waitForIdle }) => {
+    if (!stuckBackgroundHandoff) throw new Error("Unexpected background handoff interrupt.");
+    if (pendingInputIds?.length !== 0
+      || reason !== "User input preempted background result processing."
+      || !reservationId?.startsWith("background_handoff_")
+      || waitForIdle !== true) {
+      throw new Error("Background handoff interrupt did not request an idle runtime boundary.");
+    }
+    stuckBackgroundHandoff = false;
+    return { kind: "stopped", foregroundExecutionId: "fixture-background-handoff" };
   },
   previewFileRewind: async (targetMessageIds) => {
     if (!targetMessageIds.every((messageId) => sessionTranscript.some((message) => message.messageId === messageId))) {
@@ -211,6 +377,12 @@ await runTui({
     modelRequestCount: 3,
     modelErrorCount: 0
   }),
+  subscribeSessionEvents: (listener) => {
+    sessionEventListener = listener;
+    return () => {
+      if (sessionEventListener === listener) sessionEventListener = undefined;
+    };
+  },
   sendInput: async (input, options) => {
     const prompt = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
     const promptText = typeof input === "string" ? input : prompt.text;
@@ -257,11 +429,63 @@ await runTui({
     if (options.delivery !== "start_turn") {
       throw new Error(`Idle input used unexpected delivery mode: ${String(options.delivery)}`);
     }
+    if (promptText === "verify aggregate timer") {
+      timerTaskStatus = "running";
+      await emitRuntime(options, "turn_started", {
+        inputId: options.inputId,
+        turnId: "turn_timer_feature"
+      });
+      await emitRuntime(options, "background_task_started", {
+        taskId: "timer_feature",
+        taskKind: "local_agent",
+        status: "running",
+        turnId: "turn_timer_feature"
+      });
+      setTimeout(() => {
+        timerTaskStatus = "failed";
+        void emitSessionEvent({
+          id: "event_timer_task_failed",
+          type: "background_task_updated",
+          turnId: "turn_timer_feature",
+          payload: {
+            taskId: "timer_feature",
+            taskKind: "local_agent",
+            status: "failed"
+          }
+        });
+      }, 1_800).unref?.();
+      return {
+        kind: "started_turn",
+        result: {
+          response: "Timer foreground complete; background still running.",
+          model,
+          thoughtLevel: effort
+        }
+      };
+    }
     if (promptText === "Run this after the active turn.") {
+      stuckBackgroundHandoff = true;
+      await emitSessionEvent({
+        id: "event_stuck_background_handoff",
+        type: "turn_started",
+        turnId: "turn_stuck_background_handoff",
+        payload: { inputSource: "background_task" }
+      }, options.onEvent);
       return {
         kind: "started_turn",
         result: {
           response: "Queued follow-up started after the active turn.",
+          model,
+          thoughtLevel: effort
+        }
+      };
+    }
+    if (promptText === "Continue after the stuck background handoff.") {
+      if (stuckBackgroundHandoff) throw new Error("Stuck background handoff was not interrupted.");
+      return {
+        kind: "started_turn",
+        result: {
+          response: "Queued input started after interrupting the stuck background handoff.",
           model,
           thoughtLevel: effort
         }
@@ -404,10 +628,23 @@ await runTui({
       tool: "Agent",
       state: {
         status: "running",
-        input: { agentType: "explore", description: "Inspect nested rendering", prompt: "Read child.ts" }
+        input: {
+          agentType: "explore",
+          description: "Inspect nested rendering",
+          prompt: "Read child.ts",
+          run_in_background: true
+        }
       }
     };
     await emitRuntime(options, "part.started", { part: agentPart });
+    await emitRuntime(options, "part.started", {
+      part: {
+        type: "reasoning",
+        partId: "part_agent_coordination",
+        messageId: "message_assistant",
+        text: "Coordinator dispatching background research; this belongs in Tasks."
+      }
+    });
     await emitRuntime(options, "subagent_spawned", {
       parentToolCallId: "call_agent",
       agentId: "agent_feature",
@@ -417,13 +654,13 @@ await runTui({
     });
     const childPart = {
       type: "tool",
-      partId: "part_child_bash",
+      partId: "part_child_fetch",
       messageId: "message_assistant",
-      callId: "call_child_bash",
-      tool: "Bash",
+      callId: "call_child_fetch",
+      tool: "Fetch",
       state: {
         status: "running",
-        input: { command: "sed -n '1,80p' child.ts" },
+        input: { url: "https://github.com/example/background-research" },
         metadata: { parentToolCallId: "call_agent" }
       }
     };
@@ -434,7 +671,7 @@ await runTui({
         state: {
           ...childPart.state,
           status: "completed",
-          output: "export const child = true;"
+          output: "Background research result"
         }
       }
     });
@@ -527,6 +764,7 @@ await runTui({
     featureTurnActive = false;
     turnCompleted = true;
     resolveFeatureTurnFinished();
+    await runBackgroundCompletionTurn(options.onEvent);
     return {
       kind: "started_turn",
       result: {

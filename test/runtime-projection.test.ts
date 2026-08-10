@@ -44,9 +44,44 @@ describe("runtime projection normalization", () => {
     expect(snapshot?.activeToolCalls[0]).toMatchObject({ toolCallId: "tool-1", toolName: "Bash" });
     expect(snapshot?.backgroundJobs[0]).toMatchObject({
       taskId: "bg-1",
+      taskKind: "local_bash",
       command: "bun test",
       status: "running",
       stdoutTail: "81 pass"
+    });
+  });
+
+  test("merges runtime task-registry metadata into background projections", () => {
+    const snapshot = normalizeRuntimeProjection({
+      sessionId: "session-1",
+      activeToolCalls: [],
+      backgroundTasks: [{
+        taskId: "agent-1",
+        toolName: "Agent",
+        status: "failed",
+        description: "Review task recovery"
+      }],
+      backgroundTaskDetails: [{
+        taskId: "agent-1",
+        taskKind: "local_agent",
+        agentId: "agent-1",
+        agentType: "reviewer",
+        childSessionId: "child-1",
+        parentSessionId: "session-1",
+        turnId: "turn-1",
+        prompt: "Audit the task flow",
+        error: "Provider unavailable"
+      }]
+    });
+
+    expect(snapshot?.backgroundJobs[0]).toMatchObject({
+      taskId: "agent-1",
+      taskKind: "local_agent",
+      agentId: "agent-1",
+      agentType: "reviewer",
+      childSessionId: "child-1",
+      prompt: "Audit the task flow",
+      error: "Provider unavailable"
     });
   });
 

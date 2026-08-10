@@ -9,6 +9,7 @@ export type RuntimeBackgroundStatus =
   | "cancelled"
   | "spawn_error"
   | "lost";
+export type RuntimeTaskKind = "local_agent" | "local_bash" | "local_workflow" | "monitor_mcp" | "unknown";
 
 export interface RuntimeTodo {
   content: string;
@@ -35,14 +36,23 @@ export interface RuntimeActiveToolCall {
 
 export interface RuntimeBackgroundJob {
   taskId: string;
+  taskKind: RuntimeTaskKind;
   toolCallId?: string;
   toolName?: string;
+  agentId?: string;
+  agentType?: string;
+  childSessionId?: string;
+  parentSessionId?: string;
+  parentToolCallId?: string;
+  turnId?: string;
   blocked?: boolean;
   blockedReason?: string;
   cancellable?: boolean;
   cancelRequestedAt?: number;
   command?: string;
   description?: string;
+  prompt?: string;
+  error?: string;
   status: RuntimeBackgroundStatus;
   pid?: number;
   startedAt?: number;
@@ -216,16 +226,37 @@ function backgroundJobFrom(value: unknown): RuntimeBackgroundJob | undefined {
   const taskId = stringField(value, "taskId", "taskID", "id");
   const status = stringField(value, "status") as RuntimeBackgroundStatus | undefined;
   if (!taskId || !status || !backgroundStatuses.has(status)) return undefined;
+  const rawKind = stringField(value, "taskKind", "taskType", "type")?.toLowerCase();
+  const toolName = stringField(value, "toolName");
+  const taskKind: RuntimeTaskKind = rawKind === "agent" || rawKind === "local_agent" || toolName === "Agent"
+    ? "local_agent"
+    : rawKind === "bash" || rawKind === "local_bash" || toolName === "Bash"
+      ? "local_bash"
+      : rawKind === "workflow" || rawKind === "local_workflow" || toolName === "Workflow"
+        ? "local_workflow"
+        : rawKind === "monitor_mcp" || toolName === "Monitor"
+          ? "monitor_mcp"
+          : "unknown";
+  const rawError = isRecord(value.error) ? value.error : undefined;
   return {
     taskId,
+    taskKind,
     toolCallId: stringField(value, "toolCallId", "toolCallID"),
-    toolName: stringField(value, "toolName"),
+    toolName,
+    agentId: stringField(value, "agentId"),
+    agentType: stringField(value, "agentType", "subagentType"),
+    childSessionId: stringField(value, "childSessionId", "childSessionID"),
+    parentSessionId: stringField(value, "parentSessionId", "parentSessionID"),
+    parentToolCallId: stringField(value, "parentToolCallId", "parentToolCallID"),
+    turnId: stringField(value, "turnId", "turnID"),
     blocked: typeof value.blocked === "boolean" ? value.blocked : undefined,
     blockedReason: stringField(value, "blockedReason"),
     cancellable: typeof value.cancellable === "boolean" ? value.cancellable : undefined,
     cancelRequestedAt: timestamp(value.cancelRequestedAt),
     command: stringField(value, "command"),
     description: stringField(value, "description"),
+    prompt: stringField(value, "prompt"),
+    error: stringField(value, "error") ?? (rawError && stringField(rawError, "message")),
     status,
     pid: positiveInteger(value.pid),
     startedAt: timestamp(value.startedAt),
@@ -287,6 +318,12 @@ export function normalizeRuntimeProjection(value: unknown): RuntimeProjectionSna
   const runtime = isRecord(value.runtime) ? value.runtime : undefined;
   const rawActiveTools = projection.activeToolCalls;
   const rawBackgroundJobs = projection.backgroundJobs ?? projection.backgroundTasks;
+  const taskDetails = new Map(records(
+    projection.backgroundTaskDetails ?? value.backgroundTaskDetails
+  ).flatMap((item): [string, Record<string, unknown>][] => {
+    const taskId = stringField(item, "taskId", "taskID", "id");
+    return taskId ? [[taskId, item]] : [];
+  }));
   const rawLastError = isRecord(projection.lastError) ? projection.lastError : undefined;
   const lastErrorType = rawLastError && stringField(rawLastError, "type");
   const lastErrorMessage = rawLastError && stringField(rawLastError, "message");
@@ -302,7 +339,10 @@ export function normalizeRuntimeProjection(value: unknown): RuntimeProjectionSna
       return tool ? [tool] : [];
     }),
     backgroundJobs: records(rawBackgroundJobs).flatMap((item): RuntimeBackgroundJob[] => {
-      const job = backgroundJobFrom(item);
+      const taskId = stringField(item, "taskId", "taskID", "id");
+      const job = backgroundJobFrom(taskId && taskDetails.has(taskId)
+        ? { ...taskDetails.get(taskId), ...item }
+        : item);
       return job ? [job] : [];
     }),
     contextUsage: contextUsageFrom(runtime?.contextUsage ?? value.contextUsage, projection),

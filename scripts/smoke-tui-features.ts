@@ -235,10 +235,46 @@ try {
     /Queued next turn · 1 input[\s\S]*Run this after the active turn\./i
   );
   await waitFor("feature turn", /Feature prompt complete\./i, featureTurnStart, 12_000);
+  await waitFor(
+    "compact background agent reply",
+    /Background agent replied[\s\S]*agent_feature · \/tasks/i,
+    featureTurnStart,
+    4_000
+  );
+  await waitFor(
+    "compact background task failure",
+    /Background task needs attention[\s\S]*agent_feature · \/tasks/i,
+    featureTurnStart,
+    4_000
+  );
+  terminal.write("\x1b");
+  await Bun.sleep(75);
+  if (child.exitCode !== null) throw new Error("Esc exited ZCode during a background handoff.");
+  await waitFor(
+    "compact handoff failure",
+    /Background result processing failed[\s\S]*agent_feature · \/tasks/i,
+    featureTurnStart,
+    4_000
+  );
   await waitFor("queued follow-up turn", /Queued follow-up started after the active turn\./i, featureTurnStart, 4_000);
   await waitFor("feature turn completion", /Feature background audit · turn complete/i, 0, 4_000);
-  await sendAndWait("\x0f", "expanded Agent transcript", /Response:\s*Nested rendering inspected\./i);
-
+  await sendAndWait(
+    "Continue after the stuck background handoff.\r",
+    "background handoff preemption",
+    /Background result processing was interrupted; starting your queued input\.[\s\S]*Queued input started after interrupting the stuck background handoff\./i
+  );
+  const foregroundBeforeTaskCenter = plainText(output.slice(featureTurnStart));
+  if (/Task-scoped agent handoff completed|Coordinator began processing the failed task result|Background-only reasoning|background_fetch|Coordinator dispatching background research|background-research|Inspect nested rendering/i.test(foregroundBeforeTaskCenter)) {
+    throw new Error("Task-scoped background output leaked into the foreground transcript.");
+  }
+  if (/Turn cancelled\./i.test(foregroundBeforeTaskCenter)) {
+    throw new Error("Esc cancelled the foreground submission while a background handoff was active.");
+  }
+  const expandedForegroundStart = await sendAndWait("\x0f", "expanded foreground tool transcript", /source text/i);
+  const expandedForeground = plainText(output.slice(expandedForegroundStart));
+  if (/Coordinator dispatching background research|background-research|Inspect nested rendering|Nested rendering inspected/i.test(expandedForeground)) {
+    throw new Error("Expanding foreground tools exposed a background Agent tree.");
+  }
   await sendAndWait("/diff\r", "diff source picker", /Select current workspace changes or a completed turn/i);
   await sendAndWait("\x1b[B\r", "turn diff file list", /Diff · Turn \d+/i);
   await sendAndWait("\r", "turn diff detail", /Page 1\/\d+/i);
@@ -269,8 +305,50 @@ try {
   await sendAndWait("/activity\r", "complete activity view", /Current activity[\s\S]*Verify the TUI/i);
   await sendAndSettle("\r");
   await sendAndWait("/tasks\r", "background task picker", /Background tasks/i);
-  await sendAndWait("\r", "background task detail", /Background task · bg_feature/i);
-  await sendAndSettle("\r");
+  await sendAndWait("\r", "Bash task detail", /Bash task · bg_feature/i);
+  await sendAndWait("\x1b", "return to background task list", /Background tasks/i);
+  await sendAndWait(
+    "\x1b[B\r",
+    "agent task detail",
+    /Agent \(reviewer\) task · agent_feature[\s\S]*Background agent reply stored in task activity\.[\s\S]*Background result failed visibly\./i
+  );
+  const resumePromptStart = await sendAndWait("\r", "resume agent prompt", /Resume background agent/i);
+  if (/alpha\/model/i.test(plainText(output.slice(resumePromptStart)))) {
+    throw new Error("The main composer remained visible beneath the background agent prompt.");
+  }
+  await sendAndWait(
+    "Fix the recovery issue and rerun the focused test.\r",
+    "resumed agent task",
+    /Status: running[\s\S]*You: Fix the recovery issue and rerun the focused test\.[\s\S]*Agent "agent_feature" resumed in the background\./i
+  );
+  await sendAndWait("\x1b[B\r", "restart active agent prompt", /Restart background agent/i);
+  await sendAndWait(
+    "Restart from the saved state and finish the remaining verification.\r",
+    "restarted active agent task",
+    /Status: running[\s\S]*Agent "agent_feature" restarted in the background\./i
+  );
+  await sendAndWait("\x1b", "return to task list after resume", /Background tasks/i);
+  await sendAndSettle("\x1b");
+  const timerTurnStart = output.length;
+  terminal.write("verify aggregate timer\r");
+  await waitFor(
+    "aggregate timer foreground completion",
+    /Timer foreground complete; background still running\./i,
+    timerTurnStart
+  );
+  const timerForegroundSettled = output.length;
+  await waitFor(
+    "aggregate timer continuing after foreground",
+    /[🕐-🕛] [1-9]\d*s/u,
+    timerForegroundSettled,
+    1_600
+  );
+  await waitFor(
+    "aggregate timer settling after background failure",
+    /✓ [1-9]\d*s/u,
+    timerForegroundSettled,
+    3_000
+  );
   await sendAndWait("/goal pause\r", "paused goal", /Goal: Paused \(\/goal resume\)/i);
   await sendAndWait("/resume\r", "resume picker", /Resume Session/i);
   await sendAndWait("\r", "selected session transcript", /Restored selected response\./i);
@@ -294,12 +372,17 @@ if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 if (code !== 0) throw new Error(`Feature TUI smoke exited with ${code}.\n${plain.slice(-6_000)}`);
 
 const turnNotifications = output.match(/\x1b\]9;ZCode ·/gu) ?? [];
-if (turnNotifications.length !== 3
+if (turnNotifications.length !== 8
   || !output.includes("\x1b]9;ZCode · Plan approval fixture complete: allow.")
   || !output.includes("\x1b]9;ZCode · Plan approval fixture complete: deny · plan_approval_feedback.")
   || !output.includes("\x1b]9;ZCode · Queued follow-up started after the active turn.")
+  || !output.includes("\x1b]9;ZCode · Queued input started after interrupting the stuck background handoff.")
+  || !output.includes("\x1b]9;ZCode · Timer foreground complete; background still running.")
+  || !output.includes("\x1b]9;ZCode · Background agent replied · agent_feature · /tasks")
+  || !output.includes("\x1b]9;ZCode · Background task needs attention · agent_feature · /tasks")
+  || !output.includes("\x1b]9;ZCode · Background result processing failed · agent_feature · /tasks")
   || output.includes("\x1b]9;ZCode · Feature prompt complete.")) {
-  throw new Error(`Expected three idle-boundary agent-turn notifications, received ${turnNotifications.length}.`);
+  throw new Error(`Expected eight idle-boundary and task notifications, received ${turnNotifications.length}.`);
 }
 
 for (const [label, pattern] of [
@@ -328,7 +411,12 @@ for (const [label, pattern] of [
   ["active goal footer", /Goal: Active \(40K \/ 50K\)/i],
   ["persistent runtime activity", /Activity · 1 in background · 1 open task · \/tasks/i],
   ["background task summary", /Feature background audit · bg_feature/i],
-  ["background task dialog", /Background task · bg_feature/i],
+  ["Bash task dialog", /Bash task · bg_feature/i],
+  ["agent task dialog", /Agent \(reviewer\) task · agent_feature/i],
+  ["task-scoped agent output", /Task activity[\s\S]*Background agent reply stored in task activity\./i],
+  ["task-scoped handoff failure", /Task activity[\s\S]*Background result failed visibly\./i],
+  ["resumed agent conversation", /You: Fix the recovery issue and rerun the focused test\.[\s\S]*Agent "agent_feature" resumed in the background\./i],
+  ["restarted active agent", /Agent "agent_feature" restarted in the background\./i],
   ["paused goal footer", /Goal: Paused \(\/goal resume\)/i],
   ["model picker", /Select model/i],
   ["effort picker", /Select reasoning effort/i],
@@ -344,17 +432,18 @@ for (const [label, pattern] of [
   ["rejected steer fallback", /Steer was not accepted \(turn not steerable\); queued for the next turn\./i],
   ["editable follow-up queue", /Queued next turn · 1 input[\s\S]*Revise this queued follow-up\./i],
   ["automatic queued follow-up", /Queued follow-up started after the active turn\./i],
+  ["background handoff preemption", /Queued input started after interrupting the stuck background handoff\./i],
+  ["compact background agent reply", /Background agent replied[\s\S]*agent_feature · \/tasks/i],
+  ["compact background task failure", /Background task needs attention[\s\S]*agent_feature · \/tasks/i],
+  ["compact handoff failure", /Background result processing failed[\s\S]*agent_feature · \/tasks/i],
   ["completed thinking card", /◇ Thought/i],
-  ["reasoning content", /Inspecting the repository before using tools\./i],
   ["updated plan", /● Updated Plan/i],
   ["plan summary", /2 completed · 1 in progress · 0 pending/i],
   ["active plan item", /□ Verify the TUI/i],
   ["pre-tool assistant commentary", /I will inspect the repository first\./i],
-  ["tool execution", /✓ Read demo\.ts/i],
+  ["tool execution", /Read 1 file · ⎿ demo\.ts/i],
   ["tool result", /source text/i],
   ["file diff header", /✓ Edit demo\.ts \+1 -1/i],
-  ["nested Agent tree", /child tool/i],
-  ["expanded Agent response", /Response:\s*Nested rendering inspected\./i],
   ["diff browser", /Diff · Turn \d+/i],
   ["diff detail paging", /Page 1\/\d+/i],
   ["context detail", /Estimated prompt composition by characters/i],

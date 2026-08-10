@@ -23,6 +23,10 @@ describe("TUI turn status", () => {
     expect(turnStatusText("thinking…", 3_000)).toBe("thinking… ── [ 🕛 3s ]");
   });
 
+  test("marks a settled foreground turn as completed instead of frozen", () => {
+    expect(turnStatusText(undefined, 364_000, true, false, true)).toBe("[ ✓ 6m 04s ]");
+  });
+
   test("animates the active timer with complete stable-width clock frames", () => {
     const frames = Array.from(
       { length: 12 },

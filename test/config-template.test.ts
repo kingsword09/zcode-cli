@@ -19,6 +19,9 @@ interface ConfigTemplate {
   modelStream: {
     idleTimeoutMs: number;
   };
+  subagents: {
+    autoBackgroundMs: number;
+  };
   ui: {
     theme: string;
     notifications: {
@@ -42,6 +45,7 @@ test("custom-provider config template is internally consistent", async () => {
   expect(config.provider[providerId]?.options.apiKey).toBeUndefined();
   expect(config.provider[providerId]?.options.baseURL).toBe("https://api.z.ai/api/anthropic");
   expect(config.modelStream.idleTimeoutMs).toBe(60_000);
+  expect(config.subagents.autoBackgroundMs).toBe(1_000);
   expect(config.ui.theme).toBe("auto");
   expect(config.ui.notifications).toEqual({ method: "auto", condition: "unfocused" });
 });

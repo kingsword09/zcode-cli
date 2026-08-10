@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type { StreamEvent } from "./events.ts";
-import type {
-  RuntimeProjectionSnapshot,
-  RuntimeTodo,
-  RuntimeTodoGroup
+import {
+  isActiveBackgroundJob,
+  isActiveRuntimeTool,
+  type RuntimeProjectionSnapshot,
+  type RuntimeTodo,
+  type RuntimeTodoGroup
 } from "./runtime-projection.ts";
 
 export const ACTIVE_RUNTIME_POLL_INTERVAL_MS = 1_000;
@@ -14,6 +16,11 @@ export interface RuntimePollState {
   projection?: RuntimeProjectionSnapshot;
   todos: RuntimeTodo[];
   todoGroups: RuntimeTodoGroup[];
+}
+
+export function runtimeActivityActive(projection: RuntimeProjectionSnapshot | undefined): boolean {
+  return Boolean(projection?.activeToolCalls.some(isActiveRuntimeTool)
+    || projection?.backgroundJobs.some(isActiveBackgroundJob));
 }
 
 export function runtimePollInterval(active: boolean): number {

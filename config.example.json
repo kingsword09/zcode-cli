@@ -50,6 +50,9 @@
     "skill": true,
     "mcp": true
   },
+  "subagents": {
+    "autoBackgroundMs": 1000
+  },
   "memory": {
     "use": true,
     "write": true,

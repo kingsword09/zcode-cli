@@ -126,6 +126,12 @@ try {
     cancelTurnStart,
     2_000
   );
+  const foregroundCancelStart = output.length;
+  terminal.write("cancel stress\r");
+  await waitFor("foreground Esc cancellation turn", /Bash cancel-pressure/i, foregroundCancelStart);
+  terminal.write("\x1b");
+  await waitFor("foreground Esc cancellation", /Turn cancelled\./i, foregroundCancelStart, 2_000);
+  if (child.exitCode !== null) throw new Error("Esc exited ZCode while cancelling a foreground turn.");
   terminal.write("\x03");
 } catch (error) {
   interactionError = error;

@@ -9,6 +9,15 @@ export interface StreamEvent {
   messageId?: string;
   partId?: string;
   turnId?: string;
+  eventId?: string;
+  inputSource?: string;
+  taskId?: string;
+  taskIds?: string[];
+  taskKind?: string;
+  taskStatus?: string;
+  agentId?: string;
+  agentType?: string;
+  childSessionId?: string;
   targetTurnId?: string;
   inputId?: string;
   pendingInputId?: string;
@@ -82,6 +91,8 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
   const part = normalizeRestoredPart(partValue);
   const error = body.error;
   const errorRecord = isRecord(error) ? error : undefined;
+  const originMeta = nestedRecord(body, "originMeta");
+  const subagentMessage = nestedRecord(body, "subagentMessage");
   const streamRecovery = nestedRecord(body, "streamRecovery");
   const recordNumber = (record: UnknownRecord | undefined, key: string): number | undefined => {
     const field = record?.[key];
@@ -113,6 +124,31 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
       ?? part?.messageId,
     partId: asString(body.partId) ?? asString(body.partID) ?? part?.partId,
     turnId: envelopeString("turnId") ?? envelopeString("turnID"),
+    eventId: asString(value.eventId)
+      ?? (params && asString(params.eventId))
+      ?? asString(value.id)
+      ?? (params && asString(params.id))
+      ?? asString(body.eventId)
+      ?? asString(body.id),
+    inputSource: envelopeString("inputSource"),
+    taskId: envelopeString("taskId")
+      ?? envelopeString("taskID")
+      ?? (originMeta && asString(originMeta.workId)),
+    taskIds: strings("taskIds")
+      ?? strings("taskIDs")
+      ?? (originMeta && (
+        Array.isArray(originMeta.workIds)
+          ? originMeta.workIds.filter((item): item is string => typeof item === "string")
+          : asString(originMeta.workId) ? [asString(originMeta.workId)!] : undefined
+      )),
+    taskKind: envelopeString("taskKind") ?? envelopeString("taskType"),
+    taskStatus: envelopeString("status"),
+    agentId: envelopeString("agentId")
+      ?? (subagentMessage && asString(subagentMessage.agentId)),
+    agentType: envelopeString("agentType")
+      ?? (subagentMessage && asString(subagentMessage.agentType)),
+    childSessionId: envelopeString("childSessionId")
+      ?? (subagentMessage && asString(subagentMessage.childSessionId)),
     targetTurnId: envelopeString("targetTurnId") ?? envelopeString("targetTurnID"),
     inputId: asString(body.inputId) ?? asString(body.inputID),
     pendingInputId: asString(body.pendingInputId) ?? asString(body.pendingInputID),
@@ -132,7 +168,11 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
     errorCode: asString(body.errorCode),
     errorPhase: asString(body.errorPhase),
     exceptionType: asString(body.exceptionType),
-    message: asString(body.message) ?? (errorRecord && asString(errorRecord.message)),
+    message: asString(body.message)
+      ?? asString(body.summaryText)
+      ?? (type === "subagent_message" ? asString(body.text) : undefined)
+      ?? asString(error)
+      ?? (errorRecord && asString(errorRecord.message)),
     progress: {
       elapsedMs: number("elapsedMs"),
       durationMs: number("durationMs") ?? number("duration"),

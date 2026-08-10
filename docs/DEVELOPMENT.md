@@ -40,7 +40,8 @@ config output, executes `/help`, switches to plan mode, exits, and checks that
 the launcher forwards terminal SIGHUP shutdown. The offline
 feature scenario also covers suspended login restoration, selectors, image
 attachments, nested Agent tools, Markdown, Mermaid, diffs, transcript
-navigation, context/status details, MCP actions, background tasks and the
+navigation, context/status details, MCP actions, task-scoped background output,
+terminal-agent recovery and the
 workflow panel. A pressure scenario verifies that steering, UTF-8 input and
 Ctrl+C cancellation remain responsive during rapid Bash progress output. The
 scenarios advance from observed terminal output instead of fixed timers and do

@@ -46,6 +46,18 @@ if (!runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes(".previewFileRewind=async e=>")
   || !runtimeSource.includes(".applyFileRewind=async e=>")
   || !runtimeSource.includes(".listSkills=async()=>await")
+  || !runtimeSource.includes(".subscribeSessionEvents=")
+  || !runtimeSource.includes(".sendBackgroundTaskMessage=async")
+  || !runtimeSource.includes("backgroundTaskDetails")
+  || !runtimeSource.includes('i.includes("AI SDK Warning")&&i.includes("cacheControl breakpoint limit")')
+  || !runtimeSource.includes('if(n==="model_not_found")return{code:lr.ModelNotFound')
+  || !runtimeSource.includes("autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:")
+  || runtimeSource.split("Detached background agent lifecycle failed").length < 3
+  || !runtimeSource.includes('if(e?.restart===!0&&o.status==="running")')
+  || !runtimeSource.includes('e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId')
+  || !runtimeSource.includes('status:"idle",currentTurnId:void 0,activeToolCalls:[],totalTokenCount:')
+  || !runtimeSource.includes('status:"error",currentTurnId:void 0,activeToolCalls:[],lastError:')
+  || !/runtimeTaskRegistry\?\.all\?\.\(\)\?\?\{\}\)\.filter\(([A-Za-z_$][\w$]*)=>\1\.isBackgrounded===!0\)\.map\(/u.test(runtimeSource)
   || !supportsMultiMessageFileRewind(runtimeSource)
   || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"/u.test(runtimeSource)
   || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u.test(runtimeSource)
@@ -58,7 +70,9 @@ if (!runtimeSource.includes('"plugin://"')
   || !/cancelBackgroundTask:[A-Za-z_$][\w$]*\.cancelBackgroundTask/u.test(runtimeSource)
   || !/previewFileRewind:[A-Za-z_$][\w$]*\.previewFileRewind/u.test(runtimeSource)
   || !/applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtimeSource)
-  || !/listSkills:[A-Za-z_$][\w$]*\.listSkills/u.test(runtimeSource)) {
+  || !/listSkills:[A-Za-z_$][\w$]*\.listSkills/u.test(runtimeSource)
+  || !/subscribeSessionEvents:[A-Za-z_$][\w$]*\.subscribeSessionEvents/u.test(runtimeSource)
+  || !/sendBackgroundTaskMessage:[A-Za-z_$][\w$]*\.sendBackgroundTaskMessage/u.test(runtimeSource)) {
   throw new Error("The runtime compatibility patches are missing; run `bun run sync` again.");
 }
 

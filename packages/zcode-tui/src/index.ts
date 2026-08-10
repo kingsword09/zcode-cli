@@ -31,6 +31,8 @@ import {
 } from "./attachments.ts";
 import { AttachmentBar } from "./attachment-bar.ts";
 import { AssistantStream } from "./assistant-stream.ts";
+import { BackgroundTaskEventStore } from "./background-task-events.ts";
+import { readBackgroundTaskOutput } from "./background-task-output.ts";
 import { BoundedToolText, toolTextValue } from "./bounded-tool-text.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
 import {
@@ -121,6 +123,7 @@ import { InputQueue, type QueuedSubmission } from "./input-queue.ts";
 import { QueuedInputView } from "./queued-input-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
 import {
+  runtimeActivityActive,
   runtimePollInterval,
   runtimeRefreshNeeded,
   runtimePollStateChanged,
@@ -188,11 +191,13 @@ import {
   turnTimerAnimationEnabled
 } from "./turn-status.ts";
 import { TurnPresentationRegistry } from "./turn-presentation-registry.ts";
+import { TurnWorkTracker } from "./turn-work-tracker.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
 import { UpdateAvailableView, updateCommand } from "./update-available-view.ts";
 import { Divider, WelcomeBanner } from "./welcome-banner.ts";
 import { WorkspaceAutocompleteProvider } from "./workspace-autocomplete.ts";
 import { readWorkspaceDiff } from "./workspace-diff.ts";
+import { workedDurationLabel, WorkDurationView } from "./work-duration-view.ts";
 
 interface ToolViewState {
   id: string;
@@ -233,6 +238,62 @@ const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
 const updateAvailableBlockId = "update_available";
 const modelRetryBlockIdPrefix = "model_retry_status";
+const backgroundTaskAttentionStatuses = new Set(["failed", "timed_out", "spawn_error", "lost"]);
+
+function backgroundTaskKindLabel(job: RuntimeBackgroundJob): string {
+  switch (job.taskKind) {
+    case "local_agent": return job.agentType ? `Agent (${job.agentType})` : "Agent";
+    case "local_bash": return "Bash";
+    case "local_workflow": return "Workflow";
+    case "monitor_mcp": return "Monitor";
+    default: return job.toolName ?? "Task";
+  }
+}
+
+function backgroundTaskSortRank(job: RuntimeBackgroundJob): number {
+  if (isActiveBackgroundJob(job)) return 0;
+  if (backgroundTaskAttentionStatuses.has(job.status)) return 1;
+  return 2;
+}
+
+function backgroundAgentPart(part: RestoredPart): boolean {
+  if (part.type !== "tool") return false;
+  const name = part.toolName.trim().toLowerCase();
+  if (name !== "agent" && name !== "subagent") return false;
+  const input = isRecord(part.input) ? part.input : undefined;
+  const output = isRecord(part.output) ? part.output : undefined;
+  const nestedOutput = isRecord(output?.output) ? output.output : undefined;
+  return input?.run_in_background === true
+    || output?.isAsync === true
+    || output?.status === "async_launched"
+    || output?.status === "backgrounded"
+    || typeof output?.backgroundTaskId === "string"
+    || nestedOutput?.isAsync === true
+    || nestedOutput?.status === "async_launched"
+    || nestedOutput?.status === "backgrounded"
+    || typeof nestedOutput?.backgroundTaskId === "string";
+}
+
+function backgroundToolPartIds(parts: readonly RestoredPart[]): Set<string> {
+  const hidden = new Set<string>();
+  for (const part of parts) {
+    if (!backgroundAgentPart(part) || part.type !== "tool") continue;
+    const id = part.toolCallId ?? part.partId;
+    if (id) hidden.add(id);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const part of parts) {
+      if (part.type !== "tool" || !part.parentToolCallId || !hidden.has(part.parentToolCallId)) continue;
+      const id = part.toolCallId ?? part.partId;
+      if (!id || hidden.has(id)) continue;
+      hidden.add(id);
+      changed = true;
+    }
+  }
+  return hidden;
+}
 
 function modelRetryProgress(event: StreamEvent, phase: "scheduled" | "started"): string {
   const retryNumber = phase === "started"
@@ -309,6 +370,16 @@ function restoredToolState(status: string): string {
   }
 }
 
+class ConditionalContainer extends Container {
+  constructor(private readonly visible: () => boolean) {
+    super();
+  }
+
+  override render(width: number): string[] {
+    return this.visible() ? super.render(width) : [];
+  }
+}
+
 class ZCodeTui {
   private readonly animateTurnTimer: boolean;
   private readonly colorsEnabled: boolean;
@@ -318,6 +389,7 @@ class ZCodeTui {
   private readonly ui: TUI;
   private readonly transcript: Transcript;
   private readonly choiceHost = new Container();
+  private readonly composerHost = new ConditionalContainer(() => this.choiceDepth === 0);
   private readonly runtimeActivity: RuntimeActivityView;
   private readonly status: StatusLine;
   private readonly turnStatus: FooterBar;
@@ -334,6 +406,7 @@ class ZCodeTui {
   private queuedSelectionCommand?: QueuedSubmission;
   private readonly inputQueue: InputQueue;
   private turnAbortController?: AbortController;
+  private foregroundTurnInterrupt?: AbortController;
   private readonly steerAbortControllers = new Set<AbortController>();
   private primaryTurnActive = false;
   private primaryTurnInputId?: string;
@@ -367,6 +440,10 @@ class ZCodeTui {
   private lastAssistantText = "";
   private turnAssistantText = "";
   private unsubscribeWorkflow?: () => void;
+  private unsubscribeSession?: () => void;
+  private readonly backgroundTaskEvents = new BackgroundTaskEventStore();
+  private readonly turnWork = new TurnWorkTracker();
+  private readonly backgroundCoordinatorMessageIds = new Set<string>();
   private workflowPanel?: Record<string, unknown>;
   private workflowView?: Markdown;
   private workflowRefreshInFlight = false;
@@ -379,6 +456,7 @@ class ZCodeTui {
   private turnStartedAt?: number;
   private turnElapsedMilliseconds = 0;
   private turnTimingVisible = false;
+  private turnHadWorkActivity = false;
   private turnTimer?: ReturnType<typeof setInterval>;
   private pendingTurnNotification?: TurnNotificationKind;
   private pendingTurnNotificationDetail = "";
@@ -396,6 +474,8 @@ class ZCodeTui {
   private runtimeRefreshPending = false;
   private runtimeRefreshTimer?: ReturnType<typeof setTimeout>;
   private runtimePollTimer?: ReturnType<typeof setTimeout>;
+  private backgroundDrainScheduled = false;
+  private backgroundHandoffInterruptInFlight = false;
   private updateCheckAbortController?: AbortController;
   private loginRequired: boolean;
   private readonly loginWarning = new Text("", 1, 0);
@@ -498,6 +578,11 @@ class ZCodeTui {
     if (!this.loginRequired) void this.refreshSessionUsage();
     this.scheduleRuntimePoll(0);
     void this.loadHistory();
+    if (this.options.subscribeSessionEvents) {
+      this.unsubscribeSession = this.options.subscribeSessionEvents((event) => {
+        this.onSessionEvent(event);
+      }) ?? undefined;
+    }
     if (this.options.subscribeWorkflowEvents) {
       this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
         this.debugEvent("workflow", event);
@@ -538,11 +623,12 @@ class ZCodeTui {
     this.ui.addChild(this.transcript);
     this.ui.addChild(this.runtimeActivity);
     this.ui.addChild(this.choiceHost);
-    this.ui.addChild(this.turnStatus);
-    this.ui.addChild(this.queuedInputView);
-    this.ui.addChild(this.attachmentBar);
-    this.ui.addChild(this.editor);
-    this.ui.addChild(this.status);
+    this.composerHost.addChild(this.turnStatus);
+    this.composerHost.addChild(this.queuedInputView);
+    this.composerHost.addChild(this.attachmentBar);
+    this.composerHost.addChild(this.editor);
+    this.composerHost.addChild(this.status);
+    this.ui.addChild(this.composerHost);
 
     const commands = this.autocompleteCommands();
     const workspaceDirectory = this.options.workspaceDirectory ?? process.cwd();
@@ -682,7 +768,11 @@ class ZCodeTui {
       { name: "paste-image", description: "Attach an image from the system clipboard" },
       { name: "attachments", description: "Manage or clear pending attachments", argumentHint: "[clear]" },
       { name: "activity", description: "Inspect every active tool and open task" },
-      { name: "tasks", description: "Inspect or stop background tasks", argumentHint: "[stop <task-id>]" },
+      {
+        name: "tasks",
+        description: "Inspect, message or recover background tasks",
+        argumentHint: "[message|resume|stop <task-id>]"
+      },
       { name: "diff", description: "Browse current and per-turn file changes" },
       { name: "context", description: "Inspect context usage and prompt composition" },
       { name: "status", description: "Inspect detailed runtime and session status" },
@@ -808,6 +898,10 @@ class ZCodeTui {
         return { consume: true };
       }
       if (matchesKey(data, "escape")) {
+        if (this.backgroundTaskEvents.hasActiveHandoffs()) {
+          this.clearRewindEscape();
+          return { consume: true };
+        }
         if (this.turnAbortController) {
           this.clearRewindEscape();
           const pendingSteer = this.inputQueue.hasPendingSteers();
@@ -818,9 +912,7 @@ class ZCodeTui {
           if (pendingSteer) {
             this.requestPendingSteerInterrupt();
           } else {
-            this.pendingSteerInterrupt = undefined;
-            this.turnAbortController.abort();
-            this.updateActivity("cancelling…");
+            this.requestForegroundTurnInterrupt();
           }
           return { consume: true };
         }
@@ -897,6 +989,14 @@ class ZCodeTui {
       await this.stopBackgroundTask(input.slice("/tasks stop ".length).trim());
       return;
     }
+    if (input.startsWith("/tasks message ")) {
+      await this.sendTaskCommand(input.slice("/tasks message ".length), false);
+      return;
+    }
+    if (input.startsWith("/tasks resume ")) {
+      await this.sendTaskCommand(input.slice("/tasks resume ".length), true);
+      return;
+    }
     if (input === "/diff") {
       await this.showDiffBrowser();
       return;
@@ -960,6 +1060,11 @@ class ZCodeTui {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
       return;
     }
+    if (!steering && this.backgroundTaskEvents.hasActiveHandoffs()) {
+      this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
+      this.interruptBackgroundHandoffForInput();
+      return;
+    }
     const turnEpoch = steering ? this.activeTurnEpoch : ++this.turnEpoch;
     if (turnEpoch === undefined) {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
@@ -995,7 +1100,10 @@ class ZCodeTui {
         )
       : undefined;
     if (steering) this.recentSteerCommit = undefined;
-    if (!steering) this.addUserMessage(submission.displayInput, attachments.length);
+    if (!steering) {
+      this.backgroundCoordinatorMessageIds.clear();
+      this.addUserMessage(submission.displayInput, attachments.length);
+    }
     if (submission.pending) {
       this.addNotice([
         submission.pending.primary,
@@ -1071,7 +1179,8 @@ class ZCodeTui {
       if (steering && this.activeTurnEpoch !== turnEpoch) return;
       const interruptedForSteer = !steering
         && this.isPendingSteerInterrupt(turnEpoch, abortController);
-      if (abortController.signal.aborted || interruptedForSteer) {
+      const interruptedForeground = !steering && this.foregroundTurnInterrupt === abortController;
+      if (abortController.signal.aborted || interruptedForSteer || interruptedForeground) {
         unfinishedToolState = "cancelled";
         if (!steering) {
           this.inputQueue.autoSend = false;
@@ -1134,6 +1243,7 @@ class ZCodeTui {
         ? "turn_failed"
         : "turn_ended";
     const targetTurnId = this.activeTurnId;
+    this.turnWork.bindTurn(targetTurnId);
     const pendingSteerInterrupt = this.isPendingSteerInterrupt(turnEpoch, abortController)
       ? this.pendingSteerInterrupt
       : undefined;
@@ -1145,6 +1255,7 @@ class ZCodeTui {
     this.activeTurnId = undefined;
     this.activeTurnEpoch = undefined;
     this.pendingSteerInterrupt = undefined;
+    if (this.foregroundTurnInterrupt === abortController) this.foregroundTurnInterrupt = undefined;
     this.recentSteerCommit = undefined;
     if (this.turnAbortController === abortController) this.turnAbortController = undefined;
     for (const controller of this.steerAbortControllers) controller.abort();
@@ -1202,6 +1313,28 @@ class ZCodeTui {
       }
     }).catch(() => {
       if (this.isPendingSteerInterrupt(turnEpoch, abortController)) {
+        abortController.abort();
+      }
+    });
+  }
+
+  private requestForegroundTurnInterrupt(): void {
+    const abortController = this.turnAbortController;
+    if (!abortController || abortController.signal.aborted) return;
+    if (this.foregroundTurnInterrupt === abortController) return;
+    this.pendingSteerInterrupt = undefined;
+    this.foregroundTurnInterrupt = abortController;
+    this.updateActivity("cancelling…");
+    const interruptTurn = this.options.interruptTurn;
+    if (!interruptTurn) {
+      abortController.abort();
+      return;
+    }
+    void interruptTurn({ reason: "TUI interrupted the active foreground turn." }).then((outcome) => {
+      if (this.turnAbortController !== abortController || abortController.signal.aborted) return;
+      if (!isRecord(outcome) || asString(outcome.kind) !== "stopped") abortController.abort();
+    }).catch(() => {
+      if (this.turnAbortController === abortController && !abortController.signal.aborted) {
         abortController.abort();
       }
     });
@@ -1310,6 +1443,19 @@ class ZCodeTui {
     if (turnEpoch !== undefined && turnEpoch !== this.activeTurnEpoch) return;
     const event = normalizeEvent(value);
     if (!event) return;
+    const taskScoped = this.backgroundTaskEvents.isTaskScoped(event);
+    this.applyBackgroundTaskEvent(event);
+    if (!taskScoped && event.kind && toolLifecycleEventKinds.has(event.kind)) this.turnHadWorkActivity = true;
+    const backgroundToolScoped = this.backgroundTaskEvents.isBackgroundToolScoped(event);
+    if (backgroundToolScoped) {
+      this.suppressBackgroundToolTranscript(event);
+      this.suppressBackgroundCoordinatorMessage(event.messageId);
+    }
+    if (taskScoped || this.backgroundTaskEvents.isTaskScoped(event)) {
+      if (runtimeRefreshNeeded(event)) this.scheduleRuntimeRefresh();
+      return;
+    }
+    if (this.isBackgroundCoordinatorReasoning(event)) return;
     const steerQueued = event.type === "turn_steer_queued" || event.type === "turn.steerQueued";
     if (this.turnAbortController
       && steerQueued
@@ -1322,6 +1468,7 @@ class ZCodeTui {
     if ((event.type === "turn_started" || event.type === "turn.started")
       && event.inputId === this.primaryTurnInputId) {
       this.activeTurnId = event.turnId ?? event.targetTurnId ?? this.activeTurnId;
+      this.turnWork.bindTurn(this.activeTurnId);
     }
     if (runtimeRefreshNeeded(event)) this.scheduleRuntimeRefresh();
     if (this.inputQueue.handleLifecycleEvent(event)) {
@@ -1409,7 +1556,7 @@ class ZCodeTui {
           : "waiting for model…",
         false
       );
-    } else if (event.type === "turn.failed") {
+    } else if (event.type === "turn.failed" || event.type === "turn_error") {
       this.finalizeUnresolvedTools("failed", event.message ?? "Turn failed.");
       this.addSystemEvent({ tone: "error", title: "Turn failed", detail: event.message });
     } else if (event.type === "model_retry_scheduled" || event.type === "streamRecovery.updated") {
@@ -1456,6 +1603,131 @@ class ZCodeTui {
       this.addSystemEvent({ tone: "muted", title: "Conversation rewound", detail: event.message });
     }
     this.requestStreamRender();
+  }
+
+  private onSessionEvent(value: unknown): void {
+    this.debugEvent("session-subscription", value);
+    const event = normalizeEvent(value);
+    if (!event) return;
+    this.applyBackgroundTaskEvent(event);
+  }
+
+  private isBackgroundCoordinatorReasoning(event: StreamEvent): boolean {
+    if (!event.messageId || !this.backgroundCoordinatorMessageIds.has(event.messageId)) return false;
+    return event.kind === "reasoning_start"
+      || event.kind === "reasoning_delta"
+      || event.kind === "reasoning_end"
+      || event.part?.type === "thought"
+      || event.field === "reasoning";
+  }
+
+  private suppressBackgroundCoordinatorMessage(messageId: string | undefined): void {
+    if (!messageId) return;
+    this.backgroundCoordinatorMessageIds.add(messageId);
+    let changed = false;
+    for (const [partId, thinking] of [...this.thinkingParts]) {
+      if (this.protocolPartMessages.get(partId) !== messageId) continue;
+      this.thinkingParts.delete(partId);
+      this.protocolPartKinds.delete(partId);
+      this.protocolPartMessages.delete(partId);
+      changed = this.transcript.removeBlock(partId) || changed;
+      if (this.currentThinking === thinking) {
+        this.currentThinking = undefined;
+        this.currentThinkingPartId = undefined;
+      }
+    }
+    if (changed) this.ui.requestRender();
+  }
+
+  private suppressBackgroundToolTranscript(event: StreamEvent): void {
+    const part = event.part?.type === "tool" ? event.part : undefined;
+    const toolId = event.toolCallId ?? part?.toolCallId ?? part?.partId;
+    let tool = toolId ? this.toolViews.get(toolId) : undefined;
+    const visited = new Set<string>();
+    while (tool?.parentToolCallId && !visited.has(tool.id)) {
+      visited.add(tool.id);
+      tool = this.toolViews.get(tool.parentToolCallId) ?? tool;
+      if (visited.has(tool.id)) break;
+    }
+    if (tool && this.transcript.removeBlock(tool.blockId)) this.ui.requestRender();
+  }
+
+  private applyBackgroundTaskEvent(event: StreamEvent): void {
+    const taskId = event.taskId ?? event.agentId ?? event.progress?.agentId;
+    const startsTask = event.type === "background_task_started"
+      || event.type === "background_task_updated"
+      || event.type === "subagent_spawned";
+    if (this.turnStartedAt !== undefined) {
+      const wasOwned = this.turnWork.ownsTask(taskId);
+      const remainsActive = this.turnWork.handle(event);
+      if (startsTask && !wasOwned && this.turnWork.ownsTask(taskId)) this.turnHadWorkActivity = true;
+      if (!remainsActive) this.settleTurnTiming();
+    }
+    const update = this.backgroundTaskEvents.handle(event);
+    if (update.changed) {
+      this.scheduleRuntimeRefresh(0);
+      this.updateRuntimeActivity();
+    }
+    for (const notice of update.notices) {
+      this.addSystemEvent({
+        tone: notice.tone,
+        title: notice.title,
+        summary: notice.summary,
+        detail: notice.detail
+      });
+      void this.notifications.notify(notice.notification, notice.detail ?? `${notice.title} · ${notice.summary}`);
+    }
+    if (update.handoffSettled) this.drainInputAfterBackgroundHandoff();
+    if (update.changed || update.notices.length > 0) this.requestStreamRender();
+  }
+
+  private drainInputAfterBackgroundHandoff(): void {
+    if (this.backgroundDrainScheduled) return;
+    this.backgroundDrainScheduled = true;
+    queueMicrotask(() => {
+      this.backgroundDrainScheduled = false;
+      if (this.stopped
+        || this.activeSubmissions > 0
+        || this.backgroundHandoffInterruptInFlight
+        || this.backgroundTaskEvents.hasActiveHandoffs()
+        || !this.inputQueue.autoSend) return;
+      const next = this.inputQueue.takeNextFollowUp();
+      if (next) void this.submit(next.input, next);
+    });
+  }
+
+  private interruptBackgroundHandoffForInput(): void {
+    if (this.backgroundHandoffInterruptInFlight) return;
+    if (!this.options.interruptTurn) {
+      this.addNotice("The background result turn cannot be interrupted in this runtime.", "warning");
+      return;
+    }
+
+    this.backgroundHandoffInterruptInFlight = true;
+    this.updateActivity("interrupting background result processing…");
+    void this.options.interruptTurn({
+      pendingInputIds: [],
+      reason: "User input preempted background result processing.",
+      reservationId: `background_handoff_${crypto.randomUUID()}`,
+      waitForIdle: true
+    }).then((outcome) => {
+      const kind = isRecord(outcome) ? asString(outcome.kind) : undefined;
+      if (kind !== "stopped" && kind !== "idle") {
+        throw new Error(`Runtime returned ${kind ?? "an unsupported response"}.`);
+      }
+      const settled = this.backgroundTaskEvents.settleActiveHandoffs();
+      this.inputQueue.resetAutoSend();
+      if (settled > 0) {
+        this.addNotice("Background result processing was interrupted; starting your queued input.", "muted");
+      }
+    }).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.addNotice(`Unable to interrupt background result processing: ${detail}`, "error");
+    }).finally(() => {
+      this.backgroundHandoffInterruptInFlight = false;
+      this.updateActivity(undefined);
+      this.drainInputAfterBackgroundHandoff();
+    });
   }
 
   private handleProtocolPartEvent(event: StreamEvent): boolean {
@@ -1642,9 +1914,11 @@ class ZCodeTui {
     this.pendingTurnNotificationDetail = "";
     this.currentToolGroup = undefined;
     this.turnDiffs.beginTurn(prompt);
-    this.turnStartedAt = Date.now();
+    this.turnStartedAt = performance.now();
     this.turnElapsedMilliseconds = 0;
     this.turnTimingVisible = true;
+    this.turnHadWorkActivity = false;
+    this.turnWork.begin();
     if (this.turnTimer) clearInterval(this.turnTimer);
     this.turnTimer = setInterval(
       () => this.updateTurnStatus(),
@@ -1660,6 +1934,7 @@ class ZCodeTui {
     this.assistantStream.clear();
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
+    this.backgroundCoordinatorMessageIds.clear();
     this.presentationRegistry.clear();
     this.turnDiffs.clear();
     this.currentToolGroup = undefined;
@@ -2088,7 +2363,18 @@ class ZCodeTui {
         if (text) this.addUserMessage(text, 0, message.messageId);
         continue;
       }
-      for (const part of message.parts) this.restorePart(part, message.role, message.messageId);
+      const hiddenToolIds = message.role === "assistant"
+        ? backgroundToolPartIds(message.parts)
+        : new Set<string>();
+      const coordinatesBackgroundAgents = message.parts.some(backgroundAgentPart);
+      for (const part of message.parts) {
+        if (coordinatesBackgroundAgents && part.type === "thought") continue;
+        if (part.type === "tool") {
+          const toolId = part.toolCallId ?? part.partId;
+          if (backgroundAgentPart(part) || Boolean(toolId && hiddenToolIds.has(toolId))) continue;
+        }
+        this.restorePart(part, message.role, message.messageId);
+      }
     }
     this.currentToolGroup = undefined;
     this.currentToolGroupBlockId = undefined;
@@ -3165,39 +3451,128 @@ class ZCodeTui {
   }
 
   private async showBackgroundTasks(): Promise<void> {
-    await this.refreshRuntimeState();
-    const jobs = [...(this.runtimeProjection?.backgroundJobs ?? [])]
-      .sort((left, right) => Number(isActiveBackgroundJob(right)) - Number(isActiveBackgroundJob(left))
-        || (right.startedAt ?? 0) - (left.startedAt ?? 0));
-    if (jobs.length === 0) {
-      this.addNotice("No background tasks.", "muted");
-      return;
+    while (true) {
+      await this.refreshRuntimeState();
+      const jobs = [...(this.runtimeProjection?.backgroundJobs ?? [])]
+        .sort((left, right) => backgroundTaskSortRank(left) - backgroundTaskSortRank(right)
+          || (right.startedAt ?? 0) - (left.startedAt ?? 0));
+      if (jobs.length === 0) {
+        this.addNotice("No background tasks yet. New background work will appear in /tasks.", "muted");
+        return;
+      }
+      const active = jobs.filter(isActiveBackgroundJob).length;
+      const attention = jobs.filter((job) => backgroundTaskAttentionStatuses.has(job.status)).length;
+      const selected = await this.showChoice({
+        title: "Background tasks",
+        prompt: [
+          active > 0 ? `${active} active` : undefined,
+          attention > 0 ? `${attention} need attention` : undefined,
+          `${jobs.length} total`
+        ].filter(Boolean).join(" · "),
+        help: "Type to filter · Up/Down select · Ctrl+O expand activity · Enter manage · Esc return",
+        items: jobs.map((job) => ({
+          value: job.taskId,
+          label: job.description ?? job.command ?? job.toolName ?? job.taskId,
+          description: [
+            job.status.replaceAll("_", " "),
+            backgroundTaskKindLabel(job),
+            job.taskId,
+            job.pid ? `pid ${job.pid}` : undefined
+          ].filter(Boolean).join(" · "),
+          preview: new Text(this.backgroundTaskDetail(job), 1, 0),
+          payload: job
+        }))
+      });
+      if (!selected) return;
+      const outcome = await this.showBackgroundTaskDetail(selected.value);
+      if (outcome === "close") return;
     }
-    const selected = await this.showChoice({
-      title: "Background tasks",
-      prompt: "Select a task to inspect or stop.",
-      items: jobs.map((job) => ({
-        value: job.taskId,
-        label: job.description ?? job.command ?? job.toolName ?? job.taskId,
-        description: [job.status, job.taskId, job.pid ? `pid ${job.pid}` : undefined].filter(Boolean).join(" · "),
-        payload: job
-      }))
-    });
-    if (!selected || !isRecord(selected.payload)) return;
-    const job = jobs.find((candidate) => candidate.taskId === selected.value);
-    if (!job) return;
+  }
 
-    const canStop = isActiveBackgroundJob(job) && job.cancellable !== false && Boolean(this.options.cancelBackgroundTask);
-    const action = await this.showChoice({
-      title: `Background task · ${job.taskId}`,
-      prompt: job.blocked ? job.blockedReason ?? "This task is blocked." : `Status: ${job.status}.`,
-      content: new Text(this.backgroundTaskDetail(job), 1, 0),
-      items: [
+  private async showBackgroundTaskDetail(taskId: string): Promise<"back" | "close"> {
+    while (true) {
+      await this.refreshRuntimeState();
+      const job = this.runtimeProjection?.backgroundJobs.find((candidate) => candidate.taskId === taskId);
+      if (!job) {
+        this.addNotice(`Background task ${taskId} is no longer available.`, "warning");
+        return "back";
+      }
+      const active = isActiveBackgroundJob(job);
+      const canMessage = job.taskKind === "local_agent" && Boolean(this.options.sendBackgroundTaskMessage);
+      const canStop = active && job.cancellable !== false && Boolean(this.options.cancelBackgroundTask);
+      const items: ChoiceItem[] = [
+        ...(canMessage ? [{
+          value: "message",
+          label: active ? "Message agent" : "Resume agent",
+          description: active ? "Send guidance to this task" : "Continue from the saved child session"
+        }] : []),
+        ...(canMessage && active ? [{
+          value: "restart",
+          label: "Restart agent",
+          description: "Stop this run and resume from the saved child session"
+        }] : []),
         ...(canStop ? [{ value: "stop", label: "Stop task", description: "Request cancellation" }] : []),
-        { value: "close", label: "Close", description: "Return to the prompt" }
-      ]
-    });
-    if (action?.value === "stop") await this.stopBackgroundTask(job.taskId);
+        ...(!active && job.taskKind === "local_bash" && job.command ? [{
+          value: "prepare-rerun",
+          label: "Prepare rerun",
+          description: "Place a reviewed rerun request in the editor"
+        }] : []),
+        ...(job.taskKind === "local_workflow" && this.options.refreshWorkflowPanel ? [{
+          value: "workflow",
+          label: "Open workflow run",
+          description: "Inspect phases, events and workflow controls"
+        }] : []),
+        { value: "refresh", label: "Refresh task", description: "Read the latest status and output" },
+        { value: "back", label: "Back to tasks", description: "Choose another background task" },
+        { value: "close", label: "Close task center", description: "Return to the prompt" }
+      ];
+      const action = await this.showChoice({
+        title: `${backgroundTaskKindLabel(job)} task · ${job.taskId}`,
+        prompt: job.blocked
+          ? job.blockedReason ?? "This task is blocked."
+          : `Status: ${job.status.replaceAll("_", " ")}.`,
+        contentLabel: "Task activity",
+        content: new Text(this.backgroundTaskDetail(job), 1, 0),
+        items
+      });
+      if (!action || action.value === "back") return "back";
+      if (action.value === "close") return "close";
+      if (action.value === "refresh") continue;
+      if (action.value === "stop") {
+        await this.stopBackgroundTask(job.taskId);
+        continue;
+      }
+      if (action.value === "message" || action.value === "restart") {
+        const restart = action.value === "restart";
+        const message = await this.showTextPrompt({
+          title: restart ? "Restart background agent" : active ? "Message background agent" : "Resume background agent",
+          prompt: restart
+            ? `Describe what ${job.agentId ?? job.taskId} should continue or repair after restart.`
+            : active
+            ? `Send guidance to ${job.agentId ?? job.taskId}.`
+            : `Describe what ${job.agentId ?? job.taskId} should continue or repair.`
+        });
+        if (message?.trim()) await this.messageBackgroundTask(job, message.trim(), restart);
+        continue;
+      }
+      if (action.value === "prepare-rerun" && job.command) {
+        this.editor.setText([
+          "Run this command again in the background and report when it finishes:",
+          "",
+          job.command
+        ].join("\n"));
+        this.addNotice(`Prepared a rerun request for ${job.taskId}. Review it, then press Enter.`, "muted");
+        return "close";
+      }
+      if (action.value === "workflow" && this.options.refreshWorkflowPanel) {
+        try {
+          const panel = await this.options.refreshWorkflowPanel({ runId: job.taskId });
+          if (isRecord(panel)) await this.showWorkflowPanel(panel);
+        } catch (error) {
+          this.addNotice(error instanceof Error ? error.message : String(error), "error");
+        }
+      }
+    }
   }
 
   private async showActivityDetails(): Promise<void> {
@@ -3229,22 +3604,117 @@ class ZCodeTui {
     const stderr = safe(job.stderrTail);
     const terminalId = safe(job.terminalId);
     const outputPath = safe(job.outputPath);
+    const taskEntries = this.backgroundTaskEvents.entries(job.taskId);
+    const persistedOutput = job.outputPath
+      && !job.outputTail
+      && !job.stdoutTail
+      && !taskEntries.some((entry) => entry.kind === "assistant")
+      ? readBackgroundTaskOutput(job.outputPath)
+      : undefined;
+    const conversation = taskEntries.flatMap((entry): string[] => {
+      const label = entry.kind === "user" ? "You"
+        : entry.kind === "assistant" ? "Agent"
+          : entry.kind === "error" ? "Error"
+            : "Update";
+      const text = safe(entry.text);
+      if (!text) return [];
+      const line = `${label}: ${text}`;
+      return [entry.kind === "error" ? this.theme.error(line) : line];
+    });
     const lines = [
       safe(job.description),
+      safe(job.prompt),
       safe(job.command),
       [
-        safe(job.toolName),
+        backgroundTaskKindLabel(job),
+        job.agentId && job.agentId !== job.taskId ? `agent ${safe(job.agentId)}` : undefined,
+        job.childSessionId ? `session ${safe(job.childSessionId)}` : undefined,
         job.pid ? `pid ${job.pid}` : undefined,
         terminalId ? `terminal ${terminalId}` : undefined,
         job.outputBytes !== undefined ? `${job.outputBytes.toLocaleString()} output bytes` : undefined
       ].filter(Boolean).join(" · "),
       outputPath ? `Output: ${outputPath}` : undefined,
       job.outputTruncated ? "Output is truncated" : undefined,
+      job.error ? this.theme.error(`Error: ${safe(job.error)}`) : undefined,
       safe(job.stdoutTail),
       stderr ? this.theme.error(stderr) : undefined,
-      safe(job.outputTail)
+      safe(job.outputTail),
+      ...(persistedOutput ? [
+        "",
+        this.theme.bold("Saved task result"),
+        persistedOutput.truncated ? this.theme.muted("Showing the latest 64 KiB") : undefined,
+        safe(persistedOutput.text)
+      ] : []),
+      ...(conversation.length > 0 ? ["", this.theme.bold("Task activity"), ...conversation] : [])
     ].filter((line): line is string => Boolean(line));
     return sanitizeTerminalText(lines.join("\n"), { preserveSgr: true });
+  }
+
+  private async sendTaskCommand(command: string, resume: boolean): Promise<void> {
+    const value = command.trim();
+    const separator = value.search(/\s/u);
+    const taskId = separator < 0 ? value : value.slice(0, separator);
+    const suppliedMessage = separator < 0 ? "" : value.slice(separator).trim();
+    if (!taskId) {
+      this.addNotice(`Usage: /tasks ${resume ? "resume" : "message"} <task-id> ${resume ? "[instructions]" : "<message>"}`, "muted");
+      return;
+    }
+    await this.refreshRuntimeState();
+    const job = this.runtimeProjection?.backgroundJobs.find((candidate) => candidate.taskId === taskId);
+    if (!job) {
+      this.addNotice(`No background task found with ID ${taskId}.`, "warning");
+      return;
+    }
+    const message = suppliedMessage || (resume
+      ? "Continue the assigned task from the last completed step. Re-check the current workspace state and finish the remaining work."
+      : "");
+    if (!message) {
+      this.addNotice(`Usage: /tasks message ${taskId} <message>`, "muted");
+      return;
+    }
+    await this.messageBackgroundTask(job, message, resume && isActiveBackgroundJob(job));
+  }
+
+  private async messageBackgroundTask(
+    job: RuntimeBackgroundJob,
+    message: string,
+    restart = false
+  ): Promise<void> {
+    if (job.taskKind !== "local_agent") {
+      this.addNotice(`${backgroundTaskKindLabel(job)} tasks cannot receive messages.`, "warning");
+      return;
+    }
+    if (!this.options.sendBackgroundTaskMessage) {
+      this.addNotice("Background agent messaging is unavailable in this runtime.", "warning");
+      return;
+    }
+    this.backgroundTaskEvents.recordUserMessage(job.taskId, message);
+    this.updateActivity(restart && isActiveBackgroundJob(job)
+      ? "restarting background agent…"
+      : isActiveBackgroundJob(job) ? "sending task message…" : "resuming background agent…");
+    try {
+      const result = await this.options.sendBackgroundTaskMessage({
+        taskId: job.taskId,
+        message,
+        summary: message.replace(/\s+/gu, " ").trim().slice(0, 200),
+        restart
+      });
+      const record = isRecord(result) ? result : undefined;
+      const status = asString(record?.status);
+      const detail = asString(record?.message)
+        ?? asString(record?.delivery)?.replaceAll("_", " ")
+        ?? "Message delivered.";
+      if (status === "failed") throw new Error(asString(record?.error) ?? detail);
+      this.backgroundTaskEvents.recordSystemMessage(job.taskId, detail);
+      this.addNotice(detail, "muted");
+      await this.refreshRuntimeState();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.backgroundTaskEvents.recordSystemMessage(job.taskId, detail, true);
+      this.addNotice(`${restart ? "Restart" : "Message"} for ${job.taskId} failed: ${detail}`, "error");
+    } finally {
+      this.updateActivity(undefined);
+    }
   }
 
   private async stopBackgroundTask(taskId: string): Promise<void> {
@@ -3434,14 +3904,15 @@ class ZCodeTui {
 
   private updateTurnStatus(requestRender = true): void {
     if (this.turnStartedAt !== undefined) {
-      this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
+      this.turnElapsedMilliseconds = Math.max(0, performance.now() - this.turnStartedAt);
     }
     const showElapsed = this.turnStartedAt !== undefined || (!this.activity && this.turnTimingVisible);
     const text = turnStatusText(
       this.activity,
       this.turnElapsedMilliseconds,
       showElapsed,
-      this.turnStartedAt !== undefined && this.animateTurnTimer
+      this.turnStartedAt !== undefined && this.animateTurnTimer,
+      this.turnStartedAt === undefined && this.turnTimingVisible
     ) ?? "";
     const left = text
       ? this.activity ? this.theme.accent(text) : this.theme.muted(text)
@@ -3474,7 +3945,9 @@ class ZCodeTui {
     this.runtimeRefreshTimer.unref?.();
   }
 
-  private scheduleRuntimePoll(delay = runtimePollInterval(this.turnStartedAt !== undefined)): void {
+  private scheduleRuntimePoll(
+    delay = runtimePollInterval(this.turnStartedAt !== undefined || runtimeActivityActive(this.runtimeProjection))
+  ): void {
     if (this.stopped || (!this.options.readRuntimeProjection && !this.options.readTodos)) return;
     if (this.runtimePollTimer) return;
     this.runtimePollTimer = setTimeout(() => {
@@ -3495,6 +3968,7 @@ class ZCodeTui {
   private applyRuntimeProjection(projection: RuntimeProjectionSnapshot | undefined): void {
     if (!projection) return;
     this.runtimeProjection = projection;
+    this.reconcileTurnTiming(projection);
     if (projection.sessionId) this.sessionId = projection.sessionId;
     this.sessionMetrics = mergeMetrics(this.sessionMetrics, {
       contextUsed: projection.contextUsage?.used,
@@ -3542,6 +4016,7 @@ class ZCodeTui {
         if (todosResult.status === "fulfilled" && todosResult.value !== undefined) {
           next.todos = normalizeTodos(todosResult.value);
         }
+        if (next.projection) this.reconcileTurnTiming(next.projection);
         const current: RuntimePollState = {
           projection: this.runtimeProjection,
           todos: this.todos,
@@ -3553,6 +4028,8 @@ class ZCodeTui {
           if (next.projection) this.applyRuntimeProjection(next.projection);
           else this.updateRuntimeActivity(false);
           this.updateMetadata();
+        } else if (runtimeActivityActive(next.projection)) {
+          this.updateRuntimeActivity();
         }
       } while (this.runtimeRefreshPending);
     } finally {
@@ -3637,19 +4114,44 @@ class ZCodeTui {
     this.finalizeUnresolvedTools(unfinishedToolState);
     this.turnDiffs.finishTurn();
     this.currentToolGroup = undefined;
-    if (this.turnStartedAt !== undefined) {
-      this.turnElapsedMilliseconds = Math.max(0, Date.now() - this.turnStartedAt);
-      this.turnStartedAt = undefined;
-    }
-    if (this.turnTimer) {
-      clearInterval(this.turnTimer);
-      this.turnTimer = undefined;
+    if (!this.turnWork.finishForeground(Boolean(this.options.readRuntimeProjection))) {
+      this.settleTurnTiming();
     }
     this.activity = undefined;
     this.updateTurnStatus();
     this.scheduleRuntimeRefresh(0);
     this.rescheduleRuntimePoll();
     if (notification) void this.notifications.notify(notification, notificationDetail);
+  }
+
+  private reconcileTurnTiming(projection: RuntimeProjectionSnapshot): void {
+    if (this.turnStartedAt !== undefined
+      && !this.turnWork.reconcile(projection.backgroundJobs)) this.settleTurnTiming();
+  }
+
+  private settleTurnTiming(): void {
+    const wasRunning = this.turnStartedAt !== undefined || this.turnTimer !== undefined;
+    if (!wasRunning) return;
+    if (this.turnStartedAt !== undefined) {
+      this.turnElapsedMilliseconds = Math.max(0, performance.now() - this.turnStartedAt);
+      this.turnStartedAt = undefined;
+    }
+    if (this.turnTimer) {
+      clearInterval(this.turnTimer);
+      this.turnTimer = undefined;
+    }
+    const workedLabel = this.turnHadWorkActivity
+      ? workedDurationLabel(this.turnElapsedMilliseconds)
+      : undefined;
+    if (workedLabel) {
+      this.transcript.addBlock(new WorkDurationView(this.turnElapsedMilliseconds, this.theme), {
+        kind: "work-duration"
+      });
+    }
+    // Short turns retain a compact completion marker; longer work follows Codex and
+    // moves the final duration into the transcript divider.
+    this.turnTimingVisible = workedLabel === undefined;
+    this.updateTurnStatus();
   }
 
   private debugEvent(channel: string, value: unknown): void {
@@ -3674,10 +4176,11 @@ class ZCodeTui {
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
     if (this.runtimePollTimer) clearTimeout(this.runtimePollTimer);
+    this.unsubscribeSession?.();
     this.unsubscribeWorkflow?.();
     const elapsedMilliseconds = this.turnStartedAt === undefined
       ? this.turnElapsedMilliseconds
-      : Math.max(0, Date.now() - this.turnStartedAt);
+      : Math.max(0, performance.now() - this.turnStartedAt);
     this.notifications.stop();
     this.ui.stop();
     void this.finishStop(elapsedMilliseconds);

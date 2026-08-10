@@ -168,6 +168,13 @@ await runTui({
   readSessionUsage: async () => ({ totalTokens: 0 }),
   interruptTurn: async ({ pendingInputIds, reason, reservationId }) => {
     if (!active || !activeTurnInterrupt) return { kind: "idle" };
+    if (reason?.includes("active foreground turn")) {
+      if (pendingInputIds?.length) {
+        throw new Error(`Foreground interrupt received pending inputs: ${pendingInputIds.join(", ")}`);
+      }
+      activeTurnInterrupt.abort(new Error(reason));
+      return { kind: "stopped" };
+    }
     if (!reason?.includes("steer instructions")) {
       throw new Error(`Unexpected semantic interrupt reason: ${String(reason)}`);
     }

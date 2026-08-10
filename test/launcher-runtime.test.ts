@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,7 @@ afterAll(async () => {
   if (home) await rm(home, { recursive: true, force: true });
 });
 
-async function run(args: string[], input = "") {
+async function run(args: string[], input = "", environment: Record<string, string> = {}) {
   if (!node) throw new Error("Node.js is required for launcher/runtime integration tests.");
   const child = Bun.spawn([process.execPath, "bin/zcode.ts", ...args], {
     cwd: root,
@@ -26,7 +26,8 @@ async function run(args: string[], input = "") {
       ...process.env,
       HOME: home,
       USERPROFILE: home,
-      ZCODE_NODE: node
+      ZCODE_NODE: node,
+      ...environment
     },
     stdin: "pipe",
     stdout: "pipe",
@@ -43,6 +44,79 @@ async function run(args: string[], input = "") {
 }
 
 describe("launcher/runtime integration", () => {
+  test("keeps TUI runtime diagnostics out of the interactive terminal", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-launcher-stderr-"));
+    const fakeNode = join(directory, "fake-node");
+    const logPath = join(directory, "tui-runtime.log");
+    await writeFile(fakeNode, [
+      "#!/bin/sh",
+      "printf '%s\\n' 'AI SDK Warning: cacheControl breakpoint limit' >&2",
+      "printf '%s\\n' 'ProviderBusinessError: No available channel for model GLM-5.2' >&2",
+      "printf '\\033[2J' >&2",
+      "exit \"${FAKE_NODE_EXIT:-0}\"",
+      ""
+    ].join("\n"));
+    await chmod(fakeNode, 0o755);
+    try {
+      const tui = await run(["--cwd", directory, "tui"], "", {
+        ZCODE_NODE: fakeNode,
+        ZCODE_TUI_RUNTIME_LOG: logPath
+      });
+      expect(tui.code).toBe(0);
+      expect(tui.stderr).not.toContain("ProviderBusinessError");
+      expect(tui.stderr).not.toContain("cacheControl breakpoint limit");
+      const tuiLog = await Bun.file(logPath).text();
+      expect(tuiLog).toContain("ProviderBusinessError");
+      expect(tuiLog).toContain("cacheControl breakpoint limit");
+
+      const failed = await run(["--cwd", directory, "tui"], "", {
+        FAKE_NODE_EXIT: "7",
+        ZCODE_NODE: fakeNode,
+        ZCODE_TUI_RUNTIME_LOG: logPath
+      });
+      expect(failed.code).toBe(7);
+      expect(failed.stderr).toContain("ZCode runtime exited with status 7");
+      expect(failed.stderr).toContain(`Diagnostics: ${logPath}`);
+      expect(failed.stderr).not.toContain("ProviderBusinessError");
+
+      const print = await run(["--print", "hello"], "", { ZCODE_NODE: fakeNode });
+      expect(print.code).toBe(0);
+      expect(print.stderr).toContain("ProviderBusinessError");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("rotates the bounded TUI diagnostic log between invocations", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-launcher-log-rotation-"));
+    const fakeNode = join(directory, "fake-node");
+    const logPath = join(directory, "tui-runtime.log");
+    await writeFile(fakeNode, [
+      "#!/bin/sh",
+      "printf '%s\\n' 'fresh diagnostic' >&2",
+      "exit 0",
+      ""
+    ].join("\n"));
+    await chmod(fakeNode, 0o755);
+    await writeFile(logPath, Buffer.alloc(2 * 1024 * 1024, "x"));
+    if (process.platform !== "win32") await chmod(logPath, 0o644);
+    try {
+      const result = await run(["tui"], "", {
+        ZCODE_NODE: fakeNode,
+        ZCODE_TUI_RUNTIME_LOG: logPath
+      });
+      expect(result.code).toBe(0);
+      expect(await Bun.file(logPath).text()).toContain("fresh diagnostic");
+      expect(Bun.file(`${logPath}.1`).size).toBe(2 * 1024 * 1024);
+      if (process.platform !== "win32") {
+        expect((await stat(logPath)).mode & 0o777).toBe(0o600);
+        expect((await stat(`${logPath}.1`)).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("keeps non-agent runtime subcommands usable", async () => {
     const doctor = await run(["doctor", "--json"]);
     expect(doctor.code).toBe(0);

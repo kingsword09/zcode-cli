@@ -17,6 +17,7 @@ describe("runtime activity view", () => {
         activeToolCalls: [{ toolCallId: "tool-1", toolName: "Bash", status: "running" }],
         backgroundJobs: [{
           taskId: "bg-1",
+          taskKind: "local_bash",
           status: "running",
           description: "Run repository tests",
           cancellable: true

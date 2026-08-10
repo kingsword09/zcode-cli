@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   formatVersionOutput,
+  isTuiRuntimeInvocation,
   isVersionInvocation,
   normalizeLoginArgs,
   readDistributionVersion,
@@ -143,6 +144,16 @@ describe("launcher routing", () => {
     ]) {
       expect(withDefaultBrowserUse(args)).toBe(args);
     }
+  });
+
+  test("recognizes TUI invocations after consuming global option values", () => {
+    expect(isTuiRuntimeInvocation([])).toBe(true);
+    expect(isTuiRuntimeInvocation(["--cwd", "/tmp/project", "--settings", "custom.json", "tui"])).toBe(true);
+    expect(isTuiRuntimeInvocation(["--browser-use", "headless", "--cwd", "/tmp/project", "tui"])).toBe(true);
+    expect(isTuiRuntimeInvocation(["--prompt", "inspect this page"])).toBe(false);
+    expect(isTuiRuntimeInvocation(["plugins", "list"])).toBe(false);
+    expect(isTuiRuntimeInvocation(["--help"])).toBe(false);
+    expect(isTuiRuntimeInvocation(["--unknown"])).toBe(false);
   });
 
   test("routes only the plain Z.AI login command through the Desktop OAuth bridge", () => {

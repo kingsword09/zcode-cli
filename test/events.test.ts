@@ -44,12 +44,15 @@ describe("ZCode event adapter", () => {
 
   test("normalizes protocol streaming events", () => {
     expect(normalizeEvent({
+      id: "event_stream_delta",
       type: "model.streaming",
       payload: {
+        id: "message_entity",
         kind: "text_delta",
         delta: "你好"
       }
     })).toMatchObject({
+      eventId: "event_stream_delta",
       type: "model.streaming",
       kind: "text_delta",
       delta: "你好"
@@ -99,6 +102,55 @@ describe("ZCode event adapter", () => {
       kind: "tool_input_start",
       toolName: "Read",
       toolCallId: "call_1"
+    });
+  });
+
+  test("normalizes raw autonomous turn lifecycle metadata and failures", () => {
+    expect(normalizeEvent({
+      id: "event_background_start",
+      type: "turn_started",
+      turnId: "turn_background",
+      payload: {
+        inputSource: "background_task",
+        originMeta: { workId: "task_background", workIds: ["task_background", "task_two"] }
+      }
+    })).toMatchObject({
+      eventId: "event_background_start",
+      type: "turn_started",
+      turnId: "turn_background",
+      inputSource: "background_task",
+      taskId: "task_background",
+      taskIds: ["task_background", "task_two"]
+    });
+
+    expect(normalizeEvent({
+      id: "event_background_failure",
+      type: "turn_error",
+      turnId: "turn_background",
+      payload: { error: { message: "Background result failed." } }
+    })).toMatchObject({
+      eventId: "event_background_failure",
+      type: "turn_error",
+      turnId: "turn_background",
+      message: "Background result failed."
+    });
+
+    expect(normalizeEvent({
+      id: "event_agent_reply",
+      type: "subagent_message",
+      payload: {
+        agentId: "agent_background",
+        agentType: "reviewer",
+        childSessionId: "child_background",
+        status: "failed",
+        summaryText: "Review failed after the final tool call."
+      }
+    })).toMatchObject({
+      agentId: "agent_background",
+      agentType: "reviewer",
+      childSessionId: "child_background",
+      taskStatus: "failed",
+      message: "Review failed after the final tool call."
     });
   });
 
