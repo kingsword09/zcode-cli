@@ -40,6 +40,7 @@ const runtimeBooleanOptions = new Set([
   "--no-browser",
   "--no-color",
   "--stdio",
+  "--stream-json",
   "--target-replace",
   "--verbose"
 ]);

@@ -7,3 +7,4 @@ bin/zcode.js
 .zcode/
 *.tgz
 .DS_Store
+package-lock.json
