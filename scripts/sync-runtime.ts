@@ -247,24 +247,6 @@ export function supportsMultiMessageFileRewind(runtime: string): boolean {
     .test(runtime);
 }
 
-/** Suppress known cache-control warnings before they reach the TUI stderr stream. */
-export function patchRuntimeTuiWarnings(runtime: string): string {
-  const suppression = 'i.includes("AI SDK Warning")&&i.includes("cacheControl breakpoint limit")';
-  if (runtime.includes(suppression)) return runtime;
-  const anchor = "if(LKn.test(i)||BKn.test(i)){";
-  if (!runtime.includes(anchor)) return runtime;
-  return runtime.replace(anchor, "if(LKn.test(i)||BKn.test(i)||" + suppression + "){");
-}
-
-/** Prevent provider model lookup failures from being retried as generic 5xx errors. */
-export function patchRuntimeProviderRetryClassification(runtime: string): string {
-  const classification = 'if(n==="model_not_found")return{code:lr.ModelNotFound,message:o,reason:Ht.InvalidRequest,retryReason:fn.NetworkError,retryable:!1,retryAfterMs:r,statusCode:i};';
-  if (runtime.includes(classification)) return runtime;
-  const anchor = 'function QBr(e,t,r){if(!CS(e))return;let o=XBr(e),n=eUr(e),i=AWo(e,t),a=n?ZBr(n):void 0;';
-  if (!runtime.includes(anchor)) return runtime;
-  return runtime.replace(anchor, anchor + classification);
-}
-
 /** Keep short Agent calls inline, but detach long-running agents from the foreground turn. */
 export function patchRuntimeAgentAutoBackground(runtime: string): string {
   const marker = "autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:";
@@ -743,11 +725,7 @@ async function installTuiBridge(nextVendor: string): Promise<void> {
         patchRuntimeAgentAutoBackground(
           patchRuntimeDetachedAgentLifecycle(
             patchRuntimeTerminalToolProjection(
-              patchRuntimeProviderRetryClassification(
-                patchRuntimeTuiWarnings(
-                  patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
-                )
-              )
+              patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
             )
           )
         )

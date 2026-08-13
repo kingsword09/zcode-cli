@@ -49,8 +49,6 @@ if (!runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes(".subscribeSessionEvents=")
   || !runtimeSource.includes(".sendBackgroundTaskMessage=async")
   || !runtimeSource.includes("backgroundTaskDetails")
-  || !runtimeSource.includes('i.includes("AI SDK Warning")&&i.includes("cacheControl breakpoint limit")')
-  || !runtimeSource.includes('if(n==="model_not_found")return{code:lr.ModelNotFound')
   || !runtimeSource.includes("autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:")
   || runtimeSource.split("Detached background agent lifecycle failed").length < 3
   || !runtimeSource.includes('if(e?.restart===!0&&o.status==="running")')

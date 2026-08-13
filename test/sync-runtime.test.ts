@@ -8,11 +8,9 @@ import {
   patchRuntimeAgentAutoBackground,
   patchRuntimeBackgroundTaskProjection,
   patchRuntimeDetachedAgentLifecycle,
-  patchRuntimeProviderRetryClassification,
   patchRuntimeTerminalToolProjection,
   patchRuntimeOAuthHttpErrors,
   patchRuntimeTuiBridge,
-  patchRuntimeTuiWarnings,
   patchRuntimeZaiDesktopOAuth,
   resolveArtifactUrl,
   resolveLatestRuntimeLock,
@@ -409,43 +407,6 @@ describe("runtime synchronization", () => {
     expect(modernPatched).toContain("r=await e.sessionStore.getSession(e.sessionId);return p(r?R(t,r):t)");
     expect(modernPatched).toContain("targetMessageIds&&t.targetMessageIds.length>0");
     expect(modernPatched).not.toContain("Array.isArray(t.targetMessageIds)");
-  });
-
-  test("filters cache-control warnings from the TUI stderr stream", () => {
-    const runtime = "function UKn(e,t){if(LKn.test(i)||BKn.test(i)){return i}}";
-    const patched = patchRuntimeTuiWarnings(runtime);
-    expect(patched).toContain('i.includes("AI SDK Warning")&&i.includes("cacheControl breakpoint limit")');
-    expect(patchRuntimeTuiWarnings(patched)).toBe(patched);
-  });
-
-  test("does not retry provider model lookup failures reported with HTTP 503", () => {
-    const runtime = [
-      'const CS=()=>true,XBr=e=>e.providerMessage,eUr=e=>e.providerCode,AWo=e=>e.responseStatus,ZBr=()=>undefined;',
-      'const lr={ModelNotFound:"model_not_found"},Ht={InvalidRequest:"invalid_request"},fn={NetworkError:"network_error"};',
-      "function QBr(e,t,r){if(!CS(e))return;let o=XBr(e),n=eUr(e),i=AWo(e,t),a=n?ZBr(n):void 0;",
-      "if(a)return a;return i>=500?{retryable:!0,statusCode:i}:{retryable:!1,statusCode:i}}"
-    ].join("");
-    const patched = patchRuntimeProviderRetryClassification(runtime);
-    expect(patched).toContain(
-      'if(n==="model_not_found")return{code:lr.ModelNotFound,message:o,reason:Ht.InvalidRequest,retryReason:fn.NetworkError,retryable:!1'
-    );
-    const classify = new Function(`${patched};return QBr;`)() as (
-      error: { providerCode: string; providerMessage: string; responseStatus: number }
-    ) => { code?: string; retryable: boolean; statusCode: number };
-    expect(classify({
-      providerCode: "model_not_found",
-      providerMessage: "No available channel for model GLM-5.2",
-      responseStatus: 503
-    })).toMatchObject({ code: "model_not_found", retryable: false, statusCode: 503 });
-    expect(classify({
-      providerCode: "server_error",
-      providerMessage: "Temporary upstream failure",
-      responseStatus: 503
-    })).toMatchObject({ retryable: true, statusCode: 503 });
-    expect(patchRuntimeProviderRetryClassification(patched)).toBe(patched);
-    expect(patchRuntimeProviderRetryClassification("runtime without the classifier anchor")).toBe(
-      "runtime without the classifier anchor"
-    );
   });
 
   test("auto-backgrounds long Agent calls while preserving explicit configuration", () => {
