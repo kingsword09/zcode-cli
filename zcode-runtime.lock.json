@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "appVersion": "3.7.6",
+  "appVersion": "3.7.7",
   "platform": "linux",
   "arch": "x64",
-  "url": "https://cdn-zcode.z.ai/zcode/electron/releases/3.7.6/linux-x64/ZCode-3.7.6-linux-x64.deb",
-  "sha512": "G2/jCJdOOc7vlCSoqJjCyz7UTdaBWucW7+itRYU5jCEeqvirGOau3hK7HAuf4/Ahv5qQNBO3kU2JjwXx4kdCWQ=="
+  "url": "https://cdn-zcode.z.ai/zcode/electron/releases/3.7.7/linux-x64/ZCode-3.7.7-linux-x64.deb",
+  "sha512": "9vUj/HFAUk0AS7S/TwPr6qa+qJv8ccAIvHJxp29TYvVnMoOZKPQ3rDiTlXGo9htFL7V5HBRb0n+NbXm5Cm5BqA=="
 }
