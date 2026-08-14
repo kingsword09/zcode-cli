@@ -23,6 +23,7 @@ export interface ConfiguredModelAccess {
   configPath: string;
   model: string;
   providerId: string;
+  tuiCompatible: boolean;
 }
 
 export interface UserConfigBootstrapResult {
@@ -31,6 +32,12 @@ export interface UserConfigBootstrapResult {
 }
 
 export type UserConfigRecord = Record<string, unknown>;
+
+const tuiDirectApiKeyProviderIds = new Set(["zai", "bigmodel"]);
+
+export function isTuiCompatibleProviderId(providerId: string): boolean {
+  return tuiDirectApiKeyProviderIds.has(providerId);
+}
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
@@ -183,5 +190,10 @@ export async function readConfiguredModelAccess(
   const provider = config.provider?.[providerId];
   const apiKey = provider?.options?.apiKey;
   if (!provider?.models?.[modelId] || typeof apiKey !== "string" || !apiKey.trim()) return null;
-  return { configPath, model, providerId };
+  return {
+    configPath,
+    model,
+    providerId,
+    tuiCompatible: isTuiCompatibleProviderId(providerId)
+  };
 }

@@ -90,6 +90,8 @@ considers a direct API key configured only when it is stored under provider ID
 `zai` or `bigmodel`. An arbitrary provider ID is valid model configuration,
 but as the only provider it still triggers the upstream login gate. The
 display name, API format, endpoint, headers and models remain fully custom.
+The launcher detects this mismatch before opening the TUI and prints the
+required provider IDs instead of reporting the configuration as fully ready.
 
 For an Anthropic-compatible endpoint:
 

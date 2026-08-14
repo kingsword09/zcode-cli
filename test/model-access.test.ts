@@ -38,7 +38,31 @@ describe("configured model access", () => {
     expect(await readConfiguredModelAccess(env)).toEqual({
       configPath: path,
       model: "zai/custom/model",
-      providerId: "zai"
+      providerId: "zai",
+      tuiCompatible: true
+    });
+  });
+
+  test("reports custom provider ids as headless-only for the upstream TUI gate", async () => {
+    const home = await temporaryHome();
+    const env = { HOME: home, USERPROFILE: home };
+    const path = userConfigPath(env);
+    await mkdir(join(home, ".zcode", "cli"), { recursive: true });
+    await writeFile(path, JSON.stringify({
+      provider: {
+        "bigmodel-coding-plan": {
+          options: { apiKey: "configured-key" },
+          models: { "GLM-5.3": { name: "GLM-5.3" } }
+        }
+      },
+      model: { main: "bigmodel-coding-plan/GLM-5.3" }
+    }));
+
+    expect(await readConfiguredModelAccess(env)).toEqual({
+      configPath: path,
+      model: "bigmodel-coding-plan/GLM-5.3",
+      providerId: "bigmodel-coding-plan",
+      tuiCompatible: false
     });
   });
 

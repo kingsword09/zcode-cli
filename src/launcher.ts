@@ -13,7 +13,11 @@ import { constants as osConstants, homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ensureUserConfig, readConfiguredModelAccess } from "./model-access.ts";
+import {
+  ensureUserConfig,
+  readConfiguredModelAccess,
+  type ConfiguredModelAccess
+} from "./model-access.ts";
 import {
   classifyZaiOAuthInvocation,
   runZaiOAuthLogin,
@@ -106,6 +110,15 @@ export function normalizeLoginArgs(args: string[]): { args: string[]; checkConfi
     return { args: args.filter((argument) => argument !== "--oauth"), checkConfiguredAccess: false };
   }
   return { args, checkConfiguredAccess: false };
+}
+
+export function formatUnsupportedTuiProviderMessage(access: ConfiguredModelAccess): string {
+  return [
+    `Model access is configured for headless use as ${access.model}, but the upstream TUI`,
+    'requires a direct API key under provider ID "zai" or "bigmodel".',
+    `Rename the provider key and update model.main/model.lite in ${access.configPath}.`,
+    "See docs/CONFIGURATION.md for a compatible custom-provider example."
+  ].join("\n");
 }
 
 function longOptionName(argument: string): string {
@@ -433,16 +446,25 @@ export async function main(args: string[]): Promise<number> {
 
   const login = normalizeLoginArgs(args);
   const zaiOAuth = classifyZaiOAuthInvocation(args);
+  const configuredAccess = await readConfiguredModelAccess();
   if (login.checkConfiguredAccess) {
-    const access = await readConfiguredModelAccess();
-    if (access) {
+    if (configuredAccess?.tuiCompatible) {
       console.log(
-        `Model access is already configured for ${access.model}; OAuth login is not required.\n`
-        + `Config: ${access.configPath}\n`
+        `Model access is already configured for ${configuredAccess.model}; OAuth login is not required.\n`
+        + `Config: ${configuredAccess.configPath}\n`
         + "Run `zcode login --oauth` to force Z.AI OAuth."
       );
       return 0;
     }
+    if (configuredAccess) {
+      console.error(formatUnsupportedTuiProviderMessage(configuredAccess));
+      return 1;
+    }
+  }
+
+  if (isTuiRuntimeInvocation(login.args) && configuredAccess && !configuredAccess.tuiCompatible) {
+    console.error(formatUnsupportedTuiProviderMessage(configuredAccess));
+    return 1;
   }
 
   if (zaiOAuth) {

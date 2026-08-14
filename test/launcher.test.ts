@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   formatVersionOutput,
+  formatUnsupportedTuiProviderMessage,
   isTuiRuntimeInvocation,
   isVersionInvocation,
   normalizeLoginArgs,
@@ -14,6 +15,7 @@ import {
   resolveModelRetryMaxRetries,
   withDefaultBrowserUse
 } from "../src/launcher.ts";
+import type { ConfiguredModelAccess } from "../src/model-access.ts";
 import { classifyZaiOAuthInvocation } from "../src/zai-oauth.ts";
 
 describe("launcher routing", () => {
@@ -70,6 +72,21 @@ describe("launcher routing", () => {
       args: ["login", "--no-browser"],
       checkConfiguredAccess: false
     });
+  });
+
+  test("explains when configured headless access cannot pass the upstream TUI gate", () => {
+    const access: ConfiguredModelAccess = {
+      configPath: "/home/user/.zcode/cli/config.json",
+      model: "custom/GLM-5.3",
+      providerId: "custom",
+      tuiCompatible: false
+    };
+
+    expect(formatUnsupportedTuiProviderMessage(access)).toContain(
+      'provider ID "zai" or "bigmodel"'
+    );
+    expect(formatUnsupportedTuiProviderMessage(access)).toContain(access.configPath);
+    expect(formatUnsupportedTuiProviderMessage(access)).not.toContain("configured-key");
   });
 
   test("enables Browser Use only for agent-producing runtime invocations", () => {
