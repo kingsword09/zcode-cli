@@ -24,7 +24,8 @@ model-access paths below before sending a prompt.
 Three model-access paths are supported:
 
 - **Z.AI OAuth on macOS**: run `zcode login` when no provider is configured, or
-  `zcode login --oauth` to force reauthorization;
+  `zcode login --oauth` to force reauthorization; add `--no-browser` to print
+  the authorization URL instead of opening a browser (useful over SSH);
 - **Z.AI/BigModel Coding Plan API key**: open `/login` in the TUI and choose the
   matching masked API-key option;
 - **Direct API key with a custom provider**: use the

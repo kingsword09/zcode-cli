@@ -127,7 +127,7 @@ activity between the transcript and editor.
 and error reporting; double-Esc rewind with input-point selection and safe
 conversation/workspace scopes; unfocused turn-completion notifications through
 terminal-native OSC 9 or BEL, with optional desktop commands; `/copy`,
-`/clear`, `/exit`, Ctrl+C and Ctrl+D handling with token usage and resume
+`/cls`, `/exit`, Ctrl+C and Ctrl+D handling with token usage and resume
 guidance on exit.
 
 ## Workspace integration
@@ -185,6 +185,16 @@ ordinary prompt text.
 Use `@plugin` when the whole Plugin is relevant, including its MCP servers or
 Subagents. Use `$plugin:skill` when one exact Skill must be loaded before the
 task starts.
+
+Skill and custom-command discovery also works outside the TUI through the
+runtime's subcommands, with `--json` for scripts:
+
+```bash
+zcode skills list                 # every discovered skill, plugin-qualified
+zcode skills inspect <name>       # full description, source path and metadata
+zcode commands list               # discovered custom slash commands
+zcode commands inspect <name>     # argument hints and resolved body
+```
 
 ### Active-turn input
 
@@ -256,7 +266,12 @@ picker to return to input selection, then `Esc` again to close rewind.
 /transcript latest            select the latest transcript block
 /transcript next|prev|close   navigate or leave transcript selection
 /copy                         copy the selected block, or the latest response
+/cls                          clear the visible transcript only
 ```
+
+`/cls` clears what the TUI displays without touching the session. The
+runtime's own `/clear` is an alias of `/new` and starts a fresh session, so it
+is forwarded to the runtime unchanged.
 
 The task center keeps autonomous task output out of the foreground transcript.
 The main conversation receives only compact completion, reply and failure

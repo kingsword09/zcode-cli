@@ -135,6 +135,63 @@ describe("launcher/runtime integration", () => {
     ]));
   }, 30_000);
 
+  test("lists and inspects workspace custom commands", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-custom-commands-"));
+    try {
+      const commandDirectory = join(directory, ".zcode", "commands");
+      await mkdir(commandDirectory, { recursive: true });
+      await writeFile(join(commandDirectory, "smoke.md"), [
+        "---",
+        "description: Smoke command description.",
+        "argument-hint: <topic>",
+        "skills: browser-use:control-browser",
+        "---",
+        "",
+        "Summarize $ARGUMENTS.",
+        ""
+      ].join("\n"));
+
+      const listed = await run(["--cwd", directory, "commands", "list", "--json"]);
+      expect(listed.code).toBe(0);
+      expect(JSON.parse(listed.stdout)).toMatchObject({
+        commands: expect.arrayContaining([
+          expect.objectContaining({
+            argumentHint: "<topic>",
+            description: "Smoke command description.",
+            name: "smoke",
+            scope: "project",
+            skills: ["browser-use:control-browser"],
+            source: "zcode"
+          })
+        ]),
+        cwd: directory,
+        diagnostics: [],
+        totalDiscovered: 1
+      });
+
+      const inspected = await run(["--cwd", directory, "commands", "inspect", "smoke", "--json"]);
+      expect(inspected.code).toBe(0);
+      expect(JSON.parse(inspected.stdout)).toMatchObject({
+        command: {
+          content: "Summarize $ARGUMENTS.",
+          metadata: expect.objectContaining({
+            argumentHint: "<topic>",
+            description: "Smoke command description.",
+            name: "smoke",
+            scope: "project",
+            skills: ["browser-use:control-browser"],
+            source: "zcode"
+          }),
+          truncated: false
+        },
+        cwd: directory,
+        diagnostics: []
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("passes app-server through unchanged and exposes Plugin references", async () => {
     const workspacePath = root.replace(/\/$/u, "");
     const request = {

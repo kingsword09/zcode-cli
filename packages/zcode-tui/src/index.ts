@@ -234,6 +234,14 @@ const toolLifecycleEventKinds = new Set([
   "closed"
 ]);
 
+const runtimeCommandSummaries = new Map([
+  [
+    "login",
+    "Sign in with Z.AI/BigModel OAuth or a Coding Plan API key (`/login` opens a method picker)"
+  ],
+  ["new", "Start a fresh session (alias: /clear)"]
+]);
+
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
 const updateAvailableBlockId = "update_available";
@@ -758,12 +766,12 @@ class ZCodeTui {
       if (!name) continue;
       commands.push({
         name,
-        description: command.description ?? command.summary,
+        description: command.description ?? runtimeCommandSummaries.get(name) ?? command.summary,
         argumentHint: command.argumentHint ?? command.inputHint ?? command.usage
       });
     }
     for (const command of [
-      { name: "clear", description: "Clear the visible transcript" },
+      { name: "cls", description: "Clear the visible transcript (the runtime's /clear starts a new session)" },
       { name: "copy", description: "Copy the latest assistant response" },
       { name: "paste-image", description: "Attach an image from the system clipboard" },
       { name: "attachments", description: "Manage or clear pending attachments", argumentHint: "[clear]" },
@@ -943,7 +951,7 @@ class ZCodeTui {
       this.stop();
       return;
     }
-    if (input === "/clear") {
+    if (input === "/cls") {
       this.clearTranscriptProjection();
       this.workflowView = undefined;
       this.ui.requestRender(true);
