@@ -17,13 +17,16 @@
         },
         "glm-5.1": {
           "name": "GLM-5.1"
+        },
+        "glm-5-turbo": {
+          "name": "GLM-5-Turbo"
         }
       }
     }
   },
   "model": {
     "main": "zai/glm-5.2",
-    "lite": "zai/glm-5.1"
+    "lite": "zai/glm-5-turbo"
   },
   "modelCatalog": {
     "overrides": {}

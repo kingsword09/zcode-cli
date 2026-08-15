@@ -6,7 +6,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { formatVersionOutput, readDistributionVersion } from "../src/launcher.ts";
-import { supportsMultiMessageFileRewind } from "./sync-runtime.ts";
+import {
+  patchRuntimeLoginModelDefaults,
+  supportsMultiMessageFileRewind
+} from "./sync-runtime.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const runtime = join(root, "vendor", "zcode.cjs");
@@ -30,7 +33,8 @@ if (packageManifest.dependencies?.["playwright-core"] !== "1.59.1"
 }
 
 const runtimeSource = await Bun.file(runtime).text();
-if (!runtimeSource.includes('"plugin://"')
+if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
+  || !runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes('return await import("playwright-core")')
   || !runtimeSource.includes('pluginsReferenceCatalog:"plugins/referenceCatalog"')
   || !runtimeSource.includes('pluginsMarketplaceAdd:"plugins/marketplace/add"')

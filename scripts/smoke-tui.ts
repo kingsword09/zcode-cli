@@ -194,8 +194,25 @@ try {
   );
   await waitFor(
     "API key turn completion",
-    /(?:Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan)[\s\S]*◈ zai\/glm-5\.1/i,
+    /(?:Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan)[\s\S]*◈ zai\/glm-5\.2/i,
     apiKeySetupStart
+  );
+  await sendAndWait("/login\r", "reopened login setup picker", /Set Up Coding Plan|配置 Coding Plan/i);
+  await sendAndWait(
+    "\x1b[B\x1b[B\x1b[B\r",
+    "BigModel masked API key prompt",
+    /Enter BigModel Coding Plan API Key|输入 BigModel Coding Plan API Key/i
+  );
+  await sendAndWait(smokeApiKey, "BigModel masked API key value", /\*{20,}/i);
+  const bigmodelSetupStart = await sendAndWait(
+    "\r",
+    "BigModel API key setup",
+    /Configured BigModel Coding Plan|已配置 BigModel Coding Plan/i
+  );
+  await waitFor(
+    "BigModel API key turn completion",
+    /(?:Configured BigModel Coding Plan|已配置 BigModel Coding Plan)[\s\S]*◈ bigmodel\/glm-5\.2/i,
+    bigmodelSetupStart
   );
   await sendAndWait("/help\r", "help output", /Slash commands:|Usage:/i);
   await sendAndWait("/mode plan\r", "plan mode", /mode switched to plan|current mode: plan|◈ default ─ ◉ plan/i);
@@ -259,7 +276,9 @@ if (/Model config is missing/i.test(plain)) {
 if (plain.includes(smokeApiKey)) {
   throw new Error(`The API key leaked into terminal output.\n${plain.slice(-4_000)}`);
 }
-if (!configured.includes(smokeApiKey) || !configured.includes('"main": "zai/')) {
+if (!configured.includes(smokeApiKey)
+  || !configured.includes('"main": "bigmodel/glm-5.2"')
+  || !configured.includes('"lite": "bigmodel/glm-4.7"')) {
   throw new Error("The official runtime did not persist the Coding Plan configuration.");
 }
 if (leakedFiles.length > 0) {

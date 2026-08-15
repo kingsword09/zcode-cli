@@ -8,8 +8,9 @@ import {
   patchRuntimeAgentAutoBackground,
   patchRuntimeBackgroundTaskProjection,
   patchRuntimeDetachedAgentLifecycle,
-  patchRuntimeTerminalToolProjection,
+  patchRuntimeLoginModelDefaults,
   patchRuntimeOAuthHttpErrors,
+  patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge,
   patchRuntimeZaiDesktopOAuth,
   resolveArtifactUrl,
@@ -201,6 +202,74 @@ describe("runtime synchronization", () => {
         written: { apiKey: "coding-plan-key", providerId: "zai" }
       });
     });
+  });
+
+  test("updates the login model defaults to the current server catalog", () => {
+    const runtime = [
+      'function Cs(e){return typeof e==="object"&&e!==null&&!Array.isArray(e)}',
+      'function Pni(e,t,r){let o=ICt[t],n=Cs(e.provider)?e.provider:{},',
+      'i=Cs(n[t])?n[t]:{},a=Cs(i.options)?i.options:{},u=Cs(i.models)?i.models:{},',
+      'l=Cs(u[kCt])?u[kCt]:{},c=Cs(u[SCt])?u[SCt]:{},d=Cs(e.model)?e.model:{},',
+      'p=typeof d.lite=="string"?d.lite:o.liteModel,m={...a,apiKeyRequired:true,baseURL:o.baseURL};',
+      'return r.length>0&&(m.apiKey=r),{...e,provider:{...n,[t]:{...i,kind:xni,name:o.displayName,options:m,',
+      'models:{...u,[kCt]:{...l,name:"GLM-5.1"},[SCt]:{...c,name:"GLM-4.7"}}}},',
+      'model:{...d,main:o.mainModel,lite:p}}}',
+      'var fni="bigmodel",hni="zai",',
+      'gni="zai/glm-5.1",_ni="zai/glm-4.7",vni="bigmodel/glm-5.1",yni="bigmodel/glm-4.7",',
+      'kCt="glm-5.1",SCt="glm-4.7",xni="anthropic",',
+      'ICt={[fni]:{baseURL:"https://open.bigmodel.cn/api/anthropic",displayName:"BigModel Coding Plan",',
+      'liteModel:yni,mainModel:vni},[hni]:{baseURL:"https://api.z.ai/api/anthropic",',
+      'displayName:"Z.AI Coding Plan",liteModel:_ni,mainModel:gni}};'
+    ].join("");
+    const patched = patchRuntimeLoginModelDefaults(runtime);
+    const updateConfig = new Function(`${patched};return Pni;`)() as (
+      config: Record<string, unknown>,
+      providerId: string,
+      apiKey: string
+    ) => {
+      model: { lite: string; main: string };
+      provider: Record<string, { models: Record<string, unknown> }>;
+    };
+
+    expect(patched).toContain(
+      'gni="zai/glm-5.2",_ni="zai/glm-5-turbo",vni="bigmodel/glm-5.2",yni="bigmodel/glm-4.7"'
+    );
+    expect(patched).toContain('kCt="glm-5.2",SCt="glm-4.7"');
+    expect(patched).toContain('["glm-5-turbo"]:{...u["glm-5-turbo"],name:"GLM-5-Turbo"}');
+    expect(patched).not.toContain('gni="zai/glm-5.1"');
+    expect(patched).not.toContain('"GLM-5.1"');
+
+    const zai = updateConfig({}, "zai", "zai-key");
+    expect(zai.model).toEqual({ main: "zai/glm-5.2", lite: "zai/glm-5-turbo" });
+    expect(Object.keys(zai.provider.zai!.models).sort()).toEqual([
+      "glm-4.7",
+      "glm-5-turbo",
+      "glm-5.2"
+    ]);
+
+    const bigmodel = updateConfig({}, "bigmodel", "bigmodel-key");
+    expect(bigmodel.model).toEqual({ main: "bigmodel/glm-5.2", lite: "bigmodel/glm-4.7" });
+    expect(bigmodel.provider.bigmodel!.models["glm-4.7"]).toBeDefined();
+    expect(updateConfig(
+      { model: { lite: "zai/custom-lite" } },
+      "bigmodel",
+      "bigmodel-key"
+    ).model.lite).toBe("bigmodel/glm-4.7");
+    expect(updateConfig(
+      { model: { lite: "bigmodel/custom-lite" } },
+      "bigmodel",
+      "bigmodel-key"
+    ).model.lite).toBe("bigmodel/custom-lite");
+
+    const partiallyUpdated = runtime.replace(
+      'gni="zai/glm-5.1",_ni="zai/glm-4.7",vni="bigmodel/glm-5.1",yni="bigmodel/glm-4.7"',
+      'gni="zai/glm-5.2",_ni="zai/glm-5-turbo",vni="bigmodel/glm-5.2",yni="bigmodel/glm-4.7"'
+    );
+    expect(patchRuntimeLoginModelDefaults(partiallyUpdated)).toBe(patched);
+    expect(patchRuntimeLoginModelDefaults(patched)).toBe(patched);
+    expect(() => patchRuntimeLoginModelDefaults("incompatible runtime")).toThrow(
+      /login model defaults patch/
+    );
   });
 
   test("maps supported static updater manifests", () => {

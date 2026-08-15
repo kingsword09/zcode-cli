@@ -55,7 +55,8 @@ describe("user config bootstrap", () => {
     expect(config.provider.zai.options.apiKey).toBeUndefined();
     expect(config.provider.zai.models["glm-5.2"]).toBeDefined();
     expect(config.provider.zai.models["glm-5.1"]).toBeDefined();
-    expect(config.model).toEqual({ main: "zai/glm-5.2", lite: "zai/glm-5.1" });
+    expect(config.provider.zai.models["glm-5-turbo"]).toBeDefined();
+    expect(config.model).toEqual({ main: "zai/glm-5.2", lite: "zai/glm-5-turbo" });
     expect(config.modelStream.idleTimeoutMs).toBe(60_000);
     expect(config.subagents.autoBackgroundMs).toBe(1_000);
     expect(await readConfiguredModelAccess(env)).toBeNull();

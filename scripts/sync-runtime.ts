@@ -715,17 +715,60 @@ async function installLocalTui(nextVendor: string): Promise<void> {
   await cp(join(source, "dist"), join(target, "dist"), { recursive: true });
 }
 
+/** Align Coding Plan defaults without depending on platform-specific minifier names. */
+export function patchRuntimeLoginModelDefaults(runtime: string): string {
+  const presetPattern = /([A-Za-z_$][\w$]*)="zai\/glm-(?:5\.1|5\.2)",([A-Za-z_$][\w$]*)="zai\/glm-(?:4\.7|5-turbo)",([A-Za-z_$][\w$]*)="bigmodel\/glm-(?:5\.1|5\.2)",([A-Za-z_$][\w$]*)="bigmodel\/glm-4\.7"/u;
+  const modelIdPattern = /([A-Za-z_$][\w$]*)="glm-(?:5\.1|5\.2)",([A-Za-z_$][\w$]*)="glm-(?:4\.7|5-turbo)"/u;
+  const modelEntriesPattern = /models:\{\.\.\.([A-Za-z_$][\w$]*),\[([A-Za-z_$][\w$]*)\]:\{\.\.\.([A-Za-z_$][\w$]*),name:"GLM-5\.(?:1|2)"\},\[([A-Za-z_$][\w$]*)\]:\{\.\.\.([A-Za-z_$][\w$]*),name:"GLM-(?:4\.7|5-Turbo)"\}(?:,\["glm-5-turbo"\]:\{\.\.\.\1\["glm-5-turbo"\],name:"GLM-5-Turbo"\})?\}/u;
+  const legacyLiteSelectionPattern = /([A-Za-z_$][\w$]*)=typeof ([A-Za-z_$][\w$]*)\.lite=="string"\?\2\.lite:([A-Za-z_$][\w$]*)\.liteModel/u;
+  const scopedLiteSelectionPattern = /([A-Za-z_$][\w$]*)=typeof ([A-Za-z_$][\w$]*)\.lite=="string"&&\2\.lite\.startsWith\(([A-Za-z_$][\w$]*)\.mainModel\.slice\(0,\3\.mainModel\.indexOf\("\/"\)\+1\)\)\?\2\.lite:\3\.liteModel/u;
+
+  const preset = presetPattern.exec(runtime);
+  const modelIds = modelIdPattern.exec(runtime);
+  const modelEntries = modelEntriesPattern.exec(runtime);
+  if (!preset || !modelIds || !modelEntries
+    || modelIds[1] !== modelEntries[2]
+    || modelIds[2] !== modelEntries[4]) {
+    throw new Error("ZCode runtime is incompatible with the login model defaults patch (model preset/catalog anchors missing).");
+  }
+
+  let patched = runtime
+    .replace(
+      preset[0],
+      `${preset[1]}="zai/glm-5.2",${preset[2]}="zai/glm-5-turbo",${preset[3]}="bigmodel/glm-5.2",${preset[4]}="bigmodel/glm-4.7"`
+    )
+    .replace(modelIds[0], `${modelIds[1]}="glm-5.2",${modelIds[2]}="glm-4.7"`)
+    .replace(
+      modelEntries[0],
+      `models:{...${modelEntries[1]},[${modelEntries[2]}]:{...${modelEntries[3]},name:"GLM-5.2"},[${modelEntries[4]}]:{...${modelEntries[5]},name:"GLM-4.7"},["glm-5-turbo"]:{...${modelEntries[1]}["glm-5-turbo"],name:"GLM-5-Turbo"}}`
+    );
+
+  const legacyLiteSelection = legacyLiteSelectionPattern.exec(patched);
+  if (legacyLiteSelection) {
+    const [, selection, model, selectedPreset] = legacyLiteSelection;
+    patched = patched.replace(
+      legacyLiteSelection[0],
+      `${selection}=typeof ${model}.lite=="string"&&${model}.lite.startsWith(${selectedPreset}.mainModel.slice(0,${selectedPreset}.mainModel.indexOf("/")+1))?${model}.lite:${selectedPreset}.liteModel`
+    );
+  } else if (!scopedLiteSelectionPattern.test(patched)) {
+    throw new Error("ZCode runtime is incompatible with the login model defaults patch (lite model anchor missing).");
+  }
+  return patched;
+}
+
 async function installTuiBridge(nextVendor: string): Promise<void> {
   const runtimePath = join(nextVendor, "zcode.cjs");
   const runtime = await readFile(runtimePath, "utf8");
   await writeFile(
     runtimePath,
-    patchRuntimeZaiDesktopOAuth(
-      patchRuntimeOAuthHttpErrors(
-        patchRuntimeAgentAutoBackground(
-          patchRuntimeDetachedAgentLifecycle(
-            patchRuntimeTerminalToolProjection(
-              patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
+    patchRuntimeLoginModelDefaults(
+      patchRuntimeZaiDesktopOAuth(
+        patchRuntimeOAuthHttpErrors(
+          patchRuntimeAgentAutoBackground(
+            patchRuntimeDetachedAgentLifecycle(
+              patchRuntimeTerminalToolProjection(
+                patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
+              )
             )
           )
         )
