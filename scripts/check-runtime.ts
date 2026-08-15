@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { formatVersionOutput, readDistributionVersion } from "../src/launcher.ts";
 import {
+  patchRuntimeContextCacheFromParts,
   patchRuntimeLoginModelDefaults,
   supportsMultiMessageFileRewind
 } from "./sync-runtime.ts";
@@ -34,6 +35,7 @@ if (packageManifest.dependencies?.["playwright-core"] !== "1.59.1"
 
 const runtimeSource = await Bun.file(runtime).text();
 if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
+  || patchRuntimeContextCacheFromParts(runtimeSource) !== runtimeSource
   || !runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes('return await import("playwright-core")')
   || !runtimeSource.includes('pluginsReferenceCatalog:"plugins/referenceCatalog"')
@@ -42,6 +44,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')
   || !runtimeSource.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
   || !runtimeSource.includes(".loadSessionTranscript=async()=>await(await")
+  || !runtimeSource.includes('"loadSessionContextMessages"')
   || !runtimeSource.includes(".readGoal=async()=>await(await")
   || !runtimeSource.includes(".readTodos=async()=>await(await")
   || !runtimeSource.includes(".readRuntimeProjection=async()=>")

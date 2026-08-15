@@ -7,6 +7,7 @@ import {
   parseRuntimeLock,
   patchRuntimeAgentAutoBackground,
   patchRuntimeBackgroundTaskProjection,
+  patchRuntimeContextCacheFromParts,
   patchRuntimeDetachedAgentLifecycle,
   patchRuntimeLoginModelDefaults,
   patchRuntimeOAuthHttpErrors,
@@ -272,6 +273,101 @@ describe("runtime synchronization", () => {
     );
   });
 
+  test("projects context cache usage from step-finish parts when message tokens are empty", () => {
+    const runtime = [
+      'function zRe(e){return typeof e=="number"&&Number.isInteger(e)&&e>=0?e:void 0}',
+      'function Ree(e){return typeof e=="number"&&Number.isInteger(e)&&e>0?e:void 0}',
+      'function ada(e,t){return e}',
+      'function sda(e){return}',
+      'function LRe(e){let t=dda(e.messages,e.projection.contextWindow);return ada(cda(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,sda(e.persistedContextUsageBreakdownEvents??[]))}',
+      'function cda(e,t){if(!(e.contextUsed<=0||e.contextWindow<=0))return{...t?{cache:t}:{},cost:null,size:e.contextWindow,used:e.contextUsed}}',
+      'function dda(e,t){if(t<=0)return;let r=mda(e);for(let o=e.length-1;o>=0;o-=1){let n=e[o];if(!n)continue;if(n.info.role==="user"&&n.info.summary){let a=n.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Ree(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{cost:null,size:t,used:u}}}if(n.info.role!=="assistant"||n.info.summary)continue;let i=pda(n.info.tokens);if(i!==void 0)return{...r?{cache:r}:{},cost:null,size:t,used:i}}}',
+      'function pda(e){if(!e)return;let t=Ree(e.total);if(t!==void 0)return t;let r=Ree(e.input);if(r!==void 0)return r+(zRe(e.output)??0)}',
+      'function mda(e){let t=0,r=0,o=0,n=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;',
+      'let c=zRe(l.info.tokens.input)??0,d=zRe(l.info.tokens.cache.read)??0,p=zRe(l.info.tokens.cache.write)??0;',
+      'c<=0&&d<=0&&p<=0||(n+=1,t+=c,r+=d,o+=p,i=c,a=d,u=p)}',
+      'if(!(n<=0))return{inputTokens:i,cacheReadTokens:a,cacheWriteTokens:u,latestHitRate:i>0?a/i:null,hitRate:t>0?r/t:null,hitRateRequestCount:n,totalInputTokens:t,totalCacheReadTokens:r,totalCacheWriteTokens:o}}',
+      'function fda(e){return e}'
+    ].join("");
+    const patched = patchRuntimeContextCacheFromParts(runtime);
+    const context = new Function(`${patched};return {aggregate:mda,project:LRe};`)() as {
+      aggregate: (
+        messages: Array<{
+          info: { role: string; summary?: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } };
+          parts?: Array<{ type: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } }>;
+        }>
+      ) => Record<string, unknown> | undefined;
+      project: (state: {
+        messages: Array<{
+          info: { role: string; summary?: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } };
+          parts: Array<{ type: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } }>;
+        }>;
+        persistedContextUsageBreakdownEvents?: unknown[];
+        projection: { contextUsed: number; contextWindow: number };
+      }) => Record<string, unknown> | undefined;
+    };
+    const aggregate = context.aggregate;
+
+    expect(patchRuntimeContextCacheFromParts(patched)).toBe(patched);
+    expect(() => patchRuntimeContextCacheFromParts("incompatible runtime")).toThrow(
+      /context-cache patch/
+    );
+
+    // Empty input: no messages with tokens or parts -> no cache block.
+    expect(aggregate([{ info: { role: "assistant", tokens: undefined }, parts: [] }])).toBeUndefined();
+
+    // Step-finish part fallback when message tokens are missing entirely.
+    const fromParts = aggregate([
+      {
+        info: { role: "assistant", tokens: undefined },
+        parts: [
+          { type: "step-start" },
+          { type: "step-finish", tokens: { input: 1000, cache: { read: 900, write: 0 } } }
+        ]
+      }
+    ]);
+    expect(fromParts).toMatchObject({
+      inputTokens: 1000,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 0,
+      latestHitRate: 0.9,
+      hitRate: 0.9,
+      hitRateRequestCount: 1,
+      totalInputTokens: 1000,
+      totalCacheReadTokens: 900
+    });
+    expect(context.project({
+      messages: [{
+        info: { role: "assistant", tokens: undefined },
+        parts: [{ type: "step-finish", tokens: { input: 1000, cache: { read: 900, write: 0 } } }]
+      }],
+      projection: { contextUsed: 1000, contextWindow: 100_000 }
+    })).toMatchObject({
+      used: 1000,
+      size: 100_000,
+      cache: {
+        inputTokens: 1000,
+        cacheReadTokens: 900,
+        latestHitRate: 0.9
+      }
+    });
+
+    // Message tokens win over parts; parts only fill the gap.
+    const preferMessage = aggregate([
+      {
+        info: { role: "assistant", tokens: { input: 500, cache: { read: 500, write: 10 } } },
+        parts: [{ type: "step-finish", tokens: { input: 999, cache: { read: 1, write: 0 } } }]
+      }
+    ]);
+    expect(preferMessage).toMatchObject({ totalInputTokens: 500, totalCacheReadTokens: 500, totalCacheWriteTokens: 10 });
+
+    // Non-assistant and summary messages are ignored as before.
+    expect(aggregate([
+      { info: { role: "user" }, parts: [{ type: "step-finish", tokens: { input: 10, cache: { read: 1 } } }] },
+      { info: { role: "assistant", summary: "compact" }, parts: [{ type: "step-finish", tokens: { input: 10, cache: { read: 1 } } }] }
+    ])).toBeUndefined();
+  });
+
   test("maps supported static updater manifests", () => {
     expect(manifestUrl("linux", "x64")).toMatch(/update\/linux\/x64\/latest-linux\.yml$/);
     expect(manifestUrl("darwin", "arm64")).toMatch(/update\/mac\/arm64\/latest-mac\.yml$/);
@@ -389,7 +485,7 @@ describe("runtime synchronization", () => {
     expect(supportsMultiMessageFileRewind("e.targetMessageId?[e.targetMessageId]:[]")).toBe(false);
   });
 
-  test("injects transcript and structured state readers into the official TUI adapter", () => {
+  test("injects transcript and structured state readers into the official TUI adapter", async () => {
     const runtime = [
       "function R(e,t){return f(e,{rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}",
       "async function L(e){if(!e.sessionStore)return[];let t=await e.sessionStore.messages({sessionID:e.sessionId});return p(t)}",
@@ -408,12 +504,18 @@ describe("runtime synchronization", () => {
     const patched = patchRuntimeTuiBridge(runtimeWithApp);
 
     expect(patched).toContain("E.loadSessionTranscript=async()=>await(await S()).loadSessionTranscript?.()??[]");
+    expect(patched).toContain("E.loadSessionContextMessages=async()=>await(await S()).loadSessionContextMessages?.()??[]");
     expect(patched).toContain("E.listSkills=async()=>await H(e)");
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
     expect(patched).toContain("E.readTodos=async()=>await(await S()).readTodos?.()??[]");
     expect(patched).toContain("E.readRuntimeProjection=async()=>{let e=await S(),t=await e.runtime?.getProjection?.();if(!t)return null;");
     expect(patched).toContain(".filter(o=>o.isBackgrounded===!0).map(o=>");
     expect(patched).toContain("backgroundTaskDetails:r");
+    expect(patched).toContain('loadSessionContextMessages:a(async()=>await e.sessionStore.messages({sessionID:e.sessionId}),"loadSessionContextMessages")');
+    expect(patched).toContain("e.loadSessionContextMessages?.()");
+    expect(patched).toContain("n=mda(o)");
+    expect(patched).toContain("$ctxRuntimeUsage");
+    expect(patched).not.toContain("e.loadSessionTranscript?.()");
     expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
     expect(patched).toContain("E.cancelBackgroundTask=async e=>await(await S()).cancelBackgroundTask?.(e)??null");
     expect(patched).toContain("E.subscribeSessionEvents=e=>{let t=!1,r;S().then(o=>{t||(r=o.runtime?.subscribeEvents?.({onSessionEvent:e}))});return()=>{t=!0,r?.()}}");
@@ -448,6 +550,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("readGoal:g.readGoal");
     expect(patched).toContain("readTodos:g.readTodos");
     expect(patched).toContain("readRuntimeProjection:g.readRuntimeProjection");
+    expect(patched).toContain("loadSessionContextMessages:g.loadSessionContextMessages");
     expect(patched).toContain("readSessionUsage:g.readSessionUsage");
     expect(patched).toContain("cancelBackgroundTask:g.cancelBackgroundTask");
     expect(patched).toContain("previewFileRewind:g.previewFileRewind");
@@ -458,6 +561,50 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("subscribeSessionEvents:g.subscribeSessionEvents");
     expect(patched).toContain("sendBackgroundTaskMessage:g.sendBackgroundTaskMessage");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
+    const projectionStart = patched.indexOf("E.readRuntimeProjection=async()=>");
+    const projectionEnd = patched.indexOf(",E.readSessionUsage=", projectionStart);
+    const projectionAssignment = patched.slice(projectionStart, projectionEnd);
+    const rawMessages = [{ info: { role: "assistant" }, parts: [] }];
+    const bridge: { readRuntimeProjection?: () => Promise<Record<string, unknown>> } = {};
+    const readRuntimeProjection = new Function(
+      "E",
+      "S",
+      "mda",
+      `${projectionAssignment};return E.readRuntimeProjection;`
+    )(
+      bridge,
+      async () => ({
+        loadSessionContextMessages: async () => rawMessages,
+        runtime: {
+          getProjection: () => ({
+            activeToolCalls: [],
+            backgroundTasks: [],
+            contextUsed: 0,
+            contextWindow: 100_000
+          }),
+          runtimeTaskRegistry: { all: () => ({}) }
+        }
+      }),
+      (messages: unknown) => {
+        expect(messages).toBe(rawMessages);
+        return {
+          inputTokens: 1_000,
+          cacheReadTokens: 900,
+          latestHitRate: 0.9
+        };
+      }
+    ) as () => Promise<Record<string, unknown>>;
+    expect(await readRuntimeProjection()).toMatchObject({
+      contextUsage: {
+        used: 1_000,
+        size: 100_000,
+        cache: {
+          inputTokens: 1_000,
+          cacheReadTokens: 900,
+          latestHitRate: 0.9
+        }
+      }
+    });
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     const previousInterruptPatch = patched.replace("e?.waitForIdle===!0", "e?.waitForIdle===!1");
     expect(patchRuntimeTuiBridge(previousInterruptPatch)).toContain("e?.waitForIdle===!0");

@@ -31,7 +31,8 @@ export function normalizeGoal(value: unknown): GoalState | undefined {
 export function formatTokens(value: number): string {
   if (value < 1_000) return Math.floor(value).toString();
   if (value < 1_000_000) return `${Number((value / 1_000).toFixed(1))}K`;
-  return `${Number((value / 1_000_000).toFixed(1))}M`;
+  if (value < 1_000_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`;
+  return `${Number((value / 1_000_000_000).toFixed(1))}G`;
 }
 
 function formatGoalElapsed(totalSeconds: number): string {

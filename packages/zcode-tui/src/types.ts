@@ -86,6 +86,7 @@ export interface TuiOptions {
   stdout?: NodeJS.WriteStream;
   stderr?: NodeJS.WriteStream;
   loadSessionTranscript?: () => Promise<unknown>;
+  loadSessionContextMessages?: () => Promise<unknown>;
   listPluginReferences?: ListPluginReferences;
   listWorkspacePathSuggestions?: ListWorkspacePathSuggestions;
   listSkills?: ListSkills;

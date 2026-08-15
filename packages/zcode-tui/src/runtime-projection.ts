@@ -76,7 +76,10 @@ export interface RuntimeContextBreakdownItem {
     | "tool_prompt"
     | "system_tool_schemas"
     | "mcp_tool_schemas"
-    | "messages";
+    | "messages"
+    | "user_messages"
+    | "assistant_messages"
+    | "tool_io";
   chars: number;
 }
 
@@ -135,7 +138,10 @@ const contextSources = new Set<RuntimeContextBreakdownItem["source"]>([
   "tool_prompt",
   "system_tool_schemas",
   "mcp_tool_schemas",
-  "messages"
+  "messages",
+  "user_messages",
+  "assistant_messages",
+  "tool_io"
 ]);
 
 function finiteNumber(value: unknown): number | undefined {

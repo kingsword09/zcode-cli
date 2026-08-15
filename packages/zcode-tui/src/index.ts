@@ -54,7 +54,17 @@ import {
 } from "./events.ts";
 import { buildExitSummary } from "./exit-summary.ts";
 import { FooterBar } from "./footer-bar.ts";
-import { ContextDetailView, StatusDetailView } from "./context-status-view.ts";
+import {
+  ContextDetailView,
+  StatusDetailView,
+  type ContextDetailRefreshData
+} from "./context-status-view.ts";
+import { estimateTranscriptContextBreakdown } from "./context-breakdown.ts";
+import {
+  extractContextCacheTrend,
+  findActiveBranchMessageIds,
+  type ContextCacheTrend
+} from "./context-cache.ts";
 import {
   DiffDetailPage,
   diffBrowserSources,
@@ -144,6 +154,7 @@ import {
   normalizeTodoGroups,
   normalizeTodos,
   type RuntimeBackgroundJob,
+  type RuntimeContextUsage,
   type RuntimeProjectionSnapshot,
   type RuntimeTodo,
   type RuntimeTodoGroup
@@ -3407,13 +3418,62 @@ class ZCodeTui {
   }
 
   private async showContextDetails(): Promise<void> {
-    await Promise.all([this.refreshRuntimeState(), this.refreshSessionUsage()]);
+    const initial = await this.readContextDetailData();
     await this.showChoice({
       title: "Context",
-      prompt: "Current runtime context usage and source composition.",
-      content: new ContextDetailView(this.theme, this.runtimeProjection?.contextUsage),
+      prompt: "Context pressure, cache health, and prompt composition. Exact cache tokens are kept separate from estimates.",
+      content: new ContextDetailView(
+        this.theme,
+        initial.usage,
+        initial.trend,
+        () => this.readContextDetailData(),
+        () => this.ui.requestRender()
+      ),
       items: [{ value: "close", label: "Close" }]
     });
+  }
+
+  private async readContextDetailData(): Promise<ContextDetailRefreshData> {
+    await Promise.all([this.refreshRuntimeState(), this.refreshSessionUsage()]);
+    let usage: RuntimeContextUsage | undefined = this.runtimeProjection?.contextUsage;
+    let trend: ContextCacheTrend | undefined;
+    let transcript: unknown;
+    if (this.options.loadSessionTranscript) {
+      try {
+        transcript = await this.options.loadSessionTranscript();
+      } catch {}
+    }
+    if (this.options.loadSessionContextMessages) {
+      try {
+        const rawContextMessages = await this.options.loadSessionContextMessages();
+        const activeIds = new Set(
+          restoredMessages(transcript).flatMap((message) => message.messageId ? [message.messageId] : [])
+        );
+        trend = extractContextCacheTrend(
+          rawContextMessages,
+          activeIds.size > 0 ? activeIds : findActiveBranchMessageIds(rawContextMessages)
+        );
+        if (usage && trend) {
+          usage = {
+            ...usage,
+            cache: {
+              ...usage.cache,
+              latestHitRate: usage.cache?.latestHitRate ?? trend.wholeTree.latestHitRate,
+              hitRate: trend.wholeTree.hitRate ?? usage.cache?.hitRate,
+              hitRateRequestCount: trend.wholeTree.requests,
+              totalInputTokens: trend.wholeTree.inputTokens,
+              totalCacheReadTokens: trend.wholeTree.cacheReadTokens,
+              totalCacheWriteTokens: trend.wholeTree.cacheWriteTokens
+            }
+          };
+        }
+      } catch {}
+    }
+    if (usage && usage.breakdown.length === 0 && transcript !== undefined) {
+      const breakdown = estimateTranscriptContextBreakdown(transcript);
+      if (breakdown.length > 0) usage = { ...usage, breakdown };
+    }
+    return { usage, trend };
   }
 
   private async showStatusDetails(): Promise<void> {
@@ -3859,6 +3919,30 @@ class ZCodeTui {
         text: style(`ctx ${remaining}% left`),
         compactText: style(`ctx ${remaining}%`),
         priority: 90
+      });
+    }
+    const runtimeCache = this.runtimeProjection?.contextUsage?.cache;
+    const runtimeCacheRate = runtimeCache?.latestHitRate ?? runtimeCache?.hitRate;
+    const sessionInputTokens = this.sessionMetrics.inputTokens;
+    const sessionCacheReadTokens = this.sessionMetrics.cacheReadTokens;
+    const sessionCacheRate = sessionInputTokens !== undefined && sessionInputTokens > 0 && sessionCacheReadTokens !== undefined
+      ? sessionCacheReadTokens / sessionInputTokens
+      : undefined;
+    // Prefer the projection once it exists; its cache fields are refreshed from
+    // the same raw messages used by /context. Do not briefly show a stale 0%
+    // while that projection is still warming up.
+    const useSessionFallback = !this.options.readRuntimeProjection;
+    const cacheRateValue = runtimeCacheRate ?? (useSessionFallback ? sessionCacheRate : undefined);
+    const hasCacheRequests = (runtimeCache?.hitRateRequestCount ?? 0) > 0
+      || (runtimeCacheRate !== undefined && runtimeCacheRate !== null)
+      || (useSessionFallback && sessionCacheRate !== undefined);
+    if (cacheRateValue !== undefined && hasCacheRequests) {
+      const cacheRate = Math.max(0, Math.min(100, Math.round(cacheRateValue * 100)));
+      const style = cacheRate < 50 ? this.theme.warning : this.theme.muted;
+      fields.push({
+        text: style(`cache ${cacheRate}% hit`),
+        compactText: style(`cache ${cacheRate}%`),
+        priority: 85
       });
     }
     if (this.sessionMetrics.totalTokens !== undefined) {

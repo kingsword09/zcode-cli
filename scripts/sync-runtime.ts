@@ -360,7 +360,10 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && sessionEventsOptionPattern.test(runtime)
     && taskMessageBridgePattern.test(runtime)
     && taskMessageOptionPattern.test(runtime)
-    && runtime.includes(taskMessageRestartMarker);
+    && runtime.includes(taskMessageRestartMarker)
+    && runtime.includes("$ctxRuntimeUsage")
+    && runtime.includes(".loadSessionContextMessages=async()=>await(await")
+    && /loadSessionContextMessages:[A-Za-z_$][\w$]*\.loadSessionContextMessages/u.test(runtime);
   if (alreadyPatched) return runtime;
 
   let patched = runtime;
@@ -421,18 +424,20 @@ export function patchRuntimeTuiBridge(runtime: string): string {
       "function $1($2,$3){if(Array.isArray($3.targetMessageIds)&&$3.targetMessageIds.length>0)return $4($2,$3.targetMessageIds);if($3.targetMessageId)return $4($2,[$3.targetMessageId]);"
     );
   }
-  if (!patched.includes("readSessionUsage:")) {
-    const appPattern = /loadSessionTranscript:([A-Za-z_$][\w$]*)\(async\(\)=>await [A-Za-z_$][\w$]*\(\{sessionId:([A-Za-z_$][\w$]*)\.sessionId,sessionStore:\2\.sessionStore\}\),"loadSessionTranscript"\),readTodos:/u;
+  if (!patched.includes('"loadSessionContextMessages"') || !patched.includes('"readSessionUsage"')) {
+    const appPattern = /loadSessionTranscript:([A-Za-z_$][\w$]*)\(async\(\)=>await ([A-Za-z_$][\w$]*)\(\{sessionId:([A-Za-z_$][\w$]*)\.sessionId,sessionStore:\3\.sessionStore\}\),"loadSessionTranscript"\)/u;
     const app = appPattern.exec(patched);
-    if (!app) throw new Error("ZCode runtime is incompatible with the TUI bridge (session usage anchor missing).");
-    const [appAssignment, helper, context] = app;
-    patched = patched.replace(
-      appAssignment,
-      appAssignment.replace(
-        ",readTodos:",
-        `,readSessionUsage:${helper}(async()=>await ${context}.sessionStore.queryTaskUsage?.({sessionID:${context}.sessionId})??null,"readSessionUsage"),readTodos:`
-      )
-    );
+    if (!app) throw new Error("ZCode runtime is incompatible with the TUI bridge (session context anchor missing).");
+    const [appAssignment, helper, , context] = app;
+    const appMethods = [
+      !patched.includes('"loadSessionContextMessages"')
+        ? `loadSessionContextMessages:${helper}(async()=>await ${context}.sessionStore.messages({sessionID:${context}.sessionId}),"loadSessionContextMessages")`
+        : undefined,
+      !patched.includes('"readSessionUsage"')
+        ? `readSessionUsage:${helper}(async()=>await ${context}.sessionStore.queryTaskUsage?.({sessionID:${context}.sessionId})??null,"readSessionUsage")`
+        : undefined
+    ].filter(Boolean);
+    patched = patched.replace(appAssignment, `${appAssignment},${appMethods.join(",")}`);
   }
 
   const assignmentPattern = /([A-Za-z_$][\w$]*)\.recallPreviousInput=async ([A-Za-z_$][\w$]*)=>await\(await ([A-Za-z_$][\w$]*)\(\)\)\.recallPreviousInputHistory\?\.\(\2\)\?\?null/u;
@@ -441,7 +446,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   const [recallAssignment, bridge, , getApp] = assignment;
   const assignments: string[] = [];
-  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}(),t=await e.runtime?.getProjection?.();if(!t)return null;let r=Object.values(e.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.completedAt}));return{...t,backgroundTaskDetails:r}}`;
+  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}(),t=await e.runtime?.getProjection?.();if(!t)return null;let r=Object.values(e.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.completedAt}));let $ctxRuntimeUsage=t.contextUsage;try{let o=await e.loadSessionContextMessages?.()??[],n=mda(o);if(n)$ctxRuntimeUsage={...$ctxRuntimeUsage,used:$ctxRuntimeUsage?.used??(t.contextUsed>0?t.contextUsed:n.inputTokens??0),size:$ctxRuntimeUsage?.size??t.contextWindow,cache:{...$ctxRuntimeUsage?.cache,...n}}}catch{}return{...t,...$ctxRuntimeUsage?{contextUsage:$ctxRuntimeUsage}:{},backgroundTaskDetails:r}}`;
   const taskMessageAssignment = `${bridge}.sendBackgroundTaskMessage=async e=>{let t=await ${getApp}(),r=t.runtime,o=r?.runtimeTaskRegistry?.get?.(e?.taskId);if(!r?.subagentPort?.sendMessage)throw new Error("Background agent messaging is unavailable in this runtime.");if(!o||(o.type??o.taskType)!=="local_agent")throw new Error("The selected task is not a local agent.");if(typeof e?.message!=="string"||!e.message.trim())throw new Error("Enter a message for the background agent.");let n=e.message.trim().slice(0,2e4),i=(typeof e.summary==="string"?e.summary:n).replace(/\\s+/g," ").trim().slice(0,200);if(e?.restart===!0&&o.status==="running"){if(!r.subagentPort.stopTask)throw new Error("Background agent restart is unavailable in this runtime.");await r.subagentPort.stopTask(e.taskId),o=r.runtimeTaskRegistry?.get?.(e.taskId);if(!o)throw new Error("The background agent stopped but could not be restored.")}return await r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.(),turnId:o.turnId??"tui-task-message",parentToolCallId:o.parentToolCallId??"tui-task-message",to:o.agentId??e.taskId,summary:i,message:n,workingDirectory:o.workingDirectory??r.workingDirectory,workspaceRoot:o.workspaceRoot??r.workingDirectory,trace:o.traceContext??r.rootTraceContext})}`;
   if (!listSkillsBridgePattern.test(patched)) {
     const listSkillsFactory = /listSkills:[A-Za-z_$][\w$]*\(\(\)=>([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),"listSkills"\)/u
@@ -456,16 +461,27 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".loadSessionTranscript=async()=>await(await")) {
     assignments.push(`${bridge}.loadSessionTranscript=async()=>await(await ${getApp}()).loadSessionTranscript?.()??[]`);
   }
+  if (!patched.includes(".loadSessionContextMessages=async()=>await(await")) {
+    assignments.push(`${bridge}.loadSessionContextMessages=async()=>await(await ${getApp}()).loadSessionContextMessages?.()??[]`);
+  }
   if (!patched.includes(".readGoal=async()=>await(await")) {
     assignments.push(`${bridge}.readGoal=async()=>await(await ${getApp}()).readTarget?.()??null`);
   }
   if (!patched.includes(".readTodos=async()=>await(await")) {
     assignments.push(`${bridge}.readTodos=async()=>await(await ${getApp}()).readTodos?.()??[]`);
   }
-  if (!patched.includes("backgroundTaskDetails")) {
-    const existingProjection = `${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}();return e.runtime?.getProjection?.()??null}`;
-    if (patched.includes(existingProjection)) patched = patched.replace(existingProjection, projectionAssignment);
-    else assignments.push(projectionAssignment);
+  if (!patched.includes("$ctxRuntimeUsage")) {
+    const existingProjectionStart = `${bridge}.readRuntimeProjection=async()=>`;
+    const existingProjectionIndex = patched.indexOf(existingProjectionStart);
+    if (existingProjectionIndex >= 0) {
+      const existingProjectionEnd = patched.indexOf(`,${bridge}.`, existingProjectionIndex + existingProjectionStart.length);
+      if (existingProjectionEnd < 0) {
+        throw new Error("ZCode runtime is incompatible with the TUI bridge (projection boundary missing).");
+      }
+      patched = `${patched.slice(0, existingProjectionIndex)}${projectionAssignment}${patched.slice(existingProjectionEnd)}`;
+    } else {
+      assignments.push(projectionAssignment);
+    }
   }
   if (!patched.includes(".readSessionUsage=async()=>await(await")) {
     assignments.push(`${bridge}.readSessionUsage=async()=>await(await ${getApp}()).readSessionUsage?.()??null`);
@@ -529,6 +545,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const optionFields: string[] = [];
   if (!/loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(patched)) {
     optionFields.push(`loadSessionTranscript:${submitBridge}.loadSessionTranscript`);
+  }
+  if (!/loadSessionContextMessages:[A-Za-z_$][\w$]*\.loadSessionContextMessages/u.test(patched)) {
+    optionFields.push(`loadSessionContextMessages:${submitBridge}.loadSessionContextMessages`);
   }
   if (!/readGoal:[A-Za-z_$][\w$]*\.readGoal/u.test(patched)) {
     optionFields.push(`readGoal:${submitBridge}.readGoal`);
@@ -756,18 +775,55 @@ export function patchRuntimeLoginModelDefaults(runtime: string): string {
   return patched;
 }
 
+export function patchRuntimeContextCacheFromParts(runtime: string): string {
+  const aggregateAnchor =
+    'function mda(e){let t=0,r=0,o=0,n=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let c=zRe(l.info.tokens.input)??0,d=zRe(l.info.tokens.cache.read)??0,p=zRe(l.info.tokens.cache.write)??0;c<=0&&d<=0&&p<=0||';
+  const projectionAnchor =
+    "function LRe(e){let t=dda(e.messages,e.projection.contextWindow);return ada(cda(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,sda(e.persistedContextUsageBreakdownEvents??[]))}";
+  let patched = runtime;
+  if (!patched.includes("$ctxPartTokens")) {
+    const anchorIndex = patched.indexOf(aggregateAnchor);
+    if (anchorIndex < 0) {
+      throw new Error("ZCode runtime is incompatible with the context-cache patch (aggregator anchor missing).");
+    }
+    const fallbackHelper = [
+      "let $ctxPartTokens=function(l){",
+      'let f=Array.isArray(l.parts)?l.parts.filter(function(x){return x&&x.type==="step-finish"&&x.tokens}):[];',
+      "for(let k=f.length-1;k>=0;k-=1){",
+      "let g=f[k].tokens||{},h=zRe(g.input)??0,y=zRe(g.cache&&g.cache.read)??0,w=zRe(g.cache&&g.cache.write)??0;",
+      "if(h>0||y>0||w>0)return{input:h,cache:{read:y,write:w}};}",
+      "return null};",
+      "let $ctxMsgTokens=function(l){let q=l.info.tokens;return q&&typeof q==\"object\"?{input:zRe(q.input)??0,cache:{read:zRe(q.cache&&q.cache.read)??0,write:zRe(q.cache&&q.cache.write)??0}}:{input:0,cache:{read:0,write:0}}};"
+    ].join("");
+    const replacement = `function mda(e){${fallbackHelper}let t=0,r=0,o=0,n=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let v=$ctxPartTokens(l),m=$ctxMsgTokens(l);let c=m.input,d=m.cache.read,p=m.cache.write;if((c<=0&&d<=0&&p<=0)&&v){c=v.input;d=v.cache.read;p=v.cache.write}c<=0&&d<=0&&p<=0||`;
+    patched = patched.slice(0, anchorIndex) + replacement + patched.slice(anchorIndex + aggregateAnchor.length);
+  }
+  if (!patched.includes("$ctxCache")) {
+    if (!patched.includes(projectionAnchor)) {
+      throw new Error("ZCode runtime is incompatible with the context-cache patch (projection anchor missing).");
+    }
+    patched = patched.replace(
+      projectionAnchor,
+      "function LRe(e){let t=dda(e.messages,e.projection.contextWindow),$ctxCache=t?.cache??mda(e.messages);return ada(cda(e.projection,$ctxCache)??t,sda(e.persistedContextUsageBreakdownEvents??[]))}"
+    );
+  }
+  return patched;
+}
+
 async function installTuiBridge(nextVendor: string): Promise<void> {
   const runtimePath = join(nextVendor, "zcode.cjs");
   const runtime = await readFile(runtimePath, "utf8");
   await writeFile(
     runtimePath,
-    patchRuntimeLoginModelDefaults(
-      patchRuntimeZaiDesktopOAuth(
-        patchRuntimeOAuthHttpErrors(
-          patchRuntimeAgentAutoBackground(
-            patchRuntimeDetachedAgentLifecycle(
-              patchRuntimeTerminalToolProjection(
-                patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
+    patchRuntimeContextCacheFromParts(
+      patchRuntimeLoginModelDefaults(
+        patchRuntimeZaiDesktopOAuth(
+          patchRuntimeOAuthHttpErrors(
+            patchRuntimeAgentAutoBackground(
+              patchRuntimeDetachedAgentLifecycle(
+                patchRuntimeTerminalToolProjection(
+                  patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
+                )
               )
             )
           )

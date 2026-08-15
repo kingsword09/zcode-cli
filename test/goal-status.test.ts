@@ -29,5 +29,6 @@ describe("TUI goal status", () => {
     expect(goalStatusLabel(active)).toBe("Active");
     expect(goalStatusLabel({ ...active, status: "budget_limited", tokenBudget: null })).toBe("Abandoned");
     expect(formatTokens(1_250_000)).toBe("1.3M");
+    expect(formatTokens(1_250_000_000)).toBe("1.3G");
   });
 });

@@ -132,6 +132,10 @@ class ChoiceDialog implements Component {
       this.contentExpanded = !this.contentExpanded;
       return;
     }
+    const contentInput = (this.content as (Component & {
+      handleInput?: (input: string) => boolean;
+    }) | undefined)?.handleInput;
+    if (contentInput?.call(this.content, data) === true) return;
     if (this.contentExpanded) {
       if (matchesKey(data, "escape")) {
         this.contentExpanded = false;

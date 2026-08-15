@@ -32,4 +32,17 @@ describe("TUI status line", () => {
     expect(line).not.toContain("build");
     expect(visibleWidth(line ?? "")).toBeLessThanOrEqual(24);
   });
+
+  test("treats cache health as a compact, disposable field", () => {
+    const status = new StatusLine();
+    status.setFields([
+      { text: "◈ model", priority: 100, required: true },
+      { text: "cache 99% hit", compactText: "cache 99%", priority: 80 },
+      { text: "18.4K tokens", compactText: "18.4K tok", priority: 20 }
+    ], " ─ ");
+    const [line] = status.render(26);
+    expect(line).toContain("◈ model");
+    expect(line).toContain("cache 99%");
+    expect(line).not.toContain("tokens");
+  });
 });
