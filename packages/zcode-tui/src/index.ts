@@ -147,6 +147,10 @@ import {
   type ProtectedSubmission,
   type SelectionCommand
 } from "./selection-command.ts";
+import {
+  emitSessionTerminalTitle,
+  sessionTitleFromFirstMessage
+} from "./session-title.ts";
 import { SkillCatalog } from "./skills.ts";
 import {
   isActiveBackgroundJob,
@@ -483,6 +487,8 @@ class ZCodeTui {
   private goalRefreshInFlight = false;
   private goalRefreshPending = false;
   private sessionId?: string;
+  private sessionTitleEmitted = false;
+  private sessionTerminalTitle?: string;
   private sessionMetrics: SessionMetrics = {};
   private usageRefreshInFlight = false;
   private usageRefreshPending = false;
@@ -1084,6 +1090,14 @@ class ZCodeTui {
       this.interruptBackgroundHandoffForInput();
       return;
     }
+    if (!steering && !input.startsWith("/") && !this.sessionTitleEmitted) {
+      const sessionTitle = sessionTitleFromFirstMessage(submission.displayInput);
+      if (sessionTitle !== null) {
+        this.sessionTerminalTitle = sessionTitle;
+        this.sessionTitleEmitted = true;
+        this.refreshSessionTerminalTitle();
+      }
+    }
     const turnEpoch = steering ? this.activeTurnEpoch : ++this.turnEpoch;
     if (turnEpoch === undefined) {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
@@ -1254,6 +1268,7 @@ class ZCodeTui {
   ): QueuedSubmission | undefined {
     this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
     if (this.activeTurnEpoch !== turnEpoch) return undefined;
+    this.refreshSessionTerminalTitle();
 
     const turnFinishState = abortController.signal.aborted ? "cancelled" : unfinishedToolState;
     const recoveryReason = turnFinishState === "cancelled"
@@ -1417,6 +1432,9 @@ class ZCodeTui {
       this.clearTranscriptProjection();
       this.workflowView = undefined;
       this.sessionId = undefined;
+      this.sessionTitleEmitted = false;
+      this.sessionTerminalTitle = undefined;
+      emitSessionTerminalTitle(this.options.stdout ?? process.stdout, "");
       this.sessionMetrics = {};
       this.restoreTranscript(restoredMessages(result.restoredMessages));
     }
@@ -3991,7 +4009,21 @@ class ZCodeTui {
 
   private updateActivity(activity: string | undefined, requestRender = true): void {
     this.activity = activity ? sanitizeTerminalText(activity, { preserveSgr: false }) : undefined;
+    this.refreshSessionTerminalTitle();
     this.updateTurnStatus(requestRender);
+  }
+
+  // Keeps the terminal title in sync: "ZC | ⠋ <activity>" while a turn runs,
+  // "ZC | <first-message title>" when idle (mirrors opencode's live title).
+  private refreshSessionTerminalTitle(): void {
+    if (!this.sessionTerminalTitle) return;
+    const working = this.activeSubmissions > 0 && this.activity
+      ? `⠋ ${this.activity}`
+      : undefined;
+    emitSessionTerminalTitle(
+      this.options.stdout ?? process.stdout,
+      working ?? this.sessionTerminalTitle
+    );
   }
 
   private updateTurnStatus(requestRender = true): void {
