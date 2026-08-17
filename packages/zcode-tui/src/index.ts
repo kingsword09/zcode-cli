@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
-import { readConfiguredModelAccess } from "../../../src/model-access.ts";
+import { readConfiguredModelAccess, userConfigPathHint } from "../../../src/model-access.ts";
 import {
   availableUpdateVersion,
   readStartupUpdate,
@@ -664,12 +664,13 @@ class ZCodeTui {
   }
 
   private updateLoginWarning(): void {
+    const configPath = userConfigPathHint();
     this.loginWarning.setText(
       this.loginRequired ? this.theme.warning("Model access is not configured.") : ""
     );
     this.loginHelp.setText(
       this.loginRequired
-        ? this.theme.warning("Run /login, or configure a custom provider in ~/.zcode/cli/config.json.")
+        ? this.theme.warning(`Run /login, or configure a custom provider in ${configPath}.`)
         : ""
     );
   }
@@ -2798,8 +2799,9 @@ class ZCodeTui {
       const command = selected?.payload as SelectionCommand | undefined;
       if (!command?.command) return;
       if (command.command === customProviderHelpCommand) {
+        const configPath = userConfigPathHint();
         this.addNotice(
-          "Custom providers do not require login. Copy config.example.json to ~/.zcode/cli/config.json, "
+          `Custom providers do not require login. Copy config.example.json to ${configPath}, `
           + "set provider kind, baseURL, apiKey and model IDs, then run /new. "
           + "See README: Custom provider without login.",
           "muted"

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readConfiguredModelAccess, userConfigPath } from "../src/model-access.ts";
+import { readConfiguredModelAccess, userConfigPath, userConfigPathHint } from "../src/model-access.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -20,6 +20,12 @@ async function temporaryHome(): Promise<string> {
 }
 
 describe("configured model access", () => {
+  test("formats the config path hint for each supported platform", () => {
+    expect(userConfigPathHint("linux")).toBe("~/.zcode/cli/config.json");
+    expect(userConfigPathHint("darwin")).toBe("~/.zcode/cli/config.json");
+    expect(userConfigPathHint("win32")).toBe("%USERPROFILE%\\.zcode\\cli\\config.json");
+  });
+
   test("detects an internally consistent custom provider", async () => {
     const home = await temporaryHome();
     const env = { HOME: home, USERPROFILE: home };

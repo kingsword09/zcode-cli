@@ -61,6 +61,12 @@ export function userConfigPath(
   return path.join(configuredHome || fallbackHome, ".zcode", "cli", "config.json");
 }
 
+export function userConfigPathHint(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32"
+    ? "%USERPROFILE%\\.zcode\\cli\\config.json"
+    : "~/.zcode/cli/config.json";
+}
+
 export async function ensureUserConfig(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<UserConfigBootstrapResult> {
