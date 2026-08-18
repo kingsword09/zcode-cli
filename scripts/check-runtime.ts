@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatVersionOutput, readDistributionVersion } from "../src/launcher.ts";
 import {
   patchRuntimeContextCacheFromParts,
+  patchRuntimeGoalFailurePause,
   patchRuntimeLoginModelDefaults,
   supportsMultiMessageFileRewind
 } from "./sync-runtime.ts";
@@ -36,6 +37,7 @@ if (packageManifest.dependencies?.["playwright-core"] !== "1.59.1"
 const runtimeSource = await Bun.file(runtime).text();
 if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || patchRuntimeContextCacheFromParts(runtimeSource) !== runtimeSource
+  || patchRuntimeGoalFailurePause(runtimeSource) !== runtimeSource
   || !runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes('return await import("playwright-core")')
   || !runtimeSource.includes('pluginsReferenceCatalog:"plugins/referenceCatalog"')

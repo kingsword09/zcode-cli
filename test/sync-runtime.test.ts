@@ -9,6 +9,7 @@ import {
   patchRuntimeBackgroundTaskProjection,
   patchRuntimeContextCacheFromParts,
   patchRuntimeDetachedAgentLifecycle,
+  patchRuntimeGoalFailurePause,
   patchRuntimeLoginModelDefaults,
   patchRuntimeOAuthHttpErrors,
   patchRuntimeTerminalToolProjection,
@@ -711,5 +712,36 @@ describe("runtime synchronization", () => {
     });
     expect(patchRuntimeTerminalToolProjection(patched)).toBe(patched);
     expect(() => patchRuntimeTerminalToolProjection("incompatible runtime")).toThrow(/incompatible/);
+  });
+
+  test("pauses active goals when a continuation turn fails", async () => {
+    const runtime = [
+      "async function execute(e){",
+      "await this.finishTargetTurnAccounting({endedAtMs:Date.now(),inputID:i,startedTarget:t,status:e.type===CoreErrorType.TurnCancelled?\"paused\":void 0,traceContext:c});",
+      "}"
+    ].join("");
+    const patched = patchRuntimeGoalFailurePause(runtime);
+    const statuses: unknown[] = [];
+    const execute = new Function(
+      "CoreErrorType",
+      "i",
+      "t",
+      "c",
+      `${patched};return execute;`
+    )({ TurnCancelled: "cancelled" }, "input", {}, {}) as (
+      this: { finishTargetTurnAccounting: (input: { status?: string }) => Promise<void> },
+      error: { type: string }
+    ) => Promise<void>;
+
+    await execute.call({
+      finishTargetTurnAccounting: async (input) => {
+        statuses.push(input.status);
+      }
+    }, { type: "model_request_failed" });
+
+    expect(patched).toContain('startedTarget:t,status:"paused",traceContext:c');
+    expect(statuses).toEqual(["paused"]);
+    expect(patchRuntimeGoalFailurePause(patched)).toBe(patched);
+    expect(() => patchRuntimeGoalFailurePause("incompatible runtime")).toThrow(/incompatible/);
   });
 });

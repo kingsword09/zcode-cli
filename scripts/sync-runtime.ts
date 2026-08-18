@@ -295,6 +295,21 @@ export function patchRuntimeTerminalToolProjection(runtime: string): string {
   return patched;
 }
 
+/** Pause an active goal when its continuation turn fails instead of leaving it active. */
+export function patchRuntimeGoalFailurePause(runtime: string): string {
+  const alreadyPatchedPattern = /finishTargetTurnAccounting\(\{[^{}]*?status:"paused",traceContext:/u;
+  if (alreadyPatchedPattern.test(runtime)) return runtime;
+
+  const failureStatusPattern = /(finishTargetTurnAccounting\(\{[^{}]*?status:)[A-Za-z_$][\w$]*\.type===[A-Za-z_$][\w$]*\.TurnCancelled\?"paused":void 0(,traceContext:)/u;
+  if (!failureStatusPattern.test(runtime)) {
+    throw new Error("ZCode runtime is incompatible with the goal failure pause patch.");
+  }
+  return runtime.replace(
+    failureStatusPattern,
+    '$1"paused"$2'
+  );
+}
+
 /** Exclude foreground Agent calls from the TUI background task projection. */
 export function patchRuntimeBackgroundTaskProjection(runtime: string): string {
   const filteredProjectionPattern = /runtimeTaskRegistry\?\.all\?\.\(\)\?\?\{\}\)\.filter\(([A-Za-z_$][\w$]*)=>\1\.isBackgrounded===!0\)\.map\(/u;
@@ -822,7 +837,9 @@ async function installTuiBridge(nextVendor: string): Promise<void> {
             patchRuntimeAgentAutoBackground(
               patchRuntimeDetachedAgentLifecycle(
                 patchRuntimeTerminalToolProjection(
-                  patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
+                  patchRuntimeGoalFailurePause(
+                    patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
+                  )
                 )
               )
             )
