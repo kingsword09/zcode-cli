@@ -11,7 +11,7 @@ import type {
   RuntimeProjectionSnapshot
 } from "./runtime-projection.ts";
 import type { ContextCacheTrend, ContextCacheTurn } from "./context-cache.ts";
-import type { SessionMetrics } from "./session-status.ts";
+import { contextUsedPercent, type SessionMetrics } from "./session-status.ts";
 import type { ZCodeTheme } from "./theme.ts";
 
 const contextLabels: Record<RuntimeContextBreakdownItem["source"], string> = {
@@ -156,7 +156,10 @@ export class ContextDetailView implements Component {
       const columns = totalChars > 0 ? Math.max(1, Math.round(item.chars / totalChars * barWidth)) : 0;
       return contextStyle(item.source, this.theme)("█".repeat(columns));
     }).join("");
-    const usedPercent = Math.max(0, Math.round(this.usage.used / this.usage.size * 100));
+    const usedPercent = contextUsedPercent({
+      contextUsed: this.usage.used,
+      contextWindow: this.usage.size
+    }) ?? 0;
     const remaining = Math.max(0, this.usage.size - this.usage.used);
     const usageStyle = usedPercent >= 90 ? this.theme.error : usedPercent >= 70 ? this.theme.warning : (text: string) => text;
     const lines = [
@@ -306,7 +309,7 @@ export class StatusDetailView implements Component {
         ? [projection.lastError.code, projection.lastError.message].filter(Boolean).join(" · ")
         : undefined],
       ["Turns", String(metrics.turnCount ?? projection?.turnCount ?? 0)],
-      ["Tokens", metrics.totalTokens !== undefined ? formatTokens(metrics.totalTokens) : undefined],
+      ["Session tokens", metrics.totalTokens !== undefined ? formatTokens(metrics.totalTokens) : undefined],
       ["Requests", metrics.modelRequestCount !== undefined
         ? `${metrics.modelRequestCount}${metrics.modelErrorCount ? ` · ${metrics.modelErrorCount} errors` : ""}`
         : undefined],

@@ -162,6 +162,7 @@ import {
 import {
   contextRemainingPercent,
   mergeMetrics,
+  mergeProjectionMetrics,
   projectionMetrics,
   sessionIdFromUsage,
   usageMetrics,
@@ -1447,7 +1448,11 @@ class ZCodeTui {
     }
     if (Array.isArray(result.modelOptions)) this.modelOptions = [...result.modelOptions];
     if (Array.isArray(result.effortOptions)) this.effortOptions = [...result.effortOptions];
-    this.sessionMetrics = mergeMetrics(this.sessionMetrics, projectionMetrics(result.projection));
+    this.sessionMetrics = mergeProjectionMetrics(
+      this.sessionMetrics,
+      projectionMetrics(result.projection),
+      Boolean(this.options.readSessionUsage)
+    );
     if (Array.isArray(result.todos)) this.todos = normalizeTodos(result.todos);
     if (Array.isArray(result.todoGroups)) this.todoGroups = normalizeTodoGroups(result);
     this.applyRuntimeProjection(normalizeRuntimeProjection(result));
@@ -3950,8 +3955,8 @@ class ZCodeTui {
     if (this.sessionMetrics.totalTokens !== undefined) {
       const tokens = formatTokens(this.sessionMetrics.totalTokens);
       fields.push({
-        text: this.theme.muted(`${tokens} tokens`),
-        compactText: this.theme.muted(`${tokens} tok`),
+        text: this.theme.muted(`session ${tokens} tokens`),
+        compactText: this.theme.muted(`session ${tokens}`),
         priority: 20
       });
     }
@@ -4064,12 +4069,16 @@ class ZCodeTui {
     this.runtimeProjection = projection;
     this.reconcileTurnTiming(projection);
     if (projection.sessionId) this.sessionId = projection.sessionId;
-    this.sessionMetrics = mergeMetrics(this.sessionMetrics, {
-      contextUsed: projection.contextUsage?.used,
-      contextWindow: projection.contextUsage?.size,
-      totalTokens: projection.totalTokenCount,
-      turnCount: projection.turnCount
-    });
+    this.sessionMetrics = mergeProjectionMetrics(
+      this.sessionMetrics,
+      {
+        contextUsed: projection.contextUsage?.used,
+        contextWindow: projection.contextUsage?.size,
+        totalTokens: projection.totalTokenCount,
+        turnCount: projection.turnCount
+      },
+      Boolean(this.options.readSessionUsage)
+    );
     this.updateRuntimeActivity(false);
   }
 

@@ -53,10 +53,29 @@ export function sessionIdFromUsage(value: unknown): string | undefined {
 }
 
 export function mergeMetrics(current: SessionMetrics, update: SessionMetrics | undefined): SessionMetrics {
-  return update ? { ...current, ...update } : current;
+  if (!update) return current;
+  const defined = Object.fromEntries(
+    Object.entries(update).filter((entry): entry is [string, number] => entry[1] !== undefined)
+  ) as SessionMetrics;
+  return { ...current, ...defined };
+}
+
+export function mergeProjectionMetrics(
+  current: SessionMetrics,
+  update: SessionMetrics | undefined,
+  hasAuthoritativeSessionUsage: boolean
+): SessionMetrics {
+  if (!update || !hasAuthoritativeSessionUsage) return mergeMetrics(current, update);
+  const { totalTokens: _projectionTotal, ...contextMetrics } = update;
+  return mergeMetrics(current, contextMetrics);
+}
+
+export function contextUsedPercent(metrics: SessionMetrics): number | undefined {
+  if (metrics.contextUsed === undefined || !metrics.contextWindow) return undefined;
+  return Math.max(0, Math.min(100, Math.round(metrics.contextUsed / metrics.contextWindow * 100)));
 }
 
 export function contextRemainingPercent(metrics: SessionMetrics): number | undefined {
-  if (metrics.contextUsed === undefined || !metrics.contextWindow) return undefined;
-  return Math.max(0, Math.min(100, Math.round((1 - metrics.contextUsed / metrics.contextWindow) * 100)));
+  const used = contextUsedPercent(metrics);
+  return used === undefined ? undefined : 100 - used;
 }
