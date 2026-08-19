@@ -2388,6 +2388,7 @@ class ZCodeTui {
   }
 
   private restoreTranscript(messages: RestoredMessage[]): void {
+    let firstUserMessageText: string | undefined;
     for (const message of messages) {
       this.currentToolGroup = undefined;
       this.currentToolGroupBlockId = undefined;
@@ -2397,7 +2398,10 @@ class ZCodeTui {
         const text = message.parts.map((part) => part.type === "text" || part.type === "file" ? part.text : "")
           .filter(Boolean)
           .join("\n");
-        if (text) this.addUserMessage(text, 0, message.messageId);
+        if (text) {
+          if (!firstUserMessageText) firstUserMessageText = text;
+          this.addUserMessage(text, 0, message.messageId);
+        }
         continue;
       }
       const hiddenToolIds = message.role === "assistant"
@@ -2411,6 +2415,14 @@ class ZCodeTui {
           if (backgroundAgentPart(part) || Boolean(toolId && hiddenToolIds.has(toolId))) continue;
         }
         this.restorePart(part, message.role, message.messageId);
+      }
+    }
+    if (firstUserMessageText && !this.sessionTitleEmitted) {
+      const sessionTitle = sessionTitleFromFirstMessage(firstUserMessageText);
+      if (sessionTitle !== null) {
+        this.sessionTerminalTitle = sessionTitle;
+        this.sessionTitleEmitted = true;
+        this.refreshSessionTerminalTitle();
       }
     }
     this.currentToolGroup = undefined;
@@ -4242,6 +4254,7 @@ class ZCodeTui {
       this.settleTurnTiming();
     }
     this.activity = undefined;
+    this.refreshSessionTerminalTitle();
     this.updateTurnStatus();
     this.scheduleRuntimeRefresh(0);
     this.rescheduleRuntimePoll();
