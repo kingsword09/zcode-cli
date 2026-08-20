@@ -1,7 +1,18 @@
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { basename } from "node:path";
 
-import { readConfiguredModelAccess, userConfigPathHint } from "../../../src/model-access.ts";
+import {
+  clearSetupPending,
+  readConfiguredModelAccess,
+  readSetupPending,
+  userConfigPathHint
+} from "../../../src/model-access.ts";
+import {
+  applyDesktopMigration,
+  detectDesktopInstallation,
+  type DesktopInstallation
+} from "../../../src/desktop-migration.ts";
 import {
   availableUpdateVersion,
   readStartupUpdate,
@@ -251,7 +262,8 @@ const runtimeCommandSummaries = new Map([
     "login",
     "Sign in with Z.AI/BigModel OAuth or a Coding Plan API key (`/login` opens a method picker)"
   ],
-  ["new", "Start a fresh session (alias: /clear)"]
+  ["new", "Start a fresh session (alias: /clear)"],
+  ["setup", "Run the first-run setup wizard (model access, desktop import)"]
 ]);
 
 const terminalThemeQueryTimeoutMs = 100;
@@ -596,6 +608,16 @@ class ZCodeTui {
     this.startUpdateRefresh(updateCheck);
     if (!this.loginRequired) void this.refreshGoal();
     if (!this.loginRequired) void this.refreshSessionUsage();
+    if (await readSetupPending().catch(() => false)) {
+      if (await readConfiguredModelAccess().catch(() => null)) {
+        // The user already configured model access outside the wizard (for
+        // example via `zcode login` or a hand-edited config.json); honor that
+        // as completed setup instead of showing the wizard again.
+        await clearSetupPending().catch(() => {});
+      } else {
+        void this.runFirstRunSetup();
+      }
+    }
     this.scheduleRuntimePoll(0);
     void this.loadHistory();
     if (this.options.subscribeSessionEvents) {
@@ -1036,6 +1058,10 @@ class ZCodeTui {
     }
     if (input === "/config" || input === "/settings") {
       await this.showConfiguration();
+      return;
+    }
+    if (input === "/setup") {
+      await this.runFirstRunSetup(true);
       return;
     }
     if (isMcpPickerRequest(input) && await this.showMcpPicker()) {
@@ -2971,6 +2997,147 @@ class ZCodeTui {
         feedback = "Could not save the setting · select it to retry";
       }
     }
+  }
+
+  private async runFirstRunSetup(manual = false): Promise<void> {
+    let desktop: DesktopInstallation | null = null;
+    try {
+      desktop = await detectDesktopInstallation();
+    } catch {
+      desktop = null;
+    }
+    const access = await readConfiguredModelAccess().catch(() => null);
+    const statusHint = access
+      ? `Model access is already configured (${access.model}).`
+      : "Model access is not configured yet.";
+
+    const items: ChoiceItem[] = [];
+    if (desktop) {
+      const families = desktop.plan.families.map((entry) => entry.family).join("/");
+      items.push({
+        value: "import-desktop",
+        label: "Import settings from ZCode desktop",
+        description: `Copy desktop ${families} providers and model choices${desktop.plan.defaultFamily ? ` (selected: ${desktop.plan.defaultFamily})` : ""} · credentials are not copied`
+      });
+    }
+    items.push(
+      {
+        value: "sign-in",
+        label: "Sign in (OAuth or API key)",
+        description: "Z.AI / BigModel Coding Plan sign-in or a pasted API key"
+      },
+      {
+        value: customProviderHelpCommand,
+        label: "Custom provider",
+        description: "Configure any supported endpoint in config.json without signing in"
+      },
+      {
+        value: "skip",
+        label: "Skip for now",
+        description: manual ? "Close setup" : "Start without model access; run /setup or /login later"
+      }
+    );
+
+    const selected = await this.showChoice({
+      title: manual ? "ZCode setup" : "Welcome to ZCode CLI",
+      prompt: manual ? statusHint : `Set up model access to get started. ${statusHint}`,
+      help: "Up/Down choose · Enter select · Esc skip",
+      items
+    });
+    if (!selected || selected.value === "skip") {
+      await clearSetupPending().catch(() => {});
+      if (!manual && !access) {
+        this.addNotice("Setup skipped · run /login or /setup anytime.", "muted");
+      }
+      return;
+    }
+
+    if (selected.value === customProviderHelpCommand) {
+      await clearSetupPending().catch(() => {});
+      const configPath = userConfigPathHint();
+      this.addNotice(
+        `Custom providers do not require login. Copy config.example.json to ${configPath}, `
+        + "set provider kind, baseURL, apiKey and model IDs, then run /new. "
+        + "See README: Custom provider without login.",
+        "muted"
+      );
+      return;
+    }
+
+    if (selected.value === "import-desktop" && desktop) {
+      const imported = await this.importDesktopSettings(desktop);
+      if (!imported) return;
+    }
+
+    if (selected.value === "sign-in" || selected.value === "import-desktop") {
+      await this.submit("/login");
+    }
+
+    const finalAccess = await readConfiguredModelAccess().catch(() => null);
+    if (finalAccess) {
+      await clearSetupPending().catch(() => {});
+      this.setLoginRequired(false);
+      this.addNotice("Setup complete · model access is configured.", "muted");
+    } else {
+      // Login was attempted but did not produce model access; keep the marker
+      // so the wizard reappears on the next start.
+      this.addNotice("Setup finished without model access · run /login or /setup anytime.", "muted");
+    }
+  }
+
+  private async importDesktopSettings(desktop: DesktopInstallation): Promise<boolean> {
+    // Returns true when the caller should continue into the /login flow.
+    // The pending marker is only kept while the import itself failed;
+    // cancelling or deferring the sign-in counts as the user having handled
+    // setup for this session.
+    const plan = desktop.plan;
+    if (plan.families.length === 0) return false;
+    const family = plan.defaultFamily && plan.families.some((entry) => entry.family === plan.defaultFamily)
+      ? plan.defaultFamily
+      : plan.families[0]!.family;
+    const familyPlan = plan.families.find((entry) => entry.family === family)!;
+    const modelIds = familyPlan.models.map((model) => model.id).join(", ");
+
+    const confirmed = await this.showChoice({
+      title: "Import from ZCode desktop",
+      prompt:
+        `Import the desktop ${family} provider (${familyPlan.models.length} models: ${modelIds}) `
+        + "into your CLI config? A backup of the current config is saved first.",
+      help: "Enter import · Esc cancel",
+      items: [
+        { value: "import", label: `Import ${family} settings`, description: "Provider, baseURL and model list · no credentials" },
+        { value: "cancel", label: "Cancel", description: "Keep the current CLI configuration" }
+      ]
+    });
+    if (!confirmed || confirmed.value !== "import") return false;
+
+    try {
+      const result = await applyDesktopMigration(plan, { family });
+      this.addNotice(
+        `Imported desktop ${family} settings into ${result.configPath} (backup: ${basename(result.backupPath)}).`,
+        "muted"
+      );
+    } catch (error) {
+      this.addNotice(`Desktop import failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      return false;
+    }
+
+    const signIn = await this.showChoice({
+      title: "Sign in to finish",
+      prompt:
+        `Desktop credentials cannot be copied. Sign in with the ${family} Coding Plan now to complete setup?`,
+      help: "Enter select · Esc decide later",
+      items: [
+        { value: "now", label: "Sign in now (recommended)", description: "Opens the Coding Plan login picker" },
+        { value: "later", label: "Later", description: "Run /login whenever you are ready" }
+      ]
+    });
+    if (signIn?.value !== "now") {
+      await clearSetupPending().catch(() => {});
+      this.addNotice("Provider settings imported · run /login to sign in when ready.", "muted");
+      return false;
+    }
+    return true;
   }
 
   private handleRewindEscape(): void {

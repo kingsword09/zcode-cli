@@ -1,10 +1,19 @@
 import { describe, expect, test } from "bun:test";
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  clearSetupPending,
+  ensureUserConfig,
+  markSetupPending,
+  readConfiguredModelAccess,
+  readSetupPending,
+  userConfigPath
+} from "../src/model-access.ts";
+import {
+  firstRunSetupEnv,
   formatVersionOutput,
   isTuiRuntimeInvocation,
   isVersionInvocation,
@@ -70,6 +79,63 @@ describe("launcher routing", () => {
       args: ["login", "--no-browser"],
       checkConfiguredAccess: false
     });
+  });
+
+  test("signals the first-run setup wizard only for a fresh TUI invocation", () => {
+    expect(firstRunSetupEnv(true, [])).toEqual({ ZCODE_CLI_FIRST_RUN: "1" });
+    expect(firstRunSetupEnv(true, ["--browser-use=headless"])).toEqual({ ZCODE_CLI_FIRST_RUN: "1" });
+    expect(firstRunSetupEnv(false, [])).toBeUndefined();
+    expect(firstRunSetupEnv(true, ["app-server"])).toBeUndefined();
+    expect(firstRunSetupEnv(true, ["login"])).toBeUndefined();
+    expect(firstRunSetupEnv(true, ["-p", "hi"])).toBeUndefined();
+  });
+
+  test("keeps setup pending across non-TUI commands until the wizard clears it", async () => {
+    const home = await mkdtemp(join(tmpdir(), "zcode-setup-pending-"));
+    const env = { HOME: home, USERPROFILE: home };
+    try {
+      // First invocation creates the config via a non-TUI command (plugin list):
+      // the pending marker must survive so the wizard still appears later.
+      const bootstrap = await ensureUserConfig(env);
+      expect(bootstrap.created).toBe(true);
+      await markSetupPending(env);
+      expect(await readSetupPending(env)).toBe(true);
+      expect(firstRunSetupEnv(true, ["plugin", "list"])).toBeUndefined();
+      expect(firstRunSetupEnv(true, ["plugin", "list"])).toBeUndefined();
+
+      // The next interactive TUI start still triggers the wizard…
+      expect(firstRunSetupEnv(await readSetupPending(env), [])).toEqual({ ZCODE_CLI_FIRST_RUN: "1" });
+
+      // …and once the user skips or completes setup, it stops appearing.
+      await clearSetupPending(env);
+      expect(firstRunSetupEnv(await readSetupPending(env), [])).toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("clearing setup after a successful login is reflected in the wizard trigger", async () => {
+    const home = await mkdtemp(join(tmpdir(), "zcode-setup-login-"));
+    const env = { HOME: home, USERPROFILE: home };
+    try {
+      await ensureUserConfig(env);
+      await markSetupPending(env);
+
+      // `zcode login` succeeds and writes model access; the launcher then
+      // clears the marker, so the next TUI start must not open the wizard.
+      const configuredPath = userConfigPath(env);
+      const config = JSON.parse(await readFile(configuredPath, "utf8")) as {
+        provider?: { zai?: { options?: { apiKey?: string } } };
+      };
+      config.provider!.zai!.options!.apiKey = "login-written-key";
+      await writeFile(configuredPath, JSON.stringify(config));
+      expect(await readConfiguredModelAccess(env)).not.toBeNull();
+
+      await clearSetupPending(env);
+      expect(firstRunSetupEnv(await readSetupPending(env), [])).toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   test("enables Browser Use only for agent-producing runtime invocations", () => {

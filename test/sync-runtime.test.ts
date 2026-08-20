@@ -2,14 +2,15 @@ import { describe, expect, test } from "bun:test";
 
 import {
   chooseArtifact,
+  hasRuntimeHttpNoContentGuard,
   manifestUrl,
   parseArgs,
   parseRuntimeLock,
   patchRuntimeAgentAutoBackground,
-  patchRuntimeBackgroundTaskProjection,
   patchRuntimeContextCacheFromParts,
   patchRuntimeDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
+  patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
   patchRuntimeOAuthHttpErrors,
   patchRuntimeTerminalToolProjection,
@@ -135,6 +136,38 @@ describe("runtime synchronization", () => {
     expect(() => patchRuntimeOAuthHttpErrors(
       'broken "OAuth response is not valid JSON",{httpStatus:void 0}'
     )).toThrow(/parser anchor/);
+  });
+
+  test("constructs bodyless Fetch responses for 204, 205, and 304", async () => {
+    const runtime = [
+      'function request(response,headers){return new Response(streams.Readable.toWeb(response),{headers:headers,status:response.statusCode??502,statusText:response.statusMessage})}',
+      'function proxied(response,headers){return new Response(other.Readable.toWeb(response),{headers:headers,status:response.statusCode??502,statusText:response.statusMessage})}'
+    ].join("");
+    const patched = patchRuntimeHttpNoContent(runtime);
+    expect(hasRuntimeHttpNoContentGuard(runtime)).toBe(false);
+    expect(hasRuntimeHttpNoContentGuard(patched)).toBe(true);
+    const streams = { Readable: { toWeb: () => new ReadableStream() } };
+    const other = { Readable: { toWeb: () => new ReadableStream() } };
+    const functions = new Function(
+      "streams",
+      "other",
+      `${patched};return {proxied,request};`
+    )(streams, other) as {
+      proxied: (response: { statusCode: number; statusMessage?: string }, headers: Headers) => Response;
+      request: (response: { statusCode: number; statusMessage?: string }, headers: Headers) => Response;
+    };
+
+    for (const status of [204, 205, 304]) {
+      const response = functions.request({ statusCode: status }, new Headers());
+      expect(response.status).toBe(status);
+      expect(response.body).toBeNull();
+    }
+    expect(functions.proxied({ statusCode: 200 }, new Headers()).body).not.toBeNull();
+    expect(patchRuntimeHttpNoContent(patched)).toBe(patched);
+    expect(patchRuntimeHttpNoContent("runtime without the HTTP wrapper")).toBe(
+      "runtime without the HTTP wrapper"
+    );
+    expect(hasRuntimeHttpNoContentGuard("runtime without the HTTP wrapper")).toBe(false);
   });
 
   test("adds a Desktop authorization-code completion path while retaining official persistence", () => {
@@ -276,22 +309,22 @@ describe("runtime synchronization", () => {
 
   test("projects context cache usage from step-finish parts when message tokens are empty", () => {
     const runtime = [
-      'function zRe(e){return typeof e=="number"&&Number.isInteger(e)&&e>=0?e:void 0}',
-      'function Ree(e){return typeof e=="number"&&Number.isInteger(e)&&e>0?e:void 0}',
-      'function ada(e,t){return e}',
-      'function sda(e){return}',
-      'function LRe(e){let t=dda(e.messages,e.projection.contextWindow);return ada(cda(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,sda(e.persistedContextUsageBreakdownEvents??[]))}',
-      'function cda(e,t){if(!(e.contextUsed<=0||e.contextWindow<=0))return{...t?{cache:t}:{},cost:null,size:e.contextWindow,used:e.contextUsed}}',
-      'function dda(e,t){if(t<=0)return;let r=mda(e);for(let o=e.length-1;o>=0;o-=1){let n=e[o];if(!n)continue;if(n.info.role==="user"&&n.info.summary){let a=n.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Ree(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{cost:null,size:t,used:u}}}if(n.info.role!=="assistant"||n.info.summary)continue;let i=pda(n.info.tokens);if(i!==void 0)return{...r?{cache:r}:{},cost:null,size:t,used:i}}}',
-      'function pda(e){if(!e)return;let t=Ree(e.total);if(t!==void 0)return t;let r=Ree(e.input);if(r!==void 0)return r+(zRe(e.output)??0)}',
-      'function mda(e){let t=0,r=0,o=0,n=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;',
-      'let c=zRe(l.info.tokens.input)??0,d=zRe(l.info.tokens.cache.read)??0,p=zRe(l.info.tokens.cache.write)??0;',
-      'c<=0&&d<=0&&p<=0||(n+=1,t+=c,r+=d,o+=p,i=c,a=d,u=p)}',
-      'if(!(n<=0))return{inputTokens:i,cacheReadTokens:a,cacheWriteTokens:u,latestHitRate:i>0?a/i:null,hitRate:t>0?r/t:null,hitRateRequestCount:n,totalInputTokens:t,totalCacheReadTokens:r,totalCacheWriteTokens:o}}',
+      'function YRe(e){return typeof e=="number"&&Number.isInteger(e)&&e>=0?e:void 0}',
+      'function Loe(e){return typeof e=="number"&&Number.isInteger(e)&&e>0?e:void 0}',
+      'function Xki(e,t){return e}',
+      'function eSi(e){return}',
+      'function oSi(e,t){if(t<=0)return;let r=aSi(e);for(let n=e.length-1;n>=0;n-=1){let o=e[n];if(!o)continue;if(o.info.role==="user"&&o.info.summary){let a=o.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Loe(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{cost:null,size:t,used:u}}}if(o.info.role!=="assistant"||o.info.summary)continue;let i=iSi(o.info.tokens);if(i!==void 0)return{...r?{cache:r}:{},cost:null,size:t,used:i}}}',
+      'function nSi(e,t){if(!(e.contextUsed<=0||e.contextWindow<=0))return{...t?{cache:t}:{},cost:null,size:e.contextWindow,used:e.contextUsed}}',
+      'function aSi(e){let t=0,r=0,n=0,o=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;',
+      'let c=YRe(l.info.tokens.input)??0,d=YRe(l.info.tokens.cache.read)??0,p=YRe(l.info.tokens.cache.write)??0;',
+      'c<=0&&d<=0&&p<=0||(o+=1,t+=c,r+=d,n+=p,i=c,a=d,u=p)}',
+      'if(!(o<=0))return{inputTokens:i,cacheReadTokens:a,cacheWriteTokens:u,latestHitRate:i>0?a/i:null,hitRate:t>0?r/t:null,hitRateRequestCount:o,totalInputTokens:t,totalCacheReadTokens:r,totalCacheWriteTokens:n}}',
+      'function iSi(e){if(!e)return;let t=Loe(e.total);if(t!==void 0)return t;let r=Loe(e.input);if(r!==void 0)return r+(YRe(e.output)??0)}',
+      'function t5e(e){let t=oSi(e.messages,e.projection.contextWindow);return Xki(nSi(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,eSi(e.persistedContextUsageBreakdownEvents??[]))}',
       'function fda(e){return e}'
     ].join("");
     const patched = patchRuntimeContextCacheFromParts(runtime);
-    const context = new Function(`${patched};return {aggregate:mda,project:LRe};`)() as {
+    const context = new Function(`${patched};return {aggregate:aSi,project:t5e};`)() as {
       aggregate: (
         messages: Array<{
           info: { role: string; summary?: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } };
@@ -367,6 +400,37 @@ describe("runtime synchronization", () => {
       { info: { role: "user" }, parts: [{ type: "step-finish", tokens: { input: 10, cache: { read: 1 } } }] },
       { info: { role: "assistant", summary: "compact" }, parts: [{ type: "step-finish", tokens: { input: 10, cache: { read: 1 } } }] }
     ])).toBeUndefined();
+  });
+
+  test("detects a partially applied context-cache patch instead of silently skipping t5e", () => {
+    // Simulate a runtime where oSi is patched ($ctxCache present) but t5e is not.
+    // Before the fix, the $ctxCache gate caused the whole block to skip, so t5e's
+    // stale `t?.used===contextUsed?t.cache:void 0` would silently survive.
+    const fullyPatched = patchRuntimeContextCacheFromParts([
+      'function YRe(e){return typeof e=="number"&&Number.isInteger(e)&&e>=0?e:void 0}',
+      'function Loe(e){return typeof e=="number"&&Number.isInteger(e)&&e>0?e:void 0}',
+      'function Xki(e,t){return e}',
+      'function eSi(e){return}',
+      'function oSi(e,t){if(t<=0)return;let r=aSi(e);for(let n=e.length-1;n>=0;n-=1){let o=e[n];if(!o)continue;if(o.info.role==="user"&&o.info.summary){let a=o.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Loe(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{cost:null,size:t,used:u}}}if(o.info.role!=="assistant"||o.info.summary)continue;let i=iSi(o.info.tokens);if(i!==void 0)return{...r?{cache:r}:{},cost:null,size:t,used:i}}}',
+      'function nSi(e,t){if(!(e.contextUsed<=0||e.contextWindow<=0))return{...t?{cache:t}:{},cost:null,size:e.contextWindow,used:e.contextUsed}}',
+      'function aSi(e){let t=0,r=0,n=0,o=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let c=YRe(l.info.tokens.input)??0,d=YRe(l.info.tokens.cache.read)??0,p=YRe(l.info.tokens.cache.write)??0;c<=0&&d<=0&&p<=0||(o+=1,t+=c,r+=d,n+=p,i=c,a=d,u=p)}if(!(o<=0))return{inputTokens:i,cacheReadTokens:a,cacheWriteTokens:u,latestHitRate:i>0?a/i:null,hitRate:t>0?r/t:null,hitRateRequestCount:o,totalInputTokens:t,totalCacheReadTokens:r,totalCacheWriteTokens:n}}',
+      'function iSi(e){if(!e)return;let t=Loe(e.total);if(t!==void 0)return t;let r=Loe(e.input);if(r!==void 0)return r+(YRe(e.output)??0)}',
+      'function t5e(e){let t=oSi(e.messages,e.projection.contextWindow);return Xki(nSi(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,eSi(e.persistedContextUsageBreakdownEvents??[]))}'
+    ].join(""));
+    expect(fullyPatched).toContain("nSi(e.projection,t?.cache)??t");
+
+    // Roll back ONLY the t5e patch (revert to the stale caller) while keeping oSi.
+    const partial = fullyPatched.replace(
+      "nSi(e.projection,t?.cache)??t",
+      "nSi(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t"
+    );
+    expect(partial).not.toContain("nSi(e.projection,t?.cache)??t");
+    // Re-applying must detect and fix the missing t5e patch — not silently skip it.
+    const repaired = patchRuntimeContextCacheFromParts(partial);
+    expect(repaired).toContain("nSi(e.projection,t?.cache)??t");
+    expect(repaired).not.toContain("t?.used===e.projection.contextUsed?t.cache:void 0");
+    // Idempotence on the fully-patched runtime is preserved.
+    expect(patchRuntimeContextCacheFromParts(fullyPatched)).toBe(fullyPatched);
   });
 
   test("maps supported static updater manifests", () => {
@@ -514,7 +578,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("backgroundTaskDetails:r");
     expect(patched).toContain('loadSessionContextMessages:a(async()=>await e.sessionStore.messages({sessionID:e.sessionId}),"loadSessionContextMessages")');
     expect(patched).toContain("e.loadSessionContextMessages?.()");
-    expect(patched).toContain("n=mda(o)");
+    expect(patched).toContain("n=aSi(o)");
     expect(patched).toContain("$ctxRuntimeUsage");
     expect(patched).not.toContain("e.loadSessionTranscript?.()");
     expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
@@ -570,7 +634,7 @@ describe("runtime synchronization", () => {
     const readRuntimeProjection = new Function(
       "E",
       "S",
-      "mda",
+      "aSi",
       `${projectionAssignment};return E.readRuntimeProjection;`
     )(
       bridge,
@@ -662,26 +726,6 @@ describe("runtime synchronization", () => {
     ]);
     expect(patchRuntimeDetachedAgentLifecycle(patched)).toBe(patched);
     expect(() => patchRuntimeDetachedAgentLifecycle("incompatible runtime")).toThrow(/incompatible/);
-  });
-
-  test("keeps foreground agents out of the background task projection", () => {
-    const runtime = "function project(e){return Object.values(e.runtime?.runtimeTaskRegistry?.all?.()??{}).map(o=>o.taskId)}";
-    const patched = patchRuntimeBackgroundTaskProjection(runtime);
-    const project = new Function(`${patched};return project;`)() as (app: unknown) => string[];
-    const app = {
-      runtime: {
-        runtimeTaskRegistry: {
-          all: () => ({
-            foreground: { taskId: "foreground", isBackgrounded: false },
-            background: { taskId: "background", isBackgrounded: true }
-          })
-        }
-      }
-    };
-
-    expect(project(app)).toEqual(["background"]);
-    expect(patchRuntimeBackgroundTaskProjection(patched)).toBe(patched);
-    expect(() => patchRuntimeBackgroundTaskProjection("incompatible runtime")).toThrow(/incompatible/);
   });
 
   test("clears stale active tools when a runtime turn settles", () => {

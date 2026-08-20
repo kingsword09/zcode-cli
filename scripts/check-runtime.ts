@@ -7,8 +7,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { formatVersionOutput, readDistributionVersion } from "../src/launcher.ts";
 import {
+  hasRuntimeHttpNoContentGuard,
   patchRuntimeContextCacheFromParts,
   patchRuntimeGoalFailurePause,
+  patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
   supportsMultiMessageFileRewind
 } from "./sync-runtime.ts";
@@ -38,6 +40,9 @@ const runtimeSource = await Bun.file(runtime).text();
 if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || patchRuntimeContextCacheFromParts(runtimeSource) !== runtimeSource
   || patchRuntimeGoalFailurePause(runtimeSource) !== runtimeSource
+  || patchRuntimeHttpNoContent(runtimeSource) !== runtimeSource
+  || !hasRuntimeHttpNoContentGuard(runtimeSource)
+  || !runtimeSource.includes("nSi(e.projection,t?.cache)??t")
   || !runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes('return await import("playwright-core")')
   || !runtimeSource.includes('pluginsReferenceCatalog:"plugins/referenceCatalog"')

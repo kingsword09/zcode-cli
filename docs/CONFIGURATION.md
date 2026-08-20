@@ -19,6 +19,42 @@ configured. This lets the official runtime and TUI start cleanly without
 pretending that model access is already configured. Choose one of the
 model-access paths below before sending a prompt.
 
+## First-run setup wizard
+
+When the TUI starts while model access has not been set up, a setup wizard
+opens automatically. ZCode tracks this with a `setup-pending` marker file next
+to `config.json`: it is written when the credential-free default config is
+first created, survives non-interactive commands (`zcode plugin list`,
+`zcode -p …`, `app-server`, …) so the wizard still appears on the first
+interactive TUI start, and is cleared once setup is handled — finishing or
+explicitly skipping the wizard, choosing the custom-provider help entry,
+deferring the post-import sign-in, or configuring model access by any other
+means (`zcode login`, a hand-edited `config.json`), in which case the wizard
+does not appear at all. The marker is only kept when login or the desktop
+import was attempted and failed, so an unconfigured user is guided again on
+the next start. Press Esc to skip the wizard. It can be reopened anytime with
+`/setup`, and it never appears for an existing configuration unless invoked
+manually.
+
+### Importing settings from the ZCode desktop app
+
+The desktop import copies the selected desktop provider family (Z.AI or
+BigModel): provider name, `baseURL`, and the desktop model list (merged into
+the existing models, desktop IDs first). `model.main` keeps the current
+selection when the model ID exists on both sides (case-insensitively),
+otherwise it falls back to the first available of `glm-5.2`/`glm-5.3` (or the
+desktop list's first model); `model.lite` falls back to `glm-5-turbo` and then
+to the selected main model, so both selections always reference models that
+exist after the import. A backup of the pre-import `config.json` is written
+next to it as `config.json.pre-migration.bak`; if the backup cannot be
+written, the import is aborted before any change is made.
+
+Desktop credentials are never copied: the desktop app stores them encrypted
+(`enc:v1:`) with a key held by the desktop process, and the CLI reads desktop
+files only. After importing, sign in once via the offered login step (or
+`/login` later) so a fresh Coding Plan API key lands in the CLI config. An
+existing CLI-side `apiKey` for the same provider is always preserved.
+
 ## Model-access paths
 
 Three model-access paths are supported:

@@ -8,7 +8,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
-import { syncedReleaseVersion } from "./release-version.ts";
+import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cdnRoot = "https://cdn-zcode.z.ai/zcode/electron/releases";
@@ -310,21 +310,6 @@ export function patchRuntimeGoalFailurePause(runtime: string): string {
   );
 }
 
-/** Exclude foreground Agent calls from the TUI background task projection. */
-export function patchRuntimeBackgroundTaskProjection(runtime: string): string {
-  const filteredProjectionPattern = /runtimeTaskRegistry\?\.all\?\.\(\)\?\?\{\}\)\.filter\(([A-Za-z_$][\w$]*)=>\1\.isBackgrounded===!0\)\.map\(/u;
-  if (filteredProjectionPattern.test(runtime)) return runtime;
-  const projectionPattern = /Object\.values\(([A-Za-z_$][\w$]*)\.runtime\?\.runtimeTaskRegistry\?\.all\?\.\(\)\?\?\{\}\)\.map\(([A-Za-z_$][\w$]*)=>/u;
-  const projection = projectionPattern.exec(runtime);
-  if (!projection) {
-    throw new Error("ZCode runtime is incompatible with the background task projection patch.");
-  }
-  return runtime.replace(
-    projectionPattern,
-    `Object.values($1.runtime?.runtimeTaskRegistry?.all?.()??{}).filter($2=>$2.isBackgrounded===!0).map($2=>`
-  );
-}
-
 export function patchRuntimeTuiBridge(runtime: string): string {
   const transcriptMessageIdPattern = /\.push\(\{content:[A-Za-z_$][\w$]*,messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"\}\)/u;
   const transcriptAgentMessageIdPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u;
@@ -461,7 +446,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   const [recallAssignment, bridge, , getApp] = assignment;
   const assignments: string[] = [];
-  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}(),t=await e.runtime?.getProjection?.();if(!t)return null;let r=Object.values(e.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.completedAt}));let $ctxRuntimeUsage=t.contextUsage;try{let o=await e.loadSessionContextMessages?.()??[],n=mda(o);if(n)$ctxRuntimeUsage={...$ctxRuntimeUsage,used:$ctxRuntimeUsage?.used??(t.contextUsed>0?t.contextUsed:n.inputTokens??0),size:$ctxRuntimeUsage?.size??t.contextWindow,cache:{...$ctxRuntimeUsage?.cache,...n}}}catch{}return{...t,...$ctxRuntimeUsage?{contextUsage:$ctxRuntimeUsage}:{},backgroundTaskDetails:r}}`;
+  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}(),t=await e.runtime?.getProjection?.();if(!t)return null;let r=Object.values(e.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.completedAt}));let $ctxRuntimeUsage=t.contextUsage;try{let o=await e.loadSessionContextMessages?.()??[],n=aSi(o);if(n)$ctxRuntimeUsage={...$ctxRuntimeUsage,used:$ctxRuntimeUsage?.used??(t.contextUsed>0?t.contextUsed:n.inputTokens??0),size:$ctxRuntimeUsage?.size??t.contextWindow,cache:{...$ctxRuntimeUsage?.cache,...n}}}catch{}return{...t,...$ctxRuntimeUsage?{contextUsage:$ctxRuntimeUsage}:{},backgroundTaskDetails:r}}`;
   const taskMessageAssignment = `${bridge}.sendBackgroundTaskMessage=async e=>{let t=await ${getApp}(),r=t.runtime,o=r?.runtimeTaskRegistry?.get?.(e?.taskId);if(!r?.subagentPort?.sendMessage)throw new Error("Background agent messaging is unavailable in this runtime.");if(!o||(o.type??o.taskType)!=="local_agent")throw new Error("The selected task is not a local agent.");if(typeof e?.message!=="string"||!e.message.trim())throw new Error("Enter a message for the background agent.");let n=e.message.trim().slice(0,2e4),i=(typeof e.summary==="string"?e.summary:n).replace(/\\s+/g," ").trim().slice(0,200);if(e?.restart===!0&&o.status==="running"){if(!r.subagentPort.stopTask)throw new Error("Background agent restart is unavailable in this runtime.");await r.subagentPort.stopTask(e.taskId),o=r.runtimeTaskRegistry?.get?.(e.taskId);if(!o)throw new Error("The background agent stopped but could not be restored.")}return await r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.(),turnId:o.turnId??"tui-task-message",parentToolCallId:o.parentToolCallId??"tui-task-message",to:o.agentId??e.taskId,summary:i,message:n,workingDirectory:o.workingDirectory??r.workingDirectory,workspaceRoot:o.workspaceRoot??r.workingDirectory,trace:o.traceContext??r.rootTraceContext})}`;
   if (!listSkillsBridgePattern.test(patched)) {
     const listSkillsFactory = /listSkills:[A-Za-z_$][\w$]*\(\(\)=>([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),"listSkills"\)/u
@@ -635,6 +620,25 @@ export function patchRuntimeOAuthHttpErrors(runtime: string): string {
   );
 }
 
+/** Avoid Undici rejecting bodies on the Fetch statuses that must be bodyless. */
+export function hasRuntimeHttpNoContentGuard(runtime: string): boolean {
+  return /([A-Za-z_$][\w$]*)\.statusCode===204\|\|\1\.statusCode===205\|\|\1\.statusCode===304\?void 0:/u
+    .test(runtime);
+}
+
+export function patchRuntimeHttpNoContent(runtime: string): string {
+  const responsePattern = /new Response\(([A-Za-z_$][\w$]*)\.Readable\.toWeb\(([A-Za-z_$][\w$]*)\),\{headers:([A-Za-z_$][\w$]*),status:\2\.statusCode\?\?502,statusText:\2\.statusMessage\}\)/gu;
+  let changed = false;
+  const patched = runtime.replace(
+    responsePattern,
+    (_match, readableNamespace: string, response: string, headers: string) => {
+      changed = true;
+      return `new Response(${response}.statusCode===204||${response}.statusCode===205||${response}.statusCode===304?void 0:${readableNamespace}.Readable.toWeb(${response}),{headers:${headers},status:${response}.statusCode??502,statusText:${response}.statusMessage})`;
+    }
+  );
+  return changed ? patched : runtime;
+}
+
 export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
   if (runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')) return runtime;
 
@@ -790,11 +794,25 @@ export function patchRuntimeLoginModelDefaults(runtime: string): string {
   return patched;
 }
 
+/**
+ * Repair `/context` cache stats for historical sessions whose assistant messages
+ * carry zero tokens (pre-3.8.1 runtimes never persisted them on the main-turn path).
+ *
+ * The 3.8.1 runtime renamed the aggregator `mda`→`aSi`, the coercion helper
+ * `zRe`→`YRe`, and the projection `LRe`→`oSi`. The token-write bug itself is
+ * fixed at the source (the step-finish handler now calls `persistAssistantMessage`
+ * with `tokens:Tq(r.result.usage)`), so this patch only needs the read-path
+ * fallback: when an assistant message's `info.tokens` are all zero, fall back to
+ * the last `step-finish` part that carries positive token counts.
+ */
 export function patchRuntimeContextCacheFromParts(runtime: string): string {
   const aggregateAnchor =
-    'function mda(e){let t=0,r=0,o=0,n=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let c=zRe(l.info.tokens.input)??0,d=zRe(l.info.tokens.cache.read)??0,p=zRe(l.info.tokens.cache.write)??0;c<=0&&d<=0&&p<=0||';
+    'function aSi(e){let t=0,r=0,n=0,o=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let c=YRe(l.info.tokens.input)??0,d=YRe(l.info.tokens.cache.read)??0,p=YRe(l.info.tokens.cache.write)??0;c<=0&&d<=0&&p<=0||(o+=1,t+=c,r+=d,n+=p,i=c,a=d,u=p)}';
   const projectionAnchor =
-    "function LRe(e){let t=dda(e.messages,e.projection.contextWindow);return ada(cda(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,sda(e.persistedContextUsageBreakdownEvents??[]))}";
+    'function oSi(e,t){if(t<=0)return;let r=aSi(e);for(let n=e.length-1;n>=0;n-=1){let o=e[n];if(!o)continue;if(o.info.role==="user"&&o.info.summary){let a=o.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Loe(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{cost:null,size:t,used:u}}}if(o.info.role!=="assistant"||o.info.summary)continue;let i=iSi(o.info.tokens);if(i!==void 0)return{...r?{cache:r}:{},cost:null,size:t,used:i}}}';
+  const projectionCallerAnchor =
+    'function t5e(e){let t=oSi(e.messages,e.projection.contextWindow);return Xki(nSi(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,eSi(e.persistedContextUsageBreakdownEvents??[]))}';
+  const projectionCallerMarker = "nSi(e.projection,t?.cache)??t";
   let patched = runtime;
   if (!patched.includes("$ctxPartTokens")) {
     const anchorIndex = patched.indexOf(aggregateAnchor);
@@ -805,12 +823,12 @@ export function patchRuntimeContextCacheFromParts(runtime: string): string {
       "let $ctxPartTokens=function(l){",
       'let f=Array.isArray(l.parts)?l.parts.filter(function(x){return x&&x.type==="step-finish"&&x.tokens}):[];',
       "for(let k=f.length-1;k>=0;k-=1){",
-      "let g=f[k].tokens||{},h=zRe(g.input)??0,y=zRe(g.cache&&g.cache.read)??0,w=zRe(g.cache&&g.cache.write)??0;",
+      "let g=f[k].tokens||{},h=YRe(g.input)??0,y=YRe(g.cache&&g.cache.read)??0,w=YRe(g.cache&&g.cache.write)??0;",
       "if(h>0||y>0||w>0)return{input:h,cache:{read:y,write:w}};}",
       "return null};",
-      "let $ctxMsgTokens=function(l){let q=l.info.tokens;return q&&typeof q==\"object\"?{input:zRe(q.input)??0,cache:{read:zRe(q.cache&&q.cache.read)??0,write:zRe(q.cache&&q.cache.write)??0}}:{input:0,cache:{read:0,write:0}}};"
+      'let $ctxMsgTokens=function(l){let q=l.info.tokens;return q&&typeof q=="object"?{input:YRe(q.input)??0,cache:{read:YRe(q.cache&&q.cache.read)??0,write:YRe(q.cache&&q.cache.write)??0}}:{input:0,cache:{read:0,write:0}}};'
     ].join("");
-    const replacement = `function mda(e){${fallbackHelper}let t=0,r=0,o=0,n=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let v=$ctxPartTokens(l),m=$ctxMsgTokens(l);let c=m.input,d=m.cache.read,p=m.cache.write;if((c<=0&&d<=0&&p<=0)&&v){c=v.input;d=v.cache.read;p=v.cache.write}c<=0&&d<=0&&p<=0||`;
+    const replacement = `function aSi(e){${fallbackHelper}let t=0,r=0,n=0,o=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let v=$ctxPartTokens(l),m=$ctxMsgTokens(l);let c=m.input,d=m.cache.read,p=m.cache.write;if((c<=0&&d<=0&&p<=0)&&v){c=v.input;d=v.cache.read;p=v.cache.write}c<=0&&d<=0&&p<=0||(o+=1,t+=c,r+=d,n+=p,i=c,a=d,u=p)}`;
     patched = patched.slice(0, anchorIndex) + replacement + patched.slice(anchorIndex + aggregateAnchor.length);
   }
   if (!patched.includes("$ctxCache")) {
@@ -819,7 +837,18 @@ export function patchRuntimeContextCacheFromParts(runtime: string): string {
     }
     patched = patched.replace(
       projectionAnchor,
-      "function LRe(e){let t=dda(e.messages,e.projection.contextWindow),$ctxCache=t?.cache??mda(e.messages);return ada(cda(e.projection,$ctxCache)??t,sda(e.persistedContextUsageBreakdownEvents??[]))}"
+      'function oSi(e,t){if(t<=0)return;let $ctxCache=aSi(e);for(let n=e.length-1;n>=0;n-=1){let o=e[n];if(!o)continue;if(o.info.role==="user"&&o.info.summary){let a=o.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Loe(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{...$ctxCache?{cache:$ctxCache}:{},cost:null,size:t,used:u}}}if(o.info.role!=="assistant"||o.info.summary)continue;let i=iSi(o.info.tokens);if(i!==void 0)return{...$ctxCache?{cache:$ctxCache}:{},cost:null,size:t,used:i}}return $ctxCache?{...$ctxCache?{cache:$ctxCache}:{},cost:null,size:t,used:void 0}:void 0}'
+    );
+  }
+  // The projection caller (t5e) has its own marker so a partial application
+  // (oSi patched but t5e not) is still detected instead of silently skipped.
+  if (!patched.includes(projectionCallerMarker)) {
+    if (!patched.includes(projectionCallerAnchor)) {
+      throw new Error("ZCode runtime is incompatible with the context-cache patch (projection caller anchor missing).");
+    }
+    patched = patched.replace(
+      projectionCallerAnchor,
+      'function t5e(e){let t=oSi(e.messages,e.projection.contextWindow);return Xki(nSi(e.projection,t?.cache)??t,eSi(e.persistedContextUsageBreakdownEvents??[]))}'
     );
   }
   return patched;
@@ -834,11 +863,11 @@ async function installTuiBridge(nextVendor: string): Promise<void> {
       patchRuntimeLoginModelDefaults(
         patchRuntimeZaiDesktopOAuth(
           patchRuntimeOAuthHttpErrors(
-            patchRuntimeAgentAutoBackground(
-              patchRuntimeDetachedAgentLifecycle(
-                patchRuntimeTerminalToolProjection(
-                  patchRuntimeGoalFailurePause(
-                    patchRuntimeBackgroundTaskProjection(patchRuntimeTuiBridge(runtime))
+            patchRuntimeHttpNoContent(
+              patchRuntimeAgentAutoBackground(
+                patchRuntimeDetachedAgentLifecycle(
+                  patchRuntimeTerminalToolProjection(
+                    patchRuntimeGoalFailurePause(patchRuntimeTuiBridge(runtime))
                   )
                 )
               )
@@ -913,7 +942,15 @@ async function resolveLockedSource(lock: RuntimeLock, temporaryDirectory: string
   console.log(`Downloading ${lock.url}`);
   await download(lock.url, archive);
   const actualHash = await sha512Base64(archive);
-  if (actualHash !== lock.sha512) throw new Error("Downloaded installer failed locked SHA-512 verification.");
+  if (actualHash !== lock.sha512) {
+    throw new Error(
+      `Downloaded installer failed SHA-512 verification.\n`
+      + `  manifest/lock: ${lock.sha512}\n`
+      + `  actual file:   ${actualHash}\n`
+      + `The published manifest may carry stale checksum metadata. `
+      + `If the downloaded installer is trusted, update zcode-runtime.lock.json with the actual sha512 above and re-run.`
+    );
+  }
   const extracted = await extractWith7Zip(archive, join(temporaryDirectory, "extract"), lock.platform);
   const runtime = await findFile(extracted, "zcode.cjs");
   if (!runtime || basename(dirname(runtime)) !== "glm") {
@@ -989,15 +1026,29 @@ async function sync(options: SyncOptions): Promise<void> {
 
     const packagePath = join(root, "package.json");
     const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as Record<string, unknown>;
-    const packageVersion = syncedReleaseVersion(source.appVersion, String(packageJson.version ?? ""));
-    packageJson.version = packageVersion;
-    await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
-    if (source.lock) {
-      await writeFile(join(root, "zcode-runtime.lock.json"), `${JSON.stringify(source.lock, null, 2)}\n`);
+    // `--app` (local development sync) must not bump package.json or the CI
+    // lock file: the local macOS App may be newer than the Linux release the CI
+    // gate pins, and dev drift would break the "pins the exact remote runtime"
+    // test. Only the manifest/lock sync paths (`sync`, `sync:locked`) own the
+    // committed version + lock — matching the CI release workflow contract.
+    if (options.app) {
+      const currentVersion = String(packageJson.version ?? "");
+      if (parseReleaseVersion(currentVersion)?.appVersion !== source.appVersion) {
+        console.log(
+          `Local App ${source.appVersion} differs from package.json ${currentVersion}; run \`bun run sync\` to align the CI lock.`
+        );
+      }
+    } else {
+      const packageVersion = syncedReleaseVersion(source.appVersion, String(packageJson.version ?? ""));
+      packageJson.version = packageVersion;
+      await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+      if (source.lock) {
+        await writeFile(join(root, "zcode-runtime.lock.json"), `${JSON.stringify(source.lock, null, 2)}\n`);
+      }
     }
     await rm(join(root, "vendor"), { recursive: true, force: true });
     await rename(nextVendor, join(root, "vendor"));
-    console.log(`Prepared ${String(packageJson.name)}@${packageVersion} with ${cliVersion}.`);
+    console.log(`Prepared ${String(packageJson.name)}@${packageJson.version} with ${cliVersion}.`);
   } finally {
     await rm(nextVendor, { recursive: true, force: true });
     await rm(temporaryDirectory, { recursive: true, force: true });

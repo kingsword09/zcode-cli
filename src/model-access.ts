@@ -191,3 +191,57 @@ export async function readConfiguredModelAccess(
   if (!provider?.models?.[modelId] || typeof apiKey !== "string" || !apiKey.trim()) return null;
   return { configPath, model, providerId };
 }
+
+export function setupPendingPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  fallbackHome: string = homedir()
+): string {
+  const path = platform === "win32" ? win32 : posix;
+  const configuredHome = (platform === "win32" ? env.USERPROFILE : env.HOME)?.trim();
+  return path.join(configuredHome || fallbackHome, ".zcode", "cli", "setup-pending");
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function readSetupPending(
+  env: NodeJS.ProcessEnv = process.env
+): Promise<boolean> {
+  return await pathExists(setupPendingPath(env));
+}
+
+export async function markSetupPending(
+  env: NodeJS.ProcessEnv = process.env
+): Promise<void> {
+  const pendingPath = setupPendingPath(env);
+  await mkdir(dirname(pendingPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = join(
+    dirname(pendingPath),
+    `.${basename(pendingPath)}.${process.pid}.${randomUUID()}.tmp`
+  );
+  let file;
+  try {
+    file = await open(temporaryPath, "wx", 0o600);
+    await file.writeFile(`${new Date().toISOString()}\n`, "utf8");
+    await file.sync();
+    await file.close();
+    file = undefined;
+    await rename(temporaryPath, pendingPath);
+  } finally {
+    await file?.close();
+    await rm(temporaryPath, { force: true }).catch(() => {});
+  }
+}
+
+export async function clearSetupPending(
+  env: NodeJS.ProcessEnv = process.env
+): Promise<void> {
+  await rm(setupPendingPath(env), { force: true }).catch(() => {});
+}

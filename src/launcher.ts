@@ -13,7 +13,13 @@ import { constants as osConstants, homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ensureUserConfig, readConfiguredModelAccess } from "./model-access.ts";
+import {
+  clearSetupPending,
+  ensureUserConfig,
+  markSetupPending,
+  readConfiguredModelAccess,
+  readSetupPending
+} from "./model-access.ts";
 import {
   classifyZaiOAuthInvocation,
   runZaiOAuthLogin,
@@ -223,6 +229,11 @@ export function isTuiRuntimeInvocation(args: string[]): boolean {
     && (invocation.command === undefined || invocation.command === "tui");
 }
 
+export function firstRunSetupEnv(setupPending: boolean, args: string[]): NodeJS.ProcessEnv | undefined {
+  if (!setupPending || !isTuiRuntimeInvocation(args)) return undefined;
+  return { ZCODE_CLI_FIRST_RUN: "1" };
+}
+
 function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, string> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.ZCODE_CLI_OAUTH_CALLBACK_STDIN;
@@ -312,11 +323,15 @@ function tuiRuntimeFailureMessage(code: number, state: TuiRuntimeDiagnosticState
   return `Error: ZCode runtime exited with status ${code}.${diagnostic}\n`;
 }
 
-async function runRuntime(node: string, args: string[]): Promise<number> {
+async function runRuntime(
+  node: string,
+  args: string[],
+  extraEnv: NodeJS.ProcessEnv = {}
+): Promise<number> {
   const tuiInvocation = isTuiRuntimeInvocation(args);
   const child = spawnChild(node, [runtimePath, ...args], {
     cwd: process.cwd(),
-    env: runtimeEnvironment(),
+    env: runtimeEnvironment(extraEnv),
     stdio: tuiInvocation ? ["inherit", "inherit", "pipe"] : "inherit"
   });
   const diagnosticState: TuiRuntimeDiagnosticState = {
@@ -397,8 +412,15 @@ export async function main(args: string[]): Promise<number> {
     return 0;
   }
 
+  let setupPending = false;
   try {
-    await ensureUserConfig();
+    const bootstrap = await ensureUserConfig();
+    if (bootstrap.created) {
+      await markSetupPending();
+      setupPending = true;
+    } else {
+      setupPending = await readSetupPending();
+    }
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
@@ -451,7 +473,7 @@ export async function main(args: string[]): Promise<number> {
     process.once("SIGINT", cancel);
     process.once("SIGTERM", cancel);
     try {
-      return await runZaiOAuthLogin({
+      const code = await runZaiOAuthLogin({
         abortSignal: abortController.signal,
         completeLogin: (payload, runtimeArgs) => completeOfficialZaiLogin(
           node,
@@ -462,6 +484,10 @@ export async function main(args: string[]): Promise<number> {
         invocation: zaiOAuth,
         output: zaiOAuth.json ? process.stderr : process.stdout
       });
+      // A successful CLI-side login completes first-run setup; otherwise the
+      // pending wizard would reappear over an already-configured account.
+      if (code === 0 && await readConfiguredModelAccess()) await clearSetupPending();
+      return code;
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       return abortController.signal.aborted ? 130 : 1;
@@ -472,7 +498,8 @@ export async function main(args: string[]): Promise<number> {
   }
 
   try {
-    return await runRuntime(node, withDefaultBrowserUse(login.args));
+    const runtimeArgs = withDefaultBrowserUse(login.args);
+    return await runRuntime(node, runtimeArgs, firstRunSetupEnv(setupPending, runtimeArgs));
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     return 1;

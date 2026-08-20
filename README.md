@@ -27,8 +27,11 @@ zcode
 
 On first launch, ZCode creates `~/.zcode/cli/config.json` (or
 `%USERPROFILE%\.zcode\cli\config.json` on Windows) with credential-free
-defaults. Choose one of the three model-access paths in
-[Configuration](./docs/CONFIGURATION.md) before sending your first prompt.
+defaults and opens a setup wizard in the TUI. It guides you through the three
+model-access paths in [Configuration](./docs/CONFIGURATION.md), and when the
+ZCode desktop app is installed it can import the desktop provider settings
+(credentials stay behind a fresh sign-in, like a browser profile import).
+Reopen it anytime with `/setup`; press Esc to skip.
 
 ## Table of contents
 

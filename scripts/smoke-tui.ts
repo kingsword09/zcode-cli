@@ -168,6 +168,9 @@ try {
     || initialConfig.provider?.zai?.options?.apiKey !== undefined) {
     throw new Error("The launcher created an invalid initial config.json.");
   }
+  // The first-run setup wizard opens over the composer; skip it explicitly
+  // (Esc) so the rest of the scripted interaction reaches the editor.
+  await sendAndWait("\x1b", "first-run setup wizard skipped", /Setup skipped/i);
   await sendAndWait(
     "@bro",
     "runtime Plugin suggestions",
@@ -235,6 +238,12 @@ if (!interactionError) {
 const configured = await Bun.file(configPath).exists()
   ? await Bun.file(configPath).text()
   : "";
+const setupPendingPath = join(temporaryHome, ".zcode", "cli", "setup-pending");
+// The wizard was skipped interactively and the API keys configured model
+// access, so the pending marker must not survive the session.
+if (await Bun.file(setupPendingPath).exists()) {
+  interactionError ??= new Error("The first-run setup marker was not cleared after setup.");
+}
 const leakedFiles: string[] = [];
 for (const path of await filesBelow(temporaryHome)) {
   if (path === configPath) continue;
