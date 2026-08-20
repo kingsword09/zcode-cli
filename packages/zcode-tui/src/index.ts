@@ -4396,7 +4396,7 @@ class ZCodeTui {
 
   private reconcileTurnTiming(projection: RuntimeProjectionSnapshot): void {
     if (this.turnStartedAt !== undefined
-      && !this.turnWork.reconcile(projection.backgroundJobs)) this.settleTurnTiming();
+      && !this.turnWork.reconcile(projection)) this.settleTurnTiming();
   }
 
   private settleTurnTiming(): void {

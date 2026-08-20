@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import type { StreamEvent } from "../packages/zcode-tui/src/events.ts";
-import type { RuntimeBackgroundJob } from "../packages/zcode-tui/src/runtime-projection.ts";
+import type {
+  RuntimeBackgroundJob,
+  RuntimeProjectionSnapshot
+} from "../packages/zcode-tui/src/runtime-projection.ts";
 import { TurnWorkTracker } from "../packages/zcode-tui/src/turn-work-tracker.ts";
 
 function event(value: Partial<StreamEvent>): StreamEvent {
@@ -16,6 +19,14 @@ function job(
   return { taskId, taskKind: "local_agent", status, turnId };
 }
 
+function projection(overrides: Partial<RuntimeProjectionSnapshot> = {}): RuntimeProjectionSnapshot {
+  return {
+    activeToolCalls: [],
+    backgroundJobs: [],
+    ...overrides
+  };
+}
+
 describe("turn work tracker", () => {
   test("keeps timing until every associated background task settles", () => {
     const tracker = new TurnWorkTracker();
@@ -25,7 +36,7 @@ describe("turn work tracker", () => {
     tracker.handle(event({ type: "background_task_started", taskId: "task-b", turnId: "turn-current" }));
 
     expect(tracker.finishForeground(true)).toBeTrue();
-    expect(tracker.reconcile([job("task-a", "running"), job("task-b", "running")])).toBeTrue();
+    expect(tracker.reconcile(projection({ backgroundJobs: [job("task-a", "running"), job("task-b", "running")] }))).toBeTrue();
     expect(tracker.handle(event({
       type: "background_task_completed",
       taskId: "task-a",
@@ -46,10 +57,12 @@ describe("turn work tracker", () => {
       tracker.handle(event({ type: "subagent_spawned", agentId: "agent-1" }));
       tracker.finishForeground(true);
 
-      expect(tracker.reconcile([
-        job("agent-1", status),
-        job("older-task", "running", "turn-older")
-      ])).toBeFalse();
+      expect(tracker.reconcile(projection({
+        backgroundJobs: [
+          job("agent-1", status),
+          job("older-task", "running", "turn-older")
+        ]
+      }))).toBeFalse();
     }
   });
 
@@ -59,7 +72,7 @@ describe("turn work tracker", () => {
     tracker.bindTurn("turn-current");
 
     expect(tracker.finishForeground(true)).toBeTrue();
-    expect(tracker.reconcile([])).toBeFalse();
+    expect(tracker.reconcile(projection())).toBeFalse();
   });
 
   test("resets task ownership when a newer foreground turn begins", () => {
@@ -71,8 +84,36 @@ describe("turn work tracker", () => {
 
     tracker.begin();
     tracker.bindTurn("turn-current");
-    expect(tracker.reconcile([job("old-task", "running", "turn-old")])).toBeTrue();
+    expect(tracker.reconcile(projection({ backgroundJobs: [job("old-task", "running", "turn-old")] }))).toBeTrue();
     expect(tracker.finishForeground(true)).toBeTrue();
-    expect(tracker.reconcile([job("old-task", "running", "turn-old")])).toBeFalse();
+    expect(tracker.reconcile(projection({ backgroundJobs: [job("old-task", "running", "turn-old")] }))).toBeFalse();
+  });
+
+  test("keeps timing while an active foreground tool remains in projection", () => {
+    const tracker = new TurnWorkTracker();
+    tracker.begin();
+    tracker.bindTurn("turn-current");
+    expect(tracker.finishForeground(true)).toBeTrue();
+    expect(tracker.reconcile(projection({
+      activeToolCalls: [{ toolCallId: "webfetch-1", toolName: "WebFetch", status: "running" }]
+    }))).toBeTrue();
+    expect(tracker.reconcile(projection())).toBeFalse();
+  });
+
+  test("keeps timing while the current runtime turn is still present", () => {
+    const tracker = new TurnWorkTracker();
+    tracker.begin();
+    tracker.bindTurn("turn-current");
+    expect(tracker.finishForeground(true)).toBeTrue();
+    expect(tracker.reconcile(projection({ currentTurnId: "turn-current" }))).toBeTrue();
+    expect(tracker.reconcile(projection())).toBeFalse();
+  });
+
+  test("does not keep timing for unrelated current turns", () => {
+    const tracker = new TurnWorkTracker();
+    tracker.begin();
+    tracker.bindTurn("turn-current");
+    expect(tracker.finishForeground(true)).toBeTrue();
+    expect(tracker.reconcile(projection({ currentTurnId: "turn-newer" }))).toBeFalse();
   });
 });

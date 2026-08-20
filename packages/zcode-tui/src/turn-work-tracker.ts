@@ -1,5 +1,8 @@
 import type { StreamEvent } from "./events.ts";
-import type { RuntimeBackgroundJob } from "./runtime-projection.ts";
+import {
+  isActiveRuntimeTool,
+  type RuntimeProjectionSnapshot
+} from "./runtime-projection.ts";
 
 const terminalStatuses = new Set([
   "completed",
@@ -30,12 +33,16 @@ function settlesTask(event: StreamEvent): boolean {
 export class TurnWorkTracker {
   private foregroundActive = false;
   private awaitingProjection = false;
+  private projectionToolActive = false;
+  private projectionTurnActive = false;
   private turnId?: string;
   private readonly taskIds = new Set<string>();
 
   begin(): void {
     this.foregroundActive = true;
     this.awaitingProjection = false;
+    this.projectionToolActive = false;
+    this.projectionTurnActive = false;
     this.turnId = undefined;
     this.taskIds.clear();
   }
@@ -61,7 +68,8 @@ export class TurnWorkTracker {
     return this.isActive();
   }
 
-  reconcile(jobs: readonly RuntimeBackgroundJob[]): boolean {
+  reconcile(projection: RuntimeProjectionSnapshot): boolean {
+    const jobs = projection.backgroundJobs;
     for (const job of jobs) {
       const related = this.taskIds.has(job.taskId)
         || Boolean(this.turnId && job.turnId === this.turnId);
@@ -69,12 +77,20 @@ export class TurnWorkTracker {
       if (job.status === "running") this.taskIds.add(job.taskId);
       else this.taskIds.delete(job.taskId);
     }
+    this.projectionTurnActive = Boolean(
+      projection.currentTurnId && projection.currentTurnId === this.turnId
+    );
+    this.projectionToolActive = projection.activeToolCalls.some(isActiveRuntimeTool);
     if (!this.foregroundActive) this.awaitingProjection = false;
     return this.isActive();
   }
 
   isActive(): boolean {
-    return this.foregroundActive || this.awaitingProjection || this.taskIds.size > 0;
+    return this.foregroundActive
+      || this.awaitingProjection
+      || this.projectionToolActive
+      || this.projectionTurnActive
+      || this.taskIds.size > 0;
   }
 
   ownsTask(taskId: string | undefined): boolean {
