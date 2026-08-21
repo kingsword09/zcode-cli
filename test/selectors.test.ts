@@ -4,7 +4,9 @@ import {
   effortPicker,
   explicitModelRequest,
   isEffortPickerRequest,
+  isModePickerRequest,
   isModelPickerRequest,
+  modePicker,
   modelPicker,
   providerModelPicker
 } from "../packages/zcode-tui/src/selectors.ts";
@@ -79,6 +81,31 @@ describe("TUI selectors", () => {
     // Malformed refs fall through to the runtime's own error handling.
     expect(explicitModelRequest("/model not-a-ref")).toBeUndefined();
     expect(explicitModelRequest("/effort high")).toBeUndefined();
+  });
+
+  test("builds mode choices with the current mode preselected", () => {
+    const picker = modePicker("edit");
+    expect(picker.selectedIndex).toBe(1);
+    expect(picker.items).toEqual([
+      { value: "build", label: "Build", description: undefined, command: "/mode build" },
+      { value: "edit", label: "Edit", description: "current", command: "/mode edit" },
+      { value: "yolo", label: "Yolo", description: undefined, command: "/mode yolo" },
+      { value: "plan", label: "Plan", description: undefined, command: "/mode plan" }
+    ]);
+
+    // Unknown current mode falls back to index 0 with no current marker.
+    const fallback = modePicker(undefined);
+    expect(fallback.selectedIndex).toBe(0);
+    expect(fallback.items.every((item) => item.description === undefined)).toBe(true);
+
+    // Restricted mode list (e.g. runtime-reported availability).
+    const restricted = modePicker("yolo", ["build", "yolo"]);
+    expect(restricted.items.map((item) => item.value)).toEqual(["build", "yolo"]);
+    expect(restricted.selectedIndex).toBe(1);
+
+    expect(isModePickerRequest("/mode")).toBe(true);
+    expect(isModePickerRequest("/MODE list")).toBe(true);
+    expect(isModePickerRequest("/mode plan")).toBe(false);
   });
 
   test("groups runtime modelOptions into a provider cascade", () => {

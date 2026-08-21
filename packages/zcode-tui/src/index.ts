@@ -128,7 +128,9 @@ import {
   effortPicker,
   explicitModelRequest,
   isEffortPickerRequest,
+  isModePickerRequest,
   isModelPickerRequest,
+  modePicker,
   modelPicker,
   providerModelPicker,
   type PickerSpec,
@@ -190,6 +192,7 @@ import {
 } from "./session-status.ts";
 import {
   appliesToSetting,
+  modes,
   nextMode,
   nextPickerCommand,
   nextPickerValue,
@@ -1080,6 +1083,9 @@ class ZCodeTui {
       return;
     }
     if (isModelPickerRequest(input) && await this.showModelPicker()) {
+      return;
+    }
+    if (isModePickerRequest(input) && await this.showModePicker()) {
       return;
     }
     // Explicit `/model <provider/model>` is also a session-only switch — the
@@ -2925,6 +2931,27 @@ class ZCodeTui {
       if (settingTarget) await this.applySettingCommand(selected.payload, settingTarget);
       else await this.submit(selected.payload);
     }
+    return true;
+  }
+
+  /**
+   * Permission-mode picker for the bare `/mode` command. Switches via the
+   * setMode bridge so the runtime owns the exact mode-switching semantics.
+   */
+  private async showModePicker(): Promise<boolean> {
+    const picker = modePicker(this.mode, modes);
+    if (picker.items.length === 0) return false;
+    const selected = await this.showChoice({
+      title: "Select mode",
+      prompt: `Current mode: ${this.mode}. Controls tool permission behavior.`,
+      help: "Up/Down choose · Enter switch · Esc cancel",
+      items: picker.items.map((item) => ({ ...item, payload: item.value })),
+      selectedIndex: picker.selectedIndex
+    });
+    const mode = selected?.payload;
+    if (typeof mode !== "string") return true;
+
+    await this.applyModeShortcut(normalizedMode(mode));
     return true;
   }
 

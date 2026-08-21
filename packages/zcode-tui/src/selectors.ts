@@ -35,6 +35,22 @@ export function isModelPickerRequest(input: string): boolean {
   return pickerRequest(input, new Set(["model"]));
 }
 
+export function isModePickerRequest(input: string): boolean {
+  return pickerRequest(input, new Set(["mode"]));
+}
+
+export function modePicker(currentMode?: string, availableModes?: readonly string[]): PickerSpec {
+  const list = availableModes?.length ? availableModes : ["build", "edit", "yolo", "plan"];
+  const items: PickerItem[] = list.map((mode) => ({
+    value: mode,
+    label: mode.charAt(0).toUpperCase() + mode.slice(1),
+    description: mode === currentMode ? "current" : undefined,
+    command: `/mode ${mode}`
+  }));
+  const currentIndex = items.findIndex((item) => item.value === currentMode);
+  return { items, selectedIndex: currentIndex >= 0 ? currentIndex : 0 };
+}
+
 /**
  * Extract the explicit model reference from `/model <provider/model>`.
  * Returns undefined for the bare picker forms (`/model`, `/model list`) and

@@ -590,6 +590,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.()");
     expect(patched).toContain("E.previewFileRewind=async e=>{let t=await S();return await t.runtime?.previewWorkspaceFileRewind?.({targetMessageIds:e})??null}");
     expect(patched).toContain("E.applyFileRewind=async e=>{let t=await S();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}");
+    expect(patched).toContain("E.setMode=async e=>{let t=await S();if(t.setMode)return await t.setMode(e);t.runtime?.updateConfig?.({mode:e});return{mode:t.getMode?.()??e}}");
     expect(patched).toContain("E.interruptTurn=async e=>");
     expect(patched).toContain("t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:");
     expect(patched).toContain('e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId');
@@ -623,6 +624,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("interruptTurn:g.interruptTurn");
     expect(patched).toContain("promoteQueuedInput:g.promoteQueuedInput");
     expect(patched).toContain("listSkills:g.listSkills");
+    expect(patched).toContain("setMode:g.setMode");
     expect(patched).toContain("subscribeSessionEvents:g.subscribeSessionEvents");
     expect(patched).toContain("sendBackgroundTaskMessage:g.sendBackgroundTaskMessage");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
@@ -721,6 +723,34 @@ describe("runtime synchronization", () => {
     const patched = patchRuntimeTuiBridge(stripped);
     expect(patched).toMatch(/\.setTransientModel=async/u);
     expect(patched).toMatch(/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u);
+    expect(patchRuntimeTuiBridge(patched)).toBe(patched);
+  });
+
+  test("upgrades an already-patched runtime that lacks the mode bridge", () => {
+    const runtime = [
+      "function R(e,t){return f(e,{rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}",
+      "async function L(e){if(!e.sessionStore)return[];let t=await e.sessionStore.messages({sessionID:e.sessionId});return p(t)}",
+      'function p(e){let t=[];for(let r of e){if(r.info.role==="user"){let l=r.text;t.push({content:l,role:"user"});continue}let n=[],s=[],u=r.text;t.push({content:u,...s.length>0?{parts:s}:{},role:"agent"})}return t}',
+      "function c(e,t){if(t.targetMessageId)return O(e,[t.targetMessageId]);let r=P(e,t.targetCheckpointId);return r?[r]:[]}",
+      "E.sendInput=async(A,$)=>{let c=t.runtime.getActiveTurnInfo();if(c)return t.runtime.steerTurn({commandKind:$?.commandKind,inputId:$?.inputId,queryId:$?.queryId,expectedTurnId:$?.expectedTurnId,input:A});return Kvt(await S(),D,O1(t))},",
+      'listSkills:k(()=>H(e),"listSkills"),',
+      "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
+      "CVr(E,S,r);",
+      "return c({recallPreviousInput:g.recallPreviousInput,sendInput:g.sendInput,submitPrompt:g})"
+    ].join("").replace(
+      "E.sendInput",
+      'loadSessionTranscript:a(async()=>await dUr({sessionId:e.sessionId,sessionStore:e.sessionStore}),"loadSessionTranscript"),readTodos:E.sendInput'
+    );
+    const fullyPatched = patchRuntimeTuiBridge(runtime);
+    const stripped = fullyPatched
+      .replace(/[A-Za-z_$]+\.setMode=async e=>\{let t=await [A-Za-z_$][\w$]*\(\);if\(t\.setMode\)return await t\.setMode\(e\);t\.runtime\?\.updateConfig\?\.\(\{mode:e\}\);return\{mode:t\.getMode\?\.\(\)\?\?e\}\},/u, "")
+      .replace(/setMode:[A-Za-z_$][\w$]*\.setMode,/u, "");
+    expect(stripped).not.toMatch(/\.setMode=async/u);
+    expect(stripped).not.toMatch(/setMode:[A-Za-z_$][\w$]*\.setMode/u);
+
+    const patched = patchRuntimeTuiBridge(stripped);
+    expect(patched).toMatch(/\.setMode=async/u);
+    expect(patched).toMatch(/setMode:[A-Za-z_$][\w$]*\.setMode/u);
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
   });
 

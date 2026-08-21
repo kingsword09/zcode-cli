@@ -327,6 +327,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const interruptTurnMarker = ".interruptTurn=async e=>";
   const interruptWaitForIdleMarker = "e?.waitForIdle===!0";
   const queuedInputPromotionMarker = "r?.pendingInputReservationId??r?.queryId??";
+  const modeBridgePattern = /\.setMode=async/u;
+  const modeOptionPattern = /setMode:[A-Za-z_$][\w$]*\.setMode/u;
   const transientModelBridgePattern = /\.setTransientModel=async/u;
   const transientModelOptionPattern = /setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u;
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
@@ -360,6 +362,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && listSkillsBridgePattern.test(runtime)
     && listSkillsOptionPattern.test(runtime)
     && listModelOptionsOptionPattern.test(runtime)
+    && modeBridgePattern.test(runtime)
+    && modeOptionPattern.test(runtime)
     && transientModelBridgePattern.test(runtime)
     && transientModelOptionPattern.test(runtime)
     && sessionEventsBridgePattern.test(runtime)
@@ -501,6 +505,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".applyFileRewind=async e=>")) {
     assignments.push(`${bridge}.applyFileRewind=async e=>{let t=await ${getApp}();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}`);
   }
+  if (!modeBridgePattern.test(patched)) {
+    assignments.push(`${bridge}.setMode=async e=>{let t=await ${getApp}();if(t.setMode)return await t.setMode(e);t.runtime?.updateConfig?.({mode:e});return{mode:t.getMode?.()??e}}`);
+  }
   // Session-level (transient) model switch: the runtime's setModel persists
   // model.main to config.json by default; {transient:true} keeps it in-memory
   // so the /model quick picker does not rewrite saved defaults.
@@ -593,6 +600,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/listModelOptions:[A-Za-z_$][\w$]*\.listModelOptions/u.test(patched)) {
     optionFields.push(`listModelOptions:${submitBridge}.listModelOptions`);
+  }
+  if (!modeOptionPattern.test(patched)) {
+    optionFields.push(`setMode:${submitBridge}.setMode`);
   }
   if (!/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u.test(patched)) {
     optionFields.push(`setTransientModel:${submitBridge}.setTransientModel`);
