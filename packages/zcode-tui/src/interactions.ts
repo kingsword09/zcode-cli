@@ -14,6 +14,18 @@ export interface UserQuestion {
   multiSelect: boolean;
 }
 
+export type UserQuestionAnswerResult =
+  | { kind: "answer"; answer: string }
+  | { kind: "back" }
+  | { kind: "cancel" };
+
+export type UserQuestionAnswerer = (
+  question: UserQuestion,
+  index: number,
+  total: number,
+  previousAnswer?: string
+) => Promise<UserQuestionAnswerResult>;
+
 export interface PermissionChoice {
   value: string;
   label: string;
@@ -66,6 +78,28 @@ export function answeredQuestionInput(input: unknown, answers: Record<string, st
     ...(isRecord(input) ? input : {}),
     answers
   };
+}
+
+export async function collectUserQuestionAnswers(
+  questions: readonly UserQuestion[],
+  answerQuestion: UserQuestionAnswerer
+): Promise<Record<string, string> | null> {
+  const answers: Record<string, string> = {};
+  let index = 0;
+  while (index < questions.length) {
+    const question = questions[index];
+    if (!question) break;
+    const result = await answerQuestion(question, index, questions.length, answers[question.question]);
+    if (result.kind === "cancel") return null;
+    if (result.kind === "back") {
+      if (index === 0) return null;
+      index -= 1;
+      continue;
+    }
+    answers[question.question] = result.answer;
+    index += 1;
+  }
+  return answers;
 }
 
 function permissionRuleContent(input: unknown): string | undefined {

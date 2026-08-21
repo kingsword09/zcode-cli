@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   answeredQuestionInput,
+  collectUserQuestionAnswers,
   defaultPermissionChoices,
   isAskUserQuestionTool,
   isExitPlanModeTool,
@@ -55,6 +56,41 @@ describe("TUI structured interactions", () => {
       ...input,
       answers: { "Mode?": "Compact" }
     });
+  });
+
+  test("collects multi-step answers while allowing backtracking", async () => {
+    const questions = parseUserQuestions({
+      questions: [{
+        question: "Which renderer?",
+        options: [{ label: "Compact" }, { label: "Detailed" }]
+      }, {
+        question: "Which extras?",
+        options: [{ label: "Diff" }, { label: "Search" }]
+      }]
+    });
+    const seen: Array<{ index: number; previousAnswer?: string }> = [];
+    const responses = [
+      { kind: "answer", answer: "Compact" },
+      { kind: "back" },
+      { kind: "answer", answer: "Detailed" },
+      { kind: "answer", answer: "Search" }
+    ] as const;
+
+    const answers = await collectUserQuestionAnswers(questions, async (_question, index, _total, previousAnswer) => {
+      seen.push({ index, previousAnswer });
+      return responses[seen.length - 1] ?? { kind: "cancel" };
+    });
+
+    expect(answers).toEqual({
+      "Which renderer?": "Detailed",
+      "Which extras?": "Search"
+    });
+    expect(seen).toEqual([
+      { index: 0, previousAnswer: undefined },
+      { index: 1, previousAnswer: undefined },
+      { index: 0, previousAnswer: "Compact" },
+      { index: 1, previousAnswer: undefined }
+    ]);
   });
 
   test("builds project-scoped permission updates from tool input", () => {

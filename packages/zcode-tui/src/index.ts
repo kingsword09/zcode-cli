@@ -94,11 +94,13 @@ import {
 } from "./goal-status.ts";
 import {
   answeredQuestionInput,
+  collectUserQuestionAnswers,
   defaultPermissionChoices,
   isAskUserQuestionTool,
   isExitPlanModeTool,
   parseUserQuestions,
   planText,
+  type UserQuestionAnswerResult,
   type UserQuestion
 } from "./interactions.ts";
 import { PermissionPreview } from "./permission-view.ts";
@@ -283,6 +285,9 @@ const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
 const updateAvailableBlockId = "update_available";
 const modelRetryBlockIdPrefix = "model_retry_status";
+const questionBackValue = "__back__";
+const questionOtherValue = "__other__";
+const questionDoneValue = "__done__";
 const backgroundTaskAttentionStatuses = new Set(["failed", "timed_out", "spawn_error", "lost"]);
 
 function backgroundTaskKindLabel(job: RuntimeBackgroundJob): string {
@@ -2693,14 +2698,13 @@ class ZCodeTui {
       return { decision: "deny", reason: "AskUserQuestion did not include any valid questions" };
     }
 
-    const answers: Record<string, string> = {};
-    for (const [index, question] of questions.entries()) {
-      const answer = question.multiSelect
-        ? await this.requestMultipleChoice(question, index, questions.length, signal)
-        : await this.requestSingleChoice(question, index, questions.length, signal);
-      if (!answer) return { decision: "deny", reason: "AskUserQuestion was cancelled" };
-      answers[question.question] = answer;
-    }
+    const answers = await collectUserQuestionAnswers(
+      questions,
+      async (question, index, total, previousAnswer) => question.multiSelect
+        ? await this.requestMultipleChoice(question, index, total, previousAnswer, signal)
+        : await this.requestSingleChoice(question, index, total, previousAnswer, signal)
+    );
+    if (!answers) return { decision: "deny", reason: "AskUserQuestion was cancelled" };
     return {
       decision: "modify",
       modifiedInput: answeredQuestionInput(input, answers),
@@ -2712,47 +2716,91 @@ class ZCodeTui {
     question: UserQuestion,
     index: number,
     total: number,
+    previousAnswer?: string,
     signal?: AbortSignal
-  ): Promise<string | null> {
-    const selected = await this.showChoice({
-      title: `${question.header} · ${index + 1}/${total}`,
-      prompt: question.question,
-      items: [
-        ...question.options.map((option) => ({
-          value: option.value,
-          label: option.label,
-          description: option.description,
-          payload: option.label,
-          preview: option.preview ? new RichMarkdown(option.preview, 1, this.theme) : undefined
-        })),
-        { value: "__other__", label: "Other…", description: "Enter a different answer" }
-      ],
-      contentLabel: "Option details",
-      showSelectedItemDetails: true,
-      signal
-    });
-    if (!selected) return null;
-    if (selected.value !== "__other__") return typeof selected.payload === "string" ? selected.payload : selected.label;
-    const custom = await this.showTextPrompt({
-      title: question.header,
-      prompt: question.question,
-      signal
-    });
-    return custom?.trim() || null;
+  ): Promise<UserQuestionAnswerResult> {
+    const canGoBack = index > 0;
+    const optionItems = question.options.map((option) => ({
+      value: option.value,
+      label: option.label,
+      description: option.description,
+      payload: option.label,
+      preview: option.preview ? new RichMarkdown(option.preview, 1, this.theme) : undefined
+    }));
+    const selectedOptionIndex = previousAnswer
+      ? question.options.findIndex((option) => option.label === previousAnswer)
+      : -1;
+    const items: ChoiceItem[] = [
+      ...optionItems,
+      ...(canGoBack ? [{
+        value: questionBackValue,
+        label: "Back",
+        description: "Revise the previous question"
+      }] : []),
+      {
+        value: questionOtherValue,
+        label: "Other...",
+        description: previousAnswer && selectedOptionIndex < 0 ? previousAnswer : "Enter a different answer"
+      }
+    ];
+    const otherIndex = optionItems.length + (canGoBack ? 1 : 0);
+    const selectedIndex = selectedOptionIndex >= 0
+      ? selectedOptionIndex
+      : previousAnswer
+        ? otherIndex
+        : 0;
+
+    while (!signal?.aborted) {
+      const selected = await this.showChoice({
+        title: `${question.header} · ${index + 1}/${total}`,
+        prompt: question.question,
+        help: this.questionChoiceHelp(canGoBack),
+        items,
+        selectedIndex,
+        contentLabel: "Option details",
+        showSelectedItemDetails: true,
+        signal
+      });
+      if (!selected) return canGoBack && !signal?.aborted ? { kind: "back" } : { kind: "cancel" };
+      if (selected.value === questionBackValue) return { kind: "back" };
+      if (selected.value !== questionOtherValue) {
+        return {
+          kind: "answer",
+          answer: typeof selected.payload === "string" ? selected.payload : selected.label
+        };
+      }
+      const custom = await this.showTextPrompt({
+        title: question.header,
+        prompt: question.question,
+        initialValue: previousAnswer && selectedOptionIndex < 0 ? previousAnswer : undefined,
+        signal
+      });
+      if (signal?.aborted) return { kind: "cancel" };
+      const answer = custom?.trim();
+      if (answer) return { kind: "answer", answer };
+    }
+    return { kind: "cancel" };
   }
 
   private async requestMultipleChoice(
     question: UserQuestion,
     index: number,
     total: number,
+    previousAnswer?: string,
     signal?: AbortSignal
-  ): Promise<string | null> {
-    const selected = new Set<string>();
-    let custom: string | undefined;
+  ): Promise<UserQuestionAnswerResult> {
+    const canGoBack = index > 0;
+    const optionLabels = new Set(question.options.map((option) => option.label));
+    const previousValues = previousAnswer?.split(", ")
+      .map((value) => value.trim())
+      .filter(Boolean) ?? [];
+    const selected = new Set(previousValues.filter((value) => optionLabels.has(value)));
+    let custom = previousValues.filter((value) => !optionLabels.has(value)).join(", ") || undefined;
     while (!signal?.aborted) {
       const choice = await this.showChoice({
         title: `${question.header} · ${index + 1}/${total}`,
         prompt: `${question.question} Toggle choices, then select Done.`,
+        help: this.questionChoiceHelp(canGoBack),
         items: [
           ...question.options.map((option) => ({
             value: option.value,
@@ -2762,12 +2810,17 @@ class ZCodeTui {
             preview: option.preview ? new RichMarkdown(option.preview, 1, this.theme) : undefined
           })),
           {
-            value: "__other__",
-            label: `${custom ? "[x]" : "[ ]"} Other…`,
+            value: questionOtherValue,
+            label: `${custom ? "[x]" : "[ ]"} Other...`,
             description: custom || "Enter another answer"
           },
+          ...(canGoBack ? [{
+            value: questionBackValue,
+            label: "Back",
+            description: "Revise the previous question"
+          }] : []),
           {
-            value: "__done__",
+            value: questionDoneValue,
             label: "Done",
             description: `${selected.size + (custom ? 1 : 0)} selected`
           }
@@ -2776,19 +2829,21 @@ class ZCodeTui {
         showSelectedItemDetails: true,
         signal
       });
-      if (!choice) return null;
-      if (choice.value === "__done__") {
+      if (!choice) return canGoBack && !signal?.aborted ? { kind: "back" } : { kind: "cancel" };
+      if (choice.value === questionBackValue) return { kind: "back" };
+      if (choice.value === questionDoneValue) {
         const values = [...selected, ...(custom ? [custom] : [])];
-        if (values.length > 0) return values.join(", ");
+        if (values.length > 0) return { kind: "answer", answer: values.join(", ") };
         continue;
       }
-      if (choice.value === "__other__") {
+      if (choice.value === questionOtherValue) {
         const value = await this.showTextPrompt({
           title: question.header,
           prompt: question.question,
           initialValue: custom,
           signal
         });
+        if (signal?.aborted) return { kind: "cancel" };
         if (value?.trim()) custom = value.trim();
         continue;
       }
@@ -2796,7 +2851,13 @@ class ZCodeTui {
       if (selected.has(label)) selected.delete(label);
       else selected.add(label);
     }
-    return null;
+    return { kind: "cancel" };
+  }
+
+  private questionChoiceHelp(canGoBack: boolean): string {
+    return canGoBack
+      ? "Type to filter · Up/Down choose · Ctrl+O details · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc back"
+      : "Type to filter · Up/Down choose · Ctrl+O details · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc cancel";
   }
 
   private async requestPlanApproval(input: unknown, signal?: AbortSignal): Promise<unknown> {
