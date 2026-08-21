@@ -318,6 +318,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const activeTurnGuidePattern = /\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\1\?\.inputId,queryId:\1\?\.queryId,expectedTurnId:\1\?\.expectedTurnId,delivery:"guide",pendingInputId:\1\?\.pendingInputId,input:/u;
   const listSkillsBridgePattern = /\.listSkills=async\(\)=>await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)/u;
   const listSkillsOptionPattern = /listSkills:[A-Za-z_$][\w$]*\.listSkills/u;
+  const listModelOptionsOptionPattern = /listModelOptions:[A-Za-z_$][\w$]*\.listModelOptions/u;
   const sessionEventsBridgePattern = /\.subscribeSessionEvents=[A-Za-z_$][\w$]*=>/u;
   const sessionEventsOptionPattern = /subscribeSessionEvents:[A-Za-z_$][\w$]*\.subscribeSessionEvents/u;
   const taskMessageBridgePattern = /\.sendBackgroundTaskMessage=async [A-Za-z_$][\w$]*=>/u;
@@ -356,6 +357,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime)
     && listSkillsBridgePattern.test(runtime)
     && listSkillsOptionPattern.test(runtime)
+    && listModelOptionsOptionPattern.test(runtime)
     && sessionEventsBridgePattern.test(runtime)
     && sessionEventsOptionPattern.test(runtime)
     && taskMessageBridgePattern.test(runtime)
@@ -578,6 +580,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!listSkillsOptionPattern.test(patched)) {
     optionFields.push(`listSkills:${submitBridge}.listSkills`);
+  }
+  if (!/listModelOptions:[A-Za-z_$][\w$]*\.listModelOptions/u.test(patched)) {
+    optionFields.push(`listModelOptions:${submitBridge}.listModelOptions`);
   }
   if (!sessionEventsOptionPattern.test(patched)) {
     optionFields.push(`subscribeSessionEvents:${submitBridge}.subscribeSessionEvents`);

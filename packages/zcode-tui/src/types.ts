@@ -90,6 +90,7 @@ export interface TuiOptions {
   listPluginReferences?: ListPluginReferences;
   listWorkspacePathSuggestions?: ListWorkspacePathSuggestions;
   listSkills?: ListSkills;
+  listModelOptions?: () => Promise<unknown[]>;
   recallPreviousInput?: (skip: number) => Promise<unknown>;
   readGoal?: () => Promise<unknown>;
   readTodos?: () => Promise<unknown>;

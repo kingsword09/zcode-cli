@@ -2895,18 +2895,20 @@ class ZCodeTui {
    * `/model <provider/model>`.
    */
   private async showModelPicker(): Promise<boolean> {
+    // After a fresh login (loginRequired was true), modelOptions may be empty
+    // because the runtime skipped model loading during the loginRequired state.
+    // Refresh from the bridge so the cascade picker always has data.
+    if (this.modelOptions.length === 0 && this.options.listModelOptions) {
+      const refreshed = await this.options.listModelOptions();
+      if (Array.isArray(refreshed) && refreshed.length > 0) {
+        this.modelOptions = [...refreshed];
+      }
+    }
+
     const cascade = providerModelPicker(this.modelOptions, this.model);
     if (!cascade || cascade.providers.items.length === 0) {
-      // Fallback to the legacy flat picker only when modelOptions cannot be
-      // parsed into provider groups at all (empty or unparseable entries).
-      // A single-provider cascade still uses the three-level flow for
-      // consistent main/lite selection and persistence.
-      return this.showCommandPicker(
-        "Select model",
-        `Current model: ${this.model}.`,
-        modelPicker(this.modelOptions, this.model),
-        "model"
-      );
+      // No parseable models — let the runtime handle /model as a text command.
+      return false;
     }
 
     while (!this.stopped) {
@@ -2957,7 +2959,8 @@ class ZCodeTui {
         });
         if (!liteChoice) continue; // Esc → back to main selection (this while)
 
-        // Persist to config.json
+        // Persist to config.json. A write failure surfaces as a notice and
+        // skips the session switch — the user can retry.
         try {
           await updateUserConfig((config) => {
             const model = isRecord(config.model) ? config.model : {};
@@ -2965,16 +2968,17 @@ class ZCodeTui {
             model.lite = liteChoice.value;
             config.model = model;
           });
-          this.addNotice(
-            `Model config saved: main=${mainChoice.label}, lite=${liteChoice.label}.`,
-            "muted"
-          );
         } catch (error) {
           this.addNotice(
             `Could not save model config: ${error instanceof Error ? error.message : String(error)}`,
             "error"
           );
+          continue;
         }
+        this.addNotice(
+          `Model config saved: main=${mainChoice.label}, lite=${liteChoice.label}.`,
+          "muted"
+        );
 
         // Apply main model to the current session
         await this.applySettingCommand(`/model ${mainChoice.value}`, "model");
