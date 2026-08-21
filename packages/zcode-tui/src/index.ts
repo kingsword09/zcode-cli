@@ -6,6 +6,7 @@ import {
   clearSetupPending,
   readConfiguredModelAccess,
   readSetupPending,
+  updateUserConfig,
   userConfigPathHint
 } from "../../../src/model-access.ts";
 import {
@@ -127,7 +128,9 @@ import {
   isEffortPickerRequest,
   isModelPickerRequest,
   modelPicker,
-  type PickerSpec
+  providerModelPicker,
+  type PickerSpec,
+  type ProviderModelGroup
 } from "./selectors.ts";
 import { RichMarkdown } from "./rich-markdown.ts";
 import {
@@ -1067,12 +1070,7 @@ class ZCodeTui {
     if (isMcpPickerRequest(input) && await this.showMcpPicker()) {
       return;
     }
-    if (isModelPickerRequest(input) && await this.showCommandPicker(
-      "Select model",
-      `Current model: ${this.model}.`,
-      modelPicker(this.modelOptions, this.model),
-      "model"
-    )) {
+    if (isModelPickerRequest(input) && await this.showModelPicker()) {
       return;
     }
     if (isEffortPickerRequest(input) && await this.showCommandPicker(
@@ -2889,6 +2887,105 @@ class ZCodeTui {
     return true;
   }
 
+  /**
+   * Three-level cascade: provider → main model → lite model.
+   * Esc at any sub-level returns to the previous level; Esc at the provider
+   * level exits /model. The selection persists to config.json (model.main +
+   * model.lite) and also applies the main model to the current session via
+   * `/model <provider/model>`.
+   */
+  private async showModelPicker(): Promise<boolean> {
+    const cascade = providerModelPicker(this.modelOptions, this.model);
+    if (!cascade || cascade.providers.items.length === 0) {
+      // Fallback to the legacy flat picker only when modelOptions cannot be
+      // parsed into provider groups at all (empty or unparseable entries).
+      // A single-provider cascade still uses the three-level flow for
+      // consistent main/lite selection and persistence.
+      return this.showCommandPicker(
+        "Select model",
+        `Current model: ${this.model}.`,
+        modelPicker(this.modelOptions, this.model),
+        "model"
+      );
+    }
+
+    while (!this.stopped) {
+      // Level 1 — provider
+      const providerChoice = await this.showChoice({
+        title: "Select provider",
+        prompt: `Current model: ${this.model}.`,
+        help: "Up/Down choose · Enter select · Esc close",
+        items: cascade.providers.items,
+        selectedIndex: cascade.providers.selectedIndex
+      });
+      if (!providerChoice) return true; // Esc at top level — exit /model
+
+      const group = cascade.groups.find((g) => g.providerId === providerChoice.value);
+      if (!group) continue;
+
+      // Levels 2+3 — main → lite, nested so Esc at lite returns to main
+      // (not to the provider picker).
+      let confirmed = false;
+      while (!this.stopped && !confirmed) {
+        // Level 2 — main model
+        const mainChoice = await this.showChoice({
+          title: `Select main model · ${group.label}`,
+          prompt: "The main model handles agent turns.",
+          help: "Up/Down choose · Enter confirm · Esc back to provider",
+          items: group.models.items
+        });
+        if (!mainChoice) break; // Esc → back to provider selection (outer while)
+
+        // Level 3 — lite model (optional; default "same as main")
+        // Exclude the selected main model from the candidate list, then append
+        // a "Same as main" entry as the default (last index → selected).
+        const liteCandidates = group.models.items
+          .filter((item) => item.value !== mainChoice.value)
+          .map((item) => ({ ...item, description: undefined }));
+        const sameAsMainItem = {
+          value: mainChoice.value,
+          label: "Same as main",
+          description: `default · ${mainChoice.label}`
+        };
+        const liteItems = [...liteCandidates, sameAsMainItem];
+        const liteChoice = await this.showChoice({
+          title: `Select lite model · ${group.label}`,
+          prompt: "The lite model handles quick tasks and tool summaries.",
+          help: "Up/Down choose · Enter confirm · Esc back to main",
+          items: liteItems,
+          selectedIndex: liteItems.length - 1
+        });
+        if (!liteChoice) continue; // Esc → back to main selection (this while)
+
+        // Persist to config.json
+        try {
+          await updateUserConfig((config) => {
+            const model = isRecord(config.model) ? config.model : {};
+            model.main = mainChoice.value;
+            model.lite = liteChoice.value;
+            config.model = model;
+          });
+          this.addNotice(
+            `Model config saved: main=${mainChoice.label}, lite=${liteChoice.label}.`,
+            "muted"
+          );
+        } catch (error) {
+          this.addNotice(
+            `Could not save model config: ${error instanceof Error ? error.message : String(error)}`,
+            "error"
+          );
+        }
+
+        // Apply main model to the current session
+        await this.applySettingCommand(`/model ${mainChoice.value}`, "model");
+        confirmed = true;
+      }
+      if (confirmed) return true;
+      // Esc from main picker → outer while re-opens provider picker
+    }
+    return true;
+  }
+
   private async showConfiguration(): Promise<void> {
     let stored: NotificationSettings;
     try {
@@ -3011,77 +3108,80 @@ class ZCodeTui {
       ? `Model access is already configured (${access.model}).`
       : "Model access is not configured yet.";
 
-    const items: ChoiceItem[] = [];
-    if (desktop) {
-      const families = desktop.plan.families.map((entry) => entry.family).join("/");
-      items.push({
-        value: "import-desktop",
-        label: "Import settings from ZCode desktop",
-        description: `Copy desktop ${families} providers and model choices${desktop.plan.defaultFamily ? ` (selected: ${desktop.plan.defaultFamily})` : ""} · credentials are not copied`
-      });
-    }
-    items.push(
-      {
-        value: "sign-in",
-        label: "Sign in (OAuth or API key)",
-        description: "Z.AI / BigModel Coding Plan sign-in or a pasted API key"
-      },
-      {
-        value: customProviderHelpCommand,
-        label: "Custom provider",
-        description: "Configure any supported endpoint in config.json without signing in"
-      },
-      {
-        value: "skip",
-        label: "Skip for now",
-        description: manual ? "Close setup" : "Start without model access; run /setup or /login later"
+    while (!this.stopped) {
+      const items: ChoiceItem[] = [];
+      if (desktop) {
+        const families = desktop.plan.families.map((entry) => entry.family).join("/");
+        items.push({
+          value: "import-desktop",
+          label: "Import settings from ZCode desktop",
+          description: `Copy desktop ${families} providers and model choices${desktop.plan.defaultFamily ? ` (selected: ${desktop.plan.defaultFamily})` : ""} · credentials are not copied`
+        });
       }
-    );
-
-    const selected = await this.showChoice({
-      title: manual ? "ZCode setup" : "Welcome to ZCode CLI",
-      prompt: manual ? statusHint : `Set up model access to get started. ${statusHint}`,
-      help: "Up/Down choose · Enter select · Esc skip",
-      items
-    });
-    if (!selected || selected.value === "skip") {
-      await clearSetupPending().catch(() => {});
-      if (!manual && !access) {
-        this.addNotice("Setup skipped · run /login or /setup anytime.", "muted");
-      }
-      return;
-    }
-
-    if (selected.value === customProviderHelpCommand) {
-      await clearSetupPending().catch(() => {});
-      const configPath = userConfigPathHint();
-      this.addNotice(
-        `Custom providers do not require login. Copy config.example.json to ${configPath}, `
-        + "set provider kind, baseURL, apiKey and model IDs, then run /new. "
-        + "See README: Custom provider without login.",
-        "muted"
+      items.push(
+        {
+          value: "sign-in",
+          label: "Sign in (OAuth or API key)",
+          description: "Z.AI / BigModel Coding Plan sign-in or a pasted API key"
+        },
+        {
+          value: customProviderHelpCommand,
+          label: "Custom provider",
+          description: "Configure any supported endpoint in config.json without signing in"
+        },
+        {
+          value: "skip",
+          label: "Skip for now",
+          description: manual ? "Close setup" : "Start without model access; run /setup or /login later"
+        }
       );
-      return;
-    }
 
-    if (selected.value === "import-desktop" && desktop) {
-      const imported = await this.importDesktopSettings(desktop);
-      if (!imported) return;
-    }
+      const selected = await this.showChoice({
+        title: manual ? "ZCode setup" : "Welcome to ZCode CLI",
+        prompt: manual ? statusHint : `Set up model access to get started. ${statusHint}`,
+        help: "Up/Down choose · Enter select · Esc skip",
+        items
+      });
+      if (!selected || selected.value === "skip") {
+        await clearSetupPending().catch(() => {});
+        if (!manual && !access) {
+          this.addNotice("Setup skipped · run /login or /setup anytime.", "muted");
+        }
+        return;
+      }
 
-    if (selected.value === "sign-in" || selected.value === "import-desktop") {
-      await this.submit("/login");
-    }
+      if (selected.value === customProviderHelpCommand) {
+        await clearSetupPending().catch(() => {});
+        const configPath = userConfigPathHint();
+        this.addNotice(
+          `Custom providers do not require login. Copy config.example.json to ${configPath}, `
+          + "set provider kind, baseURL, apiKey and model IDs, then run /new. "
+          + "See README: Custom provider without login.",
+          "muted"
+        );
+        return;
+      }
 
-    const finalAccess = await readConfiguredModelAccess().catch(() => null);
-    if (finalAccess) {
-      await clearSetupPending().catch(() => {});
-      this.setLoginRequired(false);
-      this.addNotice("Setup complete · model access is configured.", "muted");
-    } else {
-      // Login was attempted but did not produce model access; keep the marker
-      // so the wizard reappears on the next start.
-      this.addNotice("Setup finished without model access · run /login or /setup anytime.", "muted");
+      if (selected.value === "import-desktop" && desktop) {
+        const imported = await this.importDesktopSettings(desktop);
+        if (!imported) continue; // Esc or deferred — back to method selection
+      }
+
+      if (selected.value === "sign-in" || selected.value === "import-desktop") {
+        await this.submit("/login");
+      }
+
+      const finalAccess = await readConfiguredModelAccess().catch(() => null);
+      if (finalAccess) {
+        await clearSetupPending().catch(() => {});
+        this.setLoginRequired(false);
+        this.addNotice("Setup complete · model access is configured.", "muted");
+        return;
+      }
+      // Login was attempted but did not produce model access. Loop back to
+      // the method selection so the user can try a different approach instead
+      // of being dropped out of the wizard.
+      this.addNotice("Login did not produce model access · choose another method or skip.", "muted");
     }
   }
 

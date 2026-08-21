@@ -4,7 +4,8 @@ import {
   effortPicker,
   isEffortPickerRequest,
   isModelPickerRequest,
-  modelPicker
+  modelPicker,
+  providerModelPicker
 } from "../packages/zcode-tui/src/selectors.ts";
 
 describe("TUI selectors", () => {
@@ -61,5 +62,69 @@ describe("TUI selectors", () => {
     expect(isEffortPickerRequest("/effort")).toBe(true);
     expect(isEffortPickerRequest("/variant list")).toBe(true);
     expect(isEffortPickerRequest("/effort high")).toBe(false);
+  });
+
+  test("groups runtime modelOptions into a provider cascade", () => {
+    // Runtime format: { modelId, providerId, providerLabel }
+    const cascade = providerModelPicker([
+      { modelId: "glm-5.2", providerId: "zai", providerLabel: "Z.AI", name: "GLM-5.2" },
+      { modelId: "glm-5-turbo", providerId: "zai", providerLabel: "Z.AI", name: "GLM-5-Turbo" },
+      { modelId: "glm-5.2", providerId: "bigmodel", providerLabel: "BigModel", name: "GLM-5.2" }
+    ], "zai/glm-5.2");
+
+    expect(cascade).not.toBeNull();
+    expect(cascade!.providers.items).toHaveLength(2);
+    expect(cascade!.providers.items[0]).toMatchObject({ value: "zai", label: "Z.AI" });
+    expect(cascade!.providers.items[1]).toMatchObject({ value: "bigmodel", label: "BigModel" });
+    expect(cascade!.providers.selectedIndex).toBe(0);
+
+    const zaiGroup = cascade!.groups.find((g) => g.providerId === "zai")!;
+    expect(zaiGroup.models.items).toHaveLength(2);
+    expect(zaiGroup.models.items[0]).toMatchObject({
+      value: "zai/glm-5.2",
+      label: "GLM-5.2",
+      command: "/model zai/glm-5.2"
+    });
+    expect(zaiGroup.models.items[0]?.description).toContain("current");
+    expect(zaiGroup.models.selectedIndex).toBe(0);
+  });
+
+  test("accepts legacy { id, name } format alongside runtime format", () => {
+    const cascade = providerModelPicker([
+      { id: "zai/glm-5.2", name: "GLM-5.2" },
+      { id: "custom/model" }
+    ], "zai/glm-5.2");
+
+    expect(cascade).not.toBeNull();
+    expect(cascade!.providers.items).toHaveLength(2);
+    expect(cascade!.groups.find((g) => g.providerId === "zai")!.models.items).toHaveLength(1);
+    expect(cascade!.groups.find((g) => g.providerId === "custom")!.models.items[0]?.label).toBe("model");
+  });
+
+  test("returns null for empty or unparseable options", () => {
+    expect(providerModelPicker([], "zai/glm-5.2")).toBeNull();
+    expect(providerModelPicker([
+      "plain-string",
+      { noId: true }
+    ], "zai/glm-5.2")).toBeNull();
+  });
+
+  test("deduplicates models within the same provider", () => {
+    const cascade = providerModelPicker([
+      { modelId: "glm-5.2", providerId: "zai" },
+      { id: "zai/glm-5.2", name: "duplicate" }
+    ], undefined);
+
+    expect(cascade!.groups[0]!.models.items).toHaveLength(1);
+  });
+
+  test("falls back to providerName when providerLabel is absent (runtime format)", () => {
+    const cascade = providerModelPicker([
+      { modelId: "glm-5.2", providerId: "zai", providerName: "Z.AI" },
+      { modelId: "glm-5.2", providerId: "bigmodel", providerName: "BigModel" }
+    ], undefined);
+
+    expect(cascade!.providers.items[0]?.label).toBe("Z.AI");
+    expect(cascade!.providers.items[1]?.label).toBe("BigModel");
   });
 });

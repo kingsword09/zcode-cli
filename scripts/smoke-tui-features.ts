@@ -124,8 +124,18 @@ try {
   await sendAndWait("\x1b[Z", "plan mode shortcut", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i);
   await sendAndWait("\x0e", "model shortcut", /◈ beta\/model ─ ◉ plan ─ ⚡ low/i);
   await sendAndWait("\t", "effort shortcut", /◈ beta\/model ─ ◉ plan ─ ⚡ high/i);
-  await sendAndWait("/model\r", "model picker", /Select model/i);
-  await sendAndWait("alpha\r", "model picker selection", /◈ alpha\/model ─ ◉ plan ─ ⚡ high/i);
+  await sendAndWait("/model\r", "model provider picker", /Select provider/i);
+  await sendAndWait("alpha\r", "main model picker", /Select main model/i);
+  // Esc at lite → back to main picker (not provider)
+  await sendAndWait("\r", "lite model picker with Same as main default", /Select lite model[\s\S]*Same as main/i);
+  await sendAndWait("\x1b", "lite Esc back to main", /Select main model/i);
+  // Esc at main → back to provider picker
+  await sendAndWait("\x1b", "main Esc back to provider", /Select provider/i);
+  // Re-enter and complete the full cascade
+  await sendAndWait("alpha\r", "main model picker (re-enter)", /Select main model/i);
+  await sendAndWait("\r", "lite model picker (re-enter)", /Select lite model/i);
+  // Press Enter directly — should confirm "Same as main" (the default)
+  await sendAndWait("\r", "model cascade confirm (Same as main default)", /◈ alpha\/model ─ ◉ plan ─ ⚡ high/i);
   await sendAndWait("/effort\r", "effort picker", /Select reasoning effort/i);
   await sendAndWait("\x1b[B\r", "effort picker selection", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i);
   await sendAndWait("\x1b[Z", "build mode shortcut", /◈ alpha\/model ─ ◉ build ─ ⚡ low/i);
@@ -418,7 +428,7 @@ for (const [label, pattern] of [
   ["resumed agent conversation", /You: Fix the recovery issue and rerun the focused test\.[\s\S]*Agent "agent_feature" resumed in the background\./i],
   ["restarted active agent", /Agent "agent_feature" restarted in the background\./i],
   ["paused goal footer", /Goal: Paused \(\/goal resume\)/i],
-  ["model picker", /Select model/i],
+  ["model provider picker", /Select provider/i],
   ["effort picker", /Select reasoning effort/i],
   ["image attachment", /1 image attached/i],
   ["multiple attachment tokens", /Images[\s\S]*\[Image #1\][\s\S]*\[Image #2\]/i],
