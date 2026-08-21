@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   effortPicker,
+  explicitModelRequest,
   isEffortPickerRequest,
   isModelPickerRequest,
   modelPicker,
@@ -62,6 +63,22 @@ describe("TUI selectors", () => {
     expect(isEffortPickerRequest("/effort")).toBe(true);
     expect(isEffortPickerRequest("/variant list")).toBe(true);
     expect(isEffortPickerRequest("/effort high")).toBe(false);
+  });
+
+  test("extracts explicit model refs, aliases, and nested model IDs", () => {
+    expect(explicitModelRequest("/model zai/glm-5.2")).toBe("zai/glm-5.2");
+    expect(explicitModelRequest("/model custom/model")).toBe("custom/model");
+    expect(explicitModelRequest("/model provider/org/model")).toBe("provider/org/model");
+    // Bare picker and list forms are handled by showModelPicker.
+    expect(explicitModelRequest("/model")).toBeUndefined();
+    expect(explicitModelRequest("/model list")).toBeUndefined();
+    // Runtime-resolved aliases also use the transient session switch path.
+    expect(explicitModelRequest("/model main")).toBe("main");
+    expect(explicitModelRequest("/model lite")).toBe("lite");
+    expect(explicitModelRequest("/model opus")).toBe("opus");
+    // Malformed refs fall through to the runtime's own error handling.
+    expect(explicitModelRequest("/model not-a-ref")).toBeUndefined();
+    expect(explicitModelRequest("/effort high")).toBeUndefined();
   });
 
   test("groups runtime modelOptions into a provider cascade", () => {

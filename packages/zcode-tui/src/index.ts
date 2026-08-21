@@ -6,6 +6,7 @@ import {
   clearSetupPending,
   readConfiguredModelAccess,
   readSetupPending,
+  readUserConfig,
   updateUserConfig,
   userConfigPathHint
 } from "../../../src/model-access.ts";
@@ -125,6 +126,7 @@ import {
 } from "./notifications.ts";
 import {
   effortPicker,
+  explicitModelRequest,
   isEffortPickerRequest,
   isModelPickerRequest,
   modelPicker,
@@ -186,6 +188,7 @@ import {
   appliesToSetting,
   nextMode,
   nextPickerCommand,
+  nextPickerValue,
   normalizedMode,
   settingTargetForCommand,
   transcriptPageDirection,
@@ -1071,6 +1074,14 @@ class ZCodeTui {
       return;
     }
     if (isModelPickerRequest(input) && await this.showModelPicker()) {
+      return;
+    }
+    // Explicit `/model <provider/model>` is also a session-only switch — the
+    // runtime's plain /model command would persist model.main.
+    const explicitModel = explicitModelRequest(input);
+    if (explicitModel) {
+      this.addUserMessage(submission.displayInput);
+      await this.switchTransientModel(explicitModel);
       return;
     }
     if (isEffortPickerRequest(input) && await this.showCommandPicker(
@@ -2888,39 +2899,129 @@ class ZCodeTui {
   }
 
   /**
-   * Three-level cascade: provider → main model → lite model.
-   * Esc at any sub-level returns to the previous level; Esc at the provider
-   * level exits /model. The selection persists to config.json (model.main +
-   * model.lite) and also applies the main model to the current session via
-   * `/model <provider/model>`.
+   * Refresh modelOptions from the bridge. After a fresh login
+   * (loginRequired was true) the runtime skipped model loading, so the
+   * initial options list may be empty; all model-switch entry points share
+   * this refresh.
    */
-  private async showModelPicker(): Promise<boolean> {
-    // After a fresh login (loginRequired was true), modelOptions may be empty
-    // because the runtime skipped model loading during the loginRequired state.
-    // Refresh from the bridge so the cascade picker always has data.
+  private async refreshModelOptions(): Promise<void> {
     if (this.modelOptions.length === 0 && this.options.listModelOptions) {
-      const refreshed = await this.options.listModelOptions();
-      if (Array.isArray(refreshed) && refreshed.length > 0) {
-        this.modelOptions = [...refreshed];
+      try {
+        const refreshed = await this.options.listModelOptions();
+        if (Array.isArray(refreshed) && refreshed.length > 0) {
+          this.modelOptions = [...refreshed];
+        }
+      } catch (error) {
+        this.addNotice(
+          `Could not load model options: ${error instanceof Error ? error.message : String(error)}`,
+          "warning"
+        );
       }
     }
+  }
 
-    const cascade = providerModelPicker(this.modelOptions, this.model);
+  /**
+   * Quick session-level model switch via the flat picker. Uses the
+   * setTransientModel bridge so the runtime keeps the switch in-memory —
+   * config.json's model.main stays untouched. For persistent main/lite
+   * configuration use /settings → Model providers.
+   */
+  private async showModelPicker(): Promise<boolean> {
+    await this.refreshModelOptions();
+    const picker = modelPicker(this.modelOptions, this.model);
+    if (picker.items.length === 0) return false;
+    const selected = await this.showChoice({
+      title: "Select model",
+      prompt: `Current model: ${this.model}. · session only — saved defaults are unchanged`,
+      help: "Up/Down choose · Enter switch · Esc cancel",
+      items: picker.items.map((item) => ({ ...item, payload: item.value })),
+      selectedIndex: picker.selectedIndex
+    });
+    const modelId = selected?.payload;
+    if (typeof modelId !== "string") return true;
+
+    await this.switchTransientModel(modelId);
+    return true;
+  }
+
+  /**
+   * Session-only model switch. Requires the setTransientModel bridge; without
+   * it (older runtime) the only available switch path persists to config.json,
+   * which contradicts this feature's contract — refuse instead of silently
+   * rewriting saved defaults.
+   */
+  private async switchTransientModel(modelId: string): Promise<void> {
+    if (!this.options.setTransientModel) {
+      this.addNotice(
+        "Session model switching is unavailable in this runtime · use /settings → Model providers.",
+        "muted"
+      );
+      return;
+    }
+    if (this.settingSwitchInFlight) return;
+    this.settingSwitchInFlight = true;
+    try {
+      const previousModel = this.model;
+      const result = await this.options.setTransientModel(modelId);
+      await this.handleResult(result, false, "model");
+      const status = this.model === previousModel ? "already active" : "now";
+      this.addNotice(
+        `Session model ${status}: ${this.model} · saved defaults unchanged.`,
+        "muted"
+      );
+    } catch (error) {
+      this.addNotice(
+        `Could not switch model: ${error instanceof Error ? error.message : String(error)}`,
+        "error"
+      );
+    } finally {
+      this.settingSwitchInFlight = false;
+    }
+  }
+
+  /**
+   * Three-level cascade (provider → main → lite) embedded in the /settings
+   * menu. Persists both selections to config.json and applies the main model
+   * to the current session. Esc at each sub-level returns to the previous
+   * level: lite → main → provider → settings menu.
+   *
+   * Defaults are based on the SAVED config (model.main), not the session
+   * model — a quick /model switch in the session must not silently change
+   * what this persistent-configurator preselects.
+   */
+  private async showModelProviderSettings(): Promise<void> {
+    await this.refreshModelOptions();
+    // Read the saved model config directly — readConfiguredModelAccess() is
+    // gated on a configured API key, but this editor must show config.model
+    // even when credentials are missing or incomplete.
+    const savedModelConfig = await readUserConfig()
+      .then((config) => (isRecord(config.model) ? config.model as Record<string, unknown> : undefined))
+      .catch(() => undefined);
+    const savedModel = typeof savedModelConfig?.main === "string" && savedModelConfig.main.trim()
+      ? savedModelConfig.main
+      : undefined;
+    const savedLite = typeof savedModelConfig?.lite === "string" && savedModelConfig.lite.trim()
+      ? savedModelConfig.lite
+      : undefined;
+
+    const cascade = providerModelPicker(this.modelOptions, savedModel ?? this.model);
     if (!cascade || cascade.providers.items.length === 0) {
-      // No parseable models — let the runtime handle /model as a text command.
-      return false;
+      this.addNotice("No model providers available to configure.", "muted");
+      return;
     }
 
+    let providerIndex = cascade.providers.selectedIndex;
     while (!this.stopped) {
       // Level 1 — provider
       const providerChoice = await this.showChoice({
-        title: "Select provider",
-        prompt: `Current model: ${this.model}.`,
-        help: "Up/Down choose · Enter select · Esc close",
+        title: "Model providers",
+        prompt: "Configure the main and lite models for each provider.",
+        help: "Up/Down choose · Enter select · Esc back to settings",
         items: cascade.providers.items,
-        selectedIndex: cascade.providers.selectedIndex
+        selectedIndex: providerIndex
       });
-      if (!providerChoice) return true; // Esc at top level — exit /model
+      if (!providerChoice) return; // Esc → back to settings menu
+      providerIndex = cascade.providers.items.findIndex((item) => item.value === providerChoice.value);
 
       const group = cascade.groups.find((g) => g.providerId === providerChoice.value);
       if (!group) continue;
@@ -2928,19 +3029,25 @@ class ZCodeTui {
       // Levels 2+3 — main → lite, nested so Esc at lite returns to main
       // (not to the provider picker).
       let confirmed = false;
+      // Track the in-progress main selection so Esc at lite returns to the
+      // model the user just chose, not the saved default.
+      let mainIndex = group.models.items.findIndex((item) => item.value === savedModel);
+      if (mainIndex < 0) mainIndex = group.models.selectedIndex;
       while (!this.stopped && !confirmed) {
         // Level 2 — main model
         const mainChoice = await this.showChoice({
           title: `Select main model · ${group.label}`,
           prompt: "The main model handles agent turns.",
           help: "Up/Down choose · Enter confirm · Esc back to provider",
-          items: group.models.items
+          items: group.models.items,
+          selectedIndex: mainIndex
         });
         if (!mainChoice) break; // Esc → back to provider selection (outer while)
+        mainIndex = group.models.items.findIndex((item) => item.value === mainChoice.value);
 
-        // Level 3 — lite model (optional; default "same as main")
-        // Exclude the selected main model from the candidate list, then append
-        // a "Same as main" entry as the default (last index → selected).
+        // Level 3 — lite model. Preselect the saved lite when it is a
+        // distinct model in this provider; otherwise default to "Same as
+        // main" (last index).
         const liteCandidates = group.models.items
           .filter((item) => item.value !== mainChoice.value)
           .map((item) => ({ ...item, description: undefined }));
@@ -2950,12 +3057,15 @@ class ZCodeTui {
           description: `default · ${mainChoice.label}`
         };
         const liteItems = [...liteCandidates, sameAsMainItem];
+        const savedLiteIndex = liteItems.findIndex(
+          (item) => item.value === savedLite && item.value !== mainChoice.value
+        );
         const liteChoice = await this.showChoice({
           title: `Select lite model · ${group.label}`,
           prompt: "The lite model handles quick tasks and tool summaries.",
           help: "Up/Down choose · Enter confirm · Esc back to main",
           items: liteItems,
-          selectedIndex: liteItems.length - 1
+          selectedIndex: savedLiteIndex >= 0 ? savedLiteIndex : liteItems.length - 1
         });
         if (!liteChoice) continue; // Esc → back to main selection (this while)
 
@@ -2984,10 +3094,10 @@ class ZCodeTui {
         await this.applySettingCommand(`/model ${mainChoice.value}`, "model");
         confirmed = true;
       }
-      if (confirmed) return true;
-      // Esc from main picker → outer while re-opens provider picker
+      // Return to the settings menu after a successful cascade instead of
+      // looping back to the provider picker.
+      if (confirmed) return;
     }
-    return true;
   }
 
   private async showConfiguration(): Promise<void> {
@@ -3019,11 +3129,24 @@ class ZCodeTui {
       const backend = notificationDeliveryLabel(effective.method, diagnostics.backend);
       const methodOverride = Boolean(process.env.ZCODE_TUI_NOTIFICATION_METHOD?.trim());
       const conditionOverride = Boolean(process.env.ZCODE_TUI_NOTIFICATION_CONDITION?.trim());
+      const savedConfig = await readUserConfig()
+        .then((config) => (isRecord(config.model) ? config.model as Record<string, unknown> : undefined))
+        .catch(() => undefined);
+      const savedModelLabel = typeof savedConfig?.main === "string" && savedConfig.main.trim()
+        ? savedConfig.main
+        : undefined;
       const setting = await this.showChoice({
         title: "ZCode settings",
         prompt: feedback,
         help: "Up/Down choose · Enter open · Esc close settings",
         items: [
+          {
+            value: "model-providers",
+            label: "Model providers",
+            description: this.model === savedModelLabel || !savedModelLabel
+              ? `Saved: ${savedModelLabel ?? this.model}`
+              : `Session: ${this.model} · Saved: ${savedModelLabel}`
+          },
           {
             value: "notification-method",
             label: "Notification delivery",
@@ -3043,7 +3166,14 @@ class ZCodeTui {
       });
       if (!setting) return;
 
-      selectedSettingIndex = setting.value === "notification-condition" ? 1 : 0;
+      if (setting.value === "model-providers") {
+        selectedSettingIndex = 0;
+        await this.showModelProviderSettings();
+        feedback = "Changes save immediately · Esc closes settings";
+        continue;
+      }
+
+      selectedSettingIndex = setting.value === "notification-condition" ? 2 : setting.value === "notification-method" ? 1 : 0;
       let next = stored;
       let changedLabel: string;
       let overridden = false;
@@ -3475,12 +3605,13 @@ class ZCodeTui {
 
   private async switchModel(): Promise<void> {
     if (!this.shortcutAvailable()) return;
-    const command = nextPickerCommand(modelPicker(this.modelOptions, this.model), this.model);
-    if (!command) {
+    await this.refreshModelOptions();
+    const next = nextPickerValue(modelPicker(this.modelOptions, this.model), this.model);
+    if (!next) {
       this.addNotice("No alternate model is available.", "muted");
       return;
     }
-    await this.applySettingCommand(command, "model");
+    await this.switchTransientModel(next);
   }
 
   private async switchEffort(): Promise<void> {

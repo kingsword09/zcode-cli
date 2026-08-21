@@ -91,6 +91,7 @@ export interface TuiOptions {
   listWorkspacePathSuggestions?: ListWorkspacePathSuggestions;
   listSkills?: ListSkills;
   listModelOptions?: () => Promise<unknown[]>;
+  setTransientModel?: (modelId: string) => Promise<unknown>;
   recallPreviousInput?: (skip: number) => Promise<unknown>;
   readGoal?: () => Promise<unknown>;
   readTodos?: () => Promise<unknown>;

@@ -84,6 +84,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !/applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtimeSource)
   || !/listSkills:[A-Za-z_$][\w$]*\.listSkills/u.test(runtimeSource)
   || !/listModelOptions:[A-Za-z_$][\w$]*\.listModelOptions/u.test(runtimeSource)
+  || !/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u.test(runtimeSource)
   || !/subscribeSessionEvents:[A-Za-z_$][\w$]*\.subscribeSessionEvents/u.test(runtimeSource)
   || !/sendBackgroundTaskMessage:[A-Za-z_$][\w$]*\.sendBackgroundTaskMessage/u.test(runtimeSource)) {
   throw new Error("The runtime compatibility patches are missing; run `bun run sync` again.");

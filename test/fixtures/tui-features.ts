@@ -201,6 +201,10 @@ await runTui({
     { alias: "main", id: "alpha/model", name: "Alpha" },
     { alias: "lite", id: "beta/model", name: "Beta" }
   ],
+  setTransientModel: async (modelId: string) => {
+    model = modelId;
+    return { model: modelId };
+  },
   effortOptions: [
     { id: "low", label: "Low" },
     { id: "high", label: "High" }

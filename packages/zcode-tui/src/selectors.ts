@@ -35,6 +35,22 @@ export function isModelPickerRequest(input: string): boolean {
   return pickerRequest(input, new Set(["model"]));
 }
 
+/**
+ * Extract the explicit model reference from `/model <provider/model>`.
+ * Returns undefined for the bare picker forms (`/model`, `/model list`) and
+ * malformed references. Runtime aliases are returned as explicit requests so
+ * they also use the session-only transient model bridge.
+ */
+export function explicitModelRequest(input: string): string | undefined {
+  const match = /^\/model\s+(\S+)$/iu.exec(input.trim());
+  const argument = match?.[1];
+  if (!argument || argument.toLowerCase() === "list") return undefined;
+  if (/^(?:main|lite|sonnet|opus|haiku)$/iu.test(argument)) return argument;
+  const separator = argument.indexOf("/");
+  if (separator <= 0 || separator === argument.length - 1) return undefined;
+  return argument;
+}
+
 export function isEffortPickerRequest(input: string): boolean {
   return pickerRequest(input, new Set(["effort", "variant"]));
 }

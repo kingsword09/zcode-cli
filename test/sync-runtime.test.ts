@@ -690,6 +690,40 @@ describe("runtime synchronization", () => {
     expect(modernPatched).not.toContain("Array.isArray(t.targetMessageIds)");
   });
 
+  test("upgrades an already-patched runtime that lacks the transient model bridge", () => {
+    // Simulate a runtime patched by an older patchRuntimeTuiBridge: the
+    // fixture above fully patched (minus setTransientModel, which did not
+    // exist yet). The patch must detect the gap and add the bridge + option
+    // instead of short-circuiting as "already patched".
+    const runtime = [
+      "function R(e,t){return f(e,{rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}",
+      "async function L(e){if(!e.sessionStore)return[];let t=await e.sessionStore.messages({sessionID:e.sessionId});return p(t)}",
+      'function p(e){let t=[];for(let r of e){if(r.info.role==="user"){let l=r.text;t.push({content:l,role:"user"});continue}let n=[],s=[],u=r.text;t.push({content:u,...s.length>0?{parts:s}:{},role:"agent"})}return t}',
+      "function c(e,t){if(t.targetMessageId)return O(e,[t.targetMessageId]);let r=P(e,t.targetCheckpointId);return r?[r]:[]}",
+      "E.sendInput=async(A,$)=>{let c=t.runtime.getActiveTurnInfo();if(c)return t.runtime.steerTurn({commandKind:$?.commandKind,inputId:$?.inputId,queryId:$?.queryId,expectedTurnId:$?.expectedTurnId,input:A});return Kvt(await S(),D,O1(t))},",
+      'listSkills:k(()=>H(e),"listSkills"),',
+      "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
+      "CVr(E,S,r);",
+      "return c({recallPreviousInput:g.recallPreviousInput,sendInput:g.sendInput,submitPrompt:g})"
+    ].join("").replace(
+      "E.sendInput",
+      'loadSessionTranscript:a(async()=>await dUr({sessionId:e.sessionId,sessionStore:e.sessionStore}),"loadSessionTranscript"),readTodos:E.sendInput'
+    );
+    // Fully apply the current patch, then strip only the transient-model
+    // injections to model an older patch generation.
+    const fullyPatched = patchRuntimeTuiBridge(runtime);
+    const stripped = fullyPatched
+      .replace(/[A-Za-z_$]+\.setTransientModel=async e=>await\(await [A-Za-z_$]+\(\)\)\.setModel\?\.\(e,\{transient:!0\}\),/u, "")
+      .replace(/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel,/u, "");
+    expect(stripped).not.toMatch(/\.setTransientModel=async/u);
+    expect(stripped).not.toMatch(/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u);
+
+    const patched = patchRuntimeTuiBridge(stripped);
+    expect(patched).toMatch(/\.setTransientModel=async/u);
+    expect(patched).toMatch(/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u);
+    expect(patchRuntimeTuiBridge(patched)).toBe(patched);
+  });
+
   test("auto-backgrounds long Agent calls while preserving explicit configuration", () => {
     const runtime = "function delay(){return{autoBackgroundMs:this.config.subagents?.autoBackgroundMs,outputRootDir:'tasks'}}";
     const patched = patchRuntimeAgentAutoBackground(runtime);

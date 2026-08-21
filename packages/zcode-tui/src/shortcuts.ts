@@ -35,6 +35,14 @@ export function nextPickerCommand(picker: PickerSpec, currentValue?: string): st
   return picker.items[nextIndex]?.command;
 }
 
+/** Like nextPickerCommand but returns the item value (model id) directly. */
+export function nextPickerValue(picker: PickerSpec, currentValue?: string): string | undefined {
+  if (picker.items.length < 2) return undefined;
+  const currentIndex = picker.items.findIndex((item) => item.value === currentValue);
+  const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % picker.items.length;
+  return picker.items[nextIndex]?.value;
+}
+
 export function transcriptPageDirection(data: string): -1 | 1 | undefined {
   if (isKeyRelease(data)) return undefined;
   if (matchesKey(data, "pageUp") || matchesKey(data, "left")) return -1;

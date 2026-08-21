@@ -327,6 +327,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const interruptTurnMarker = ".interruptTurn=async e=>";
   const interruptWaitForIdleMarker = "e?.waitForIdle===!0";
   const queuedInputPromotionMarker = "r?.pendingInputReservationId??r?.queryId??";
+  const transientModelBridgePattern = /\.setTransientModel=async/u;
+  const transientModelOptionPattern = /setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u;
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
     && runtime.includes(".readGoal=async()=>await(await")
     && runtime.includes(".readTodos=async()=>await(await")
@@ -358,6 +360,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && listSkillsBridgePattern.test(runtime)
     && listSkillsOptionPattern.test(runtime)
     && listModelOptionsOptionPattern.test(runtime)
+    && transientModelBridgePattern.test(runtime)
+    && transientModelOptionPattern.test(runtime)
     && sessionEventsBridgePattern.test(runtime)
     && sessionEventsOptionPattern.test(runtime)
     && taskMessageBridgePattern.test(runtime)
@@ -497,6 +501,12 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".applyFileRewind=async e=>")) {
     assignments.push(`${bridge}.applyFileRewind=async e=>{let t=await ${getApp}();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}`);
   }
+  // Session-level (transient) model switch: the runtime's setModel persists
+  // model.main to config.json by default; {transient:true} keeps it in-memory
+  // so the /model quick picker does not rewrite saved defaults.
+  if (!patched.includes(".setTransientModel=async")) {
+    assignments.push(`${bridge}.setTransientModel=async e=>await(await ${getApp}()).setModel?.(e,{transient:!0})`);
+  }
   if (!sessionEventsBridgePattern.test(patched)) {
     assignments.push(`${bridge}.subscribeSessionEvents=e=>{let t=!1,r;${getApp}().then(o=>{t||(r=o.runtime?.subscribeEvents?.({onSessionEvent:e}))});return()=>{t=!0,r?.()}}`);
   }
@@ -583,6 +593,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/listModelOptions:[A-Za-z_$][\w$]*\.listModelOptions/u.test(patched)) {
     optionFields.push(`listModelOptions:${submitBridge}.listModelOptions`);
+  }
+  if (!/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u.test(patched)) {
+    optionFields.push(`setTransientModel:${submitBridge}.setTransientModel`);
   }
   if (!sessionEventsOptionPattern.test(patched)) {
     optionFields.push(`subscribeSessionEvents:${submitBridge}.subscribeSessionEvents`);
