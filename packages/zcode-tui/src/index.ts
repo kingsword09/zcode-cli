@@ -1316,7 +1316,6 @@ class ZCodeTui {
   ): QueuedSubmission | undefined {
     this.activeSubmissions = Math.max(0, this.activeSubmissions - 1);
     if (this.activeTurnEpoch !== turnEpoch) return undefined;
-    this.refreshSessionTerminalTitle();
 
     const turnFinishState = abortController.signal.aborted ? "cancelled" : unfinishedToolState;
     const recoveryReason = turnFinishState === "cancelled"

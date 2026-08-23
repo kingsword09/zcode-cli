@@ -15,7 +15,7 @@ export function sessionTitleFromFirstMessage(message: string): string | null {
   if (characters.length <= MAX_SESSION_TITLE_CHARS) {
     return normalized;
   }
-  return `${characters.slice(0, MAX_SESSION_TITLE_CHARS).join("")}…`;
+  return `${characters.slice(0, MAX_SESSION_TITLE_CHARS - 1).join("")}…`;
 }
 
 export function emitSessionTerminalTitle(

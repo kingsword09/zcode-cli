@@ -25,13 +25,15 @@ describe("session title from first message", () => {
   test("truncates long messages with an ellipsis", () => {
     const message = "x".repeat(MAX_SESSION_TITLE_CHARS + 20);
     const title = sessionTitleFromFirstMessage(message);
-    expect(title).toBe(`${"x".repeat(MAX_SESSION_TITLE_CHARS)}…`);
-    expect(Array.from(title!)).toHaveLength(MAX_SESSION_TITLE_CHARS + 1);
+    expect(title).toBe(`${"x".repeat(MAX_SESSION_TITLE_CHARS - 1)}…`);
+    expect(Array.from(title!)).toHaveLength(MAX_SESSION_TITLE_CHARS);
   });
 
   test("truncates by code point without splitting surrogate pairs", () => {
     const emoji = "😀".repeat(MAX_SESSION_TITLE_CHARS + 5);
-    expect(sessionTitleFromFirstMessage(emoji)).toBe(`${"😀".repeat(MAX_SESSION_TITLE_CHARS)}…`);
+    const title = sessionTitleFromFirstMessage(emoji);
+    expect(title).toBe(`${"😀".repeat(MAX_SESSION_TITLE_CHARS - 1)}…`);
+    expect(Array.from(title!)).toHaveLength(MAX_SESSION_TITLE_CHARS);
   });
 
   test("keeps CJK text intact when it fits", () => {
