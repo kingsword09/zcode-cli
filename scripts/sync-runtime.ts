@@ -648,6 +648,38 @@ export function patchRuntimeOAuthHttpErrors(runtime: string): string {
   );
 }
 
+const legacyHeadlessOptions = [
+  "settings",
+  "permission-mode",
+  "max-turns",
+  "allowed-tools",
+  "allow-main-worktree-yolo"
+] as const;
+
+/** Hide compatibility options that the extracted runtime advertises but cannot parse. */
+export function patchRuntimeCliHelpContract(runtime: string): string {
+  const parserEnd = runtime.indexOf('strict:!0}),"parseGlobalArgs"');
+  const parserStart = parserEnd < 0 ? -1 : runtime.lastIndexOf("options:{", parserEnd);
+  if (parserStart < 0 || parserEnd < 0) {
+    throw new Error(
+      "ZCode runtime is incompatible with the CLI help contract patch (global parser anchor missing)."
+    );
+  }
+
+  const parser = runtime.slice(parserStart, parserEnd);
+  let patched = runtime;
+  for (const option of legacyHeadlessOptions) {
+    const escaped = option.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const parserOption = new RegExp(
+      `(?:^|[,{])"?${escaped}"?:\\{[^}]*type:"(?:string|boolean)"`,
+      "u"
+    );
+    if (parserOption.test(parser)) continue;
+    patched = patched.replace(new RegExp(`^  --${escaped}\\s[^\\n]*\\n`, "gmu"), "");
+  }
+  return patched;
+}
+
 /** Avoid Undici rejecting bodies on the Fetch statuses that must be bodyless. */
 export function hasRuntimeHttpNoContentGuard(runtime: string): boolean {
   return /([A-Za-z_$][\w$]*)\.statusCode===204\|\|\1\.statusCode===205\|\|\1\.statusCode===304\?void 0:/u
@@ -887,15 +919,17 @@ async function installTuiBridge(nextVendor: string): Promise<void> {
   const runtime = await readFile(runtimePath, "utf8");
   await writeFile(
     runtimePath,
-    patchRuntimeContextCacheFromParts(
-      patchRuntimeLoginModelDefaults(
-        patchRuntimeZaiDesktopOAuth(
-          patchRuntimeOAuthHttpErrors(
-            patchRuntimeHttpNoContent(
-              patchRuntimeAgentAutoBackground(
-                patchRuntimeDetachedAgentLifecycle(
-                  patchRuntimeTerminalToolProjection(
-                    patchRuntimeGoalFailurePause(patchRuntimeTuiBridge(runtime))
+    patchRuntimeCliHelpContract(
+      patchRuntimeContextCacheFromParts(
+        patchRuntimeLoginModelDefaults(
+          patchRuntimeZaiDesktopOAuth(
+            patchRuntimeOAuthHttpErrors(
+              patchRuntimeHttpNoContent(
+                patchRuntimeAgentAutoBackground(
+                  patchRuntimeDetachedAgentLifecycle(
+                    patchRuntimeTerminalToolProjection(
+                      patchRuntimeGoalFailurePause(patchRuntimeTuiBridge(runtime))
+                    )
                   )
                 )
               )

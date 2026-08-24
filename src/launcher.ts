@@ -59,7 +59,8 @@ const runtimeValueOptions = new Set([
   "--mode",
   "--permission-mode",
   "--resume",
-  "--settings"
+  "--settings",
+  "--surface"
 ]);
 const runtimeVariadicOptions = new Set(["--disallowedTools", "--disallowed-tools"]);
 

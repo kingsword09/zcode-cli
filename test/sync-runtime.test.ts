@@ -7,6 +7,7 @@ import {
   parseArgs,
   parseRuntimeLock,
   patchRuntimeAgentAutoBackground,
+  patchRuntimeCliHelpContract,
   patchRuntimeContextCacheFromParts,
   patchRuntimeDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
@@ -75,6 +76,29 @@ describe("runtime synchronization", () => {
     });
     expect(() => parseArgs(["--app", "/tmp/ZCode.app", "--lock", "runtime.json"])).toThrow(/cannot/);
     expect(() => parseArgs(["--version", "3.3.5"])).toThrow(/--app/);
+  });
+
+  test("hides advertised CLI options until the runtime parser supports them", () => {
+    const runtime = [
+      'help:s(e=>`Options:',
+      '  --settings <path>  Load settings',
+      '  --permission-mode <mode>  Legacy alias',
+      '  --max-turns <n>  Maximum turns',
+      '  --allowed-tools <list>  Tool allowlist',
+      '  --allow-main-worktree-yolo  Legacy compatibility',
+      '  --mode <mode>  Permission mode',
+      '`)',
+      'parse=s(e=>parseArgs({options:{"max-turns":{type:"string"},mode:{type:"string"}},strict:!0}),"parseGlobalArgs")'
+    ].join("\n");
+
+    const patched = patchRuntimeCliHelpContract(runtime);
+    expect(patched).not.toContain("--settings");
+    expect(patched).not.toContain("--permission-mode");
+    expect(patched).toContain("--max-turns <n>");
+    expect(patched).not.toContain("--allowed-tools");
+    expect(patched).not.toContain("--allow-main-worktree-yolo");
+    expect(patched).toContain("--mode <mode>");
+    expect(patchRuntimeCliHelpContract(patched)).toBe(patched);
   });
 
   test("validates locked runtime inputs before downloading", () => {

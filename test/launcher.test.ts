@@ -152,6 +152,15 @@ describe("launcher routing", () => {
       "--prompt",
       "inspect this page"
     ]);
+    expect(
+      withDefaultBrowserUse(["--surface", "terminal", "--prompt", "inspect this page"])
+    ).toEqual([
+      "--browser-use=headless",
+      "--surface",
+      "terminal",
+      "--prompt",
+      "inspect this page"
+    ]);
     expect(withDefaultBrowserUse(["--target=verify the site"])).toEqual([
       "--browser-use=headless",
       "--target=verify the site"
@@ -215,6 +224,7 @@ describe("launcher routing", () => {
   test("recognizes TUI invocations after consuming global option values", () => {
     expect(isTuiRuntimeInvocation([])).toBe(true);
     expect(isTuiRuntimeInvocation(["--cwd", "/tmp/project", "--settings", "custom.json", "tui"])).toBe(true);
+    expect(isTuiRuntimeInvocation(["--surface", "terminal", "tui"])).toBe(true);
     expect(isTuiRuntimeInvocation(["--browser-use", "headless", "--cwd", "/tmp/project", "tui"])).toBe(true);
     expect(isTuiRuntimeInvocation(["--prompt", "inspect this page"])).toBe(false);
     expect(isTuiRuntimeInvocation(["plugins", "list"])).toBe(false);
