@@ -8,6 +8,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
+import {
+  type RuntimeCapabilities,
+  type RuntimeCliOptionCapability
+} from "../src/runtime-capabilities.ts";
 import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,6 +60,112 @@ export interface RuntimeManifestResolution {
   lock: RuntimeLock;
   source: "service" | "static";
   url: string;
+}
+
+export type RuntimePatchRequirement = "required" | "optional";
+export type RuntimePatchStatus = "applied" | "already_present" | "skipped" | "failed";
+
+export interface RuntimePatchReport {
+  id: string;
+  requirement: RuntimePatchRequirement;
+  status: RuntimePatchStatus;
+  message?: string;
+}
+
+export interface RuntimePatchDefinition {
+  id: string;
+  requirement: RuntimePatchRequirement;
+  apply: (runtime: string) => string;
+  verify?: (runtime: string) => boolean;
+}
+
+export function parseRuntimePatchReports(value: unknown): RuntimePatchReport[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const reports: RuntimePatchReport[] = [];
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") return undefined;
+    const report = item as Record<string, unknown>;
+    if (typeof report.id !== "string" || !report.id || ids.has(report.id)) return undefined;
+    if (report.requirement !== "required" && report.requirement !== "optional") return undefined;
+    if (report.status !== "applied" && report.status !== "already_present"
+      && report.status !== "skipped" && report.status !== "failed") return undefined;
+    if (report.message !== undefined && typeof report.message !== "string") return undefined;
+    ids.add(report.id);
+    reports.push({
+      id: report.id,
+      requirement: report.requirement,
+      status: report.status,
+      ...(typeof report.message === "string" ? { message: report.message } : {})
+    });
+  }
+  return reports;
+}
+
+export interface RuntimeCompatibilityFailure {
+  schemaVersion: 1;
+  appVersion?: string;
+  generatedAt: string;
+  phase: "release_validation" | "runtime_discovery" | "runtime_patch" | "runtime_sync";
+  error: string;
+  runtimePatches: readonly RuntimePatchReport[];
+}
+
+export class RuntimePatchError extends Error {
+  readonly reports: RuntimePatchReport[];
+
+  constructor(patch: RuntimePatchDefinition, cause: unknown, reports: RuntimePatchReport[]) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Required runtime patch ${patch.id} failed: ${detail}`, { cause });
+    this.name = "RuntimePatchError";
+    this.reports = reports;
+  }
+}
+
+function markdownCell(value: string): string {
+  return value.replace(/\|/gu, "\\|").replace(/[\r\n]+/gu, " ");
+}
+
+export function formatRuntimeCompatibilityFailure(report: RuntimeCompatibilityFailure): string {
+  const lines = [
+    "## Upstream runtime compatibility failure",
+    "",
+    `- App version: \`${report.appVersion ?? "unknown"}\``,
+    `- Phase: \`${report.phase}\``,
+    `- Detected at: \`${report.generatedAt}\``,
+    "",
+    "```text",
+    report.error.replace(/```/gu, "'''"),
+    "```"
+  ];
+  if (report.runtimePatches.length > 0) {
+    lines.push(
+      "",
+      "| Patch | Requirement | Status | Detail |",
+      "| --- | --- | --- | --- |",
+      ...report.runtimePatches.map((patch) => [
+        markdownCell(patch.id),
+        patch.requirement,
+        patch.status,
+        markdownCell(patch.message ?? "")
+      ].join(" | ").replace(/^/u, "| ").replace(/$/u, " |"))
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export async function writeRuntimeCompatibilityFailure(
+  report: RuntimeCompatibilityFailure,
+  directory = join(root, ".release")
+): Promise<{ jsonPath: string; markdownPath: string }> {
+  const jsonPath = join(directory, "runtime-compatibility.json");
+  const markdownPath = join(directory, "runtime-compatibility.md");
+  await mkdir(directory, { recursive: true });
+  await Promise.all([
+    writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`),
+    writeFile(markdownPath, formatRuntimeCompatibilityFailure(report))
+  ]);
+  return { jsonPath, markdownPath };
 }
 
 type ManifestFetcher = (url: string, init?: RequestInit) => Promise<string>;
@@ -247,6 +357,59 @@ export function supportsMultiMessageFileRewind(runtime: string): boolean {
     .test(runtime);
 }
 
+export function extractRuntimeCapabilities(runtime: string): RuntimeCapabilities {
+  const parserEnd = runtime.indexOf('strict:!0}),"parseGlobalArgs"');
+  const parserStart = parserEnd < 0 ? -1 : runtime.lastIndexOf("options:{", parserEnd);
+  if (parserStart < 0 || parserEnd < 0) {
+    throw new Error("ZCode runtime is incompatible with CLI capability extraction (global parser anchor missing).");
+  }
+
+  const optionsSource = runtime.slice(parserStart + "options:{".length, parserEnd);
+  const globalOptions: Record<string, RuntimeCliOptionCapability> = {};
+  const optionPattern = /(?:^|,)(?:"([^"]+)"|([A-Za-z_$][\w$]*)):\{([^{}]*)\}/gu;
+  for (const match of optionsSource.matchAll(optionPattern)) {
+    const name = match[1] ?? match[2];
+    const type = /(?:^|,)type:"(boolean|string)"(?:,|$)/u.exec(match[3]!)?.[1];
+    if (!name || (type !== "boolean" && type !== "string")) continue;
+    globalOptions[name] = {
+      type,
+      ...(/(?:^|,)multiple:!0(?:,|$)/u.test(match[3]!) ? { multiple: true } : {})
+    };
+  }
+  if (!globalOptions.help || !globalOptions.version || !globalOptions.prompt) {
+    throw new Error("ZCode runtime is incompatible with CLI capability extraction (global options incomplete).");
+  }
+  return { schemaVersion: 1, cli: { globalOptions } };
+}
+
+const legacyHeadlessOptions = [
+  "settings",
+  "permission-mode",
+  "max-turns",
+  "allowed-tools",
+  "allow-main-worktree-yolo"
+] as const;
+
+function cliHelpOptionLine(option: string): RegExp {
+  const escaped = option.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`^  --${escaped}(?:[ \\t]|$)[^\\n]*\\n`, "gmu");
+}
+
+export function hasRuntimeCliHelpContract(runtime: string): boolean {
+  const supported = extractRuntimeCapabilities(runtime).cli.globalOptions;
+  return legacyHeadlessOptions.every((option) => supported[option] || !cliHelpOptionLine(option).test(runtime));
+}
+
+/** Hide compatibility options that the strict global parser cannot enforce. */
+export function patchRuntimeCliHelpContract(runtime: string): string {
+  const supported = extractRuntimeCapabilities(runtime).cli.globalOptions;
+  let patched = runtime;
+  for (const option of legacyHeadlessOptions) {
+    if (!supported[option]) patched = patched.replace(cliHelpOptionLine(option), "");
+  }
+  return patched;
+}
+
 /** Keep short Agent calls inline, but detach long-running agents from the foreground turn. */
 export function patchRuntimeAgentAutoBackground(runtime: string): string {
   const marker = "autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:";
@@ -327,6 +490,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const interruptTurnMarker = ".interruptTurn=async e=>";
   const interruptWaitForIdleMarker = "e?.waitForIdle===!0";
   const queuedInputPromotionMarker = "r?.pendingInputReservationId??r?.queryId??";
+  const projectionBridgeMarker = ".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ";
   const modeBridgePattern = /\.setMode=async/u;
   const modeOptionPattern = /setMode:[A-Za-z_$][\w$]*\.setMode/u;
   const transientModelBridgePattern = /\.setTransientModel=async/u;
@@ -371,7 +535,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && taskMessageBridgePattern.test(runtime)
     && taskMessageOptionPattern.test(runtime)
     && runtime.includes(taskMessageRestartMarker)
-    && runtime.includes("$ctxRuntimeUsage")
+    && runtime.includes(projectionBridgeMarker)
     && runtime.includes(".loadSessionContextMessages=async()=>await(await")
     && /loadSessionContextMessages:[A-Za-z_$][\w$]*\.loadSessionContextMessages/u.test(runtime);
   if (alreadyPatched) return runtime;
@@ -456,7 +620,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   const [recallAssignment, bridge, , getApp] = assignment;
   const assignments: string[] = [];
-  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let e=await ${getApp}(),t=await e.runtime?.getProjection?.();if(!t)return null;let r=Object.values(e.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.completedAt}));let $ctxRuntimeUsage=t.contextUsage;try{let o=await e.loadSessionContextMessages?.()??[],n=aSi(o);if(n)$ctxRuntimeUsage={...$ctxRuntimeUsage,used:$ctxRuntimeUsage?.used??(t.contextUsed>0?t.contextUsed:n.inputTokens??0),size:$ctxRuntimeUsage?.size??t.contextWindow,cache:{...$ctxRuntimeUsage?.cache,...n}}}catch{}return{...t,...$ctxRuntimeUsage?{contextUsage:$ctxRuntimeUsage}:{},backgroundTaskDetails:r}}`;
+  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ${getApp}(),t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;let r=Object.values($zRuntimeProjectionBridge.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.completedAt}));return{...t,backgroundTaskDetails:r}}`;
   const taskMessageAssignment = `${bridge}.sendBackgroundTaskMessage=async e=>{let t=await ${getApp}(),r=t.runtime,o=r?.runtimeTaskRegistry?.get?.(e?.taskId);if(!r?.subagentPort?.sendMessage)throw new Error("Background agent messaging is unavailable in this runtime.");if(!o||(o.type??o.taskType)!=="local_agent")throw new Error("The selected task is not a local agent.");if(typeof e?.message!=="string"||!e.message.trim())throw new Error("Enter a message for the background agent.");let n=e.message.trim().slice(0,2e4),i=(typeof e.summary==="string"?e.summary:n).replace(/\\s+/g," ").trim().slice(0,200);if(e?.restart===!0&&o.status==="running"){if(!r.subagentPort.stopTask)throw new Error("Background agent restart is unavailable in this runtime.");await r.subagentPort.stopTask(e.taskId),o=r.runtimeTaskRegistry?.get?.(e.taskId);if(!o)throw new Error("The background agent stopped but could not be restored.")}return await r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.(),turnId:o.turnId??"tui-task-message",parentToolCallId:o.parentToolCallId??"tui-task-message",to:o.agentId??e.taskId,summary:i,message:n,workingDirectory:o.workingDirectory??r.workingDirectory,workspaceRoot:o.workspaceRoot??r.workingDirectory,trace:o.traceContext??r.rootTraceContext})}`;
   if (!listSkillsBridgePattern.test(patched)) {
     const listSkillsFactory = /listSkills:[A-Za-z_$][\w$]*\(\(\)=>([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),"listSkills"\)/u
@@ -480,7 +644,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".readTodos=async()=>await(await")) {
     assignments.push(`${bridge}.readTodos=async()=>await(await ${getApp}()).readTodos?.()??[]`);
   }
-  if (!patched.includes("$ctxRuntimeUsage")) {
+  if (!patched.includes(projectionBridgeMarker)) {
     const existingProjectionStart = `${bridge}.readRuntimeProjection=async()=>`;
     const existingProjectionIndex = patched.indexOf(existingProjectionStart);
     if (existingProjectionIndex >= 0) {
@@ -822,89 +986,120 @@ export function patchRuntimeLoginModelDefaults(runtime: string): string {
   return patched;
 }
 
-/**
- * Repair `/context` cache stats for historical sessions whose assistant messages
- * carry zero tokens (pre-3.8.1 runtimes never persisted them on the main-turn path).
- *
- * The 3.8.1 runtime renamed the aggregator `mda`→`aSi`, the coercion helper
- * `zRe`→`YRe`, and the projection `LRe`→`oSi`. The token-write bug itself is
- * fixed at the source (the step-finish handler now calls `persistAssistantMessage`
- * with `tokens:Tq(r.result.usage)`), so this patch only needs the read-path
- * fallback: when an assistant message's `info.tokens` are all zero, fall back to
- * the last `step-finish` part that carries positive token counts.
- */
-export function patchRuntimeContextCacheFromParts(runtime: string): string {
-  const aggregateAnchor =
-    'function aSi(e){let t=0,r=0,n=0,o=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let c=YRe(l.info.tokens.input)??0,d=YRe(l.info.tokens.cache.read)??0,p=YRe(l.info.tokens.cache.write)??0;c<=0&&d<=0&&p<=0||(o+=1,t+=c,r+=d,n+=p,i=c,a=d,u=p)}';
-  const projectionAnchor =
-    'function oSi(e,t){if(t<=0)return;let r=aSi(e);for(let n=e.length-1;n>=0;n-=1){let o=e[n];if(!o)continue;if(o.info.role==="user"&&o.info.summary){let a=o.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Loe(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{cost:null,size:t,used:u}}}if(o.info.role!=="assistant"||o.info.summary)continue;let i=iSi(o.info.tokens);if(i!==void 0)return{...r?{cache:r}:{},cost:null,size:t,used:i}}}';
-  const projectionCallerAnchor =
-    'function t5e(e){let t=oSi(e.messages,e.projection.contextWindow);return Xki(nSi(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,eSi(e.persistedContextUsageBreakdownEvents??[]))}';
-  const projectionCallerMarker = "nSi(e.projection,t?.cache)??t";
+const goalFailurePauseMarker = /finishTargetTurnAccounting\(\{[^{}]*?status:"paused",traceContext:/u;
+const terminalProjectionMarkers = [
+  'status:"idle",currentTurnId:void 0,activeToolCalls:[],totalTokenCount:',
+  'status:"error",currentTurnId:void 0,activeToolCalls:[],lastError:'
+] as const;
+
+export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
+  {
+    id: "tui-bridge",
+    requirement: "required",
+    apply: patchRuntimeTuiBridge,
+    verify: (runtime) => runtime.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
+      && runtime.includes(".loadSessionContextMessages=async()=>await(await")
+  },
+  {
+    id: "goal-failure-pause",
+    requirement: "optional",
+    apply: patchRuntimeGoalFailurePause,
+    verify: (runtime) => goalFailurePauseMarker.test(runtime)
+  },
+  {
+    id: "terminal-tool-projection",
+    requirement: "optional",
+    apply: patchRuntimeTerminalToolProjection,
+    verify: (runtime) => terminalProjectionMarkers.every((marker) => runtime.includes(marker))
+  },
+  {
+    id: "detached-agent-lifecycle",
+    requirement: "optional",
+    apply: patchRuntimeDetachedAgentLifecycle,
+    verify: (runtime) => runtime.includes("Detached background agent lifecycle failed")
+  },
+  {
+    id: "agent-auto-background",
+    requirement: "optional",
+    apply: patchRuntimeAgentAutoBackground,
+    verify: (runtime) => runtime.includes(
+      "autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:"
+    )
+  },
+  {
+    id: "http-no-content",
+    requirement: "required",
+    apply: patchRuntimeHttpNoContent,
+    verify: hasRuntimeHttpNoContentGuard
+  },
+  {
+    id: "oauth-http-errors",
+    requirement: "optional",
+    apply: patchRuntimeOAuthHttpErrors,
+    verify: (runtime) => !runtime.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')
+  },
+  {
+    id: "desktop-oauth",
+    requirement: "required",
+    apply: patchRuntimeZaiDesktopOAuth,
+    verify: (runtime) => runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
+  },
+  {
+    id: "login-model-defaults",
+    requirement: "required",
+    apply: patchRuntimeLoginModelDefaults
+  },
+  {
+    id: "cli-help-contract",
+    requirement: "required",
+    apply: patchRuntimeCliHelpContract,
+    verify: hasRuntimeCliHelpContract
+  }
+];
+
+export function applyRuntimePatchPlan(
+  runtime: string,
+  patches: readonly RuntimePatchDefinition[] = runtimePatchPlan
+): { runtime: string; reports: RuntimePatchReport[] } {
   let patched = runtime;
-  if (!patched.includes("$ctxPartTokens")) {
-    const anchorIndex = patched.indexOf(aggregateAnchor);
-    if (anchorIndex < 0) {
-      throw new Error("ZCode runtime is incompatible with the context-cache patch (aggregator anchor missing).");
+  const reports: RuntimePatchReport[] = [];
+  for (const patch of patches) {
+    try {
+      const next = patch.apply(patched);
+      if (patch.apply(next) !== next) {
+        throw new Error("patch is not idempotent");
+      }
+      if (patch.verify && !patch.verify(next)) {
+        throw new Error("postcondition verification failed");
+      }
+      reports.push({
+        id: patch.id,
+        requirement: patch.requirement,
+        status: next === patched ? "already_present" : "applied"
+      });
+      patched = next;
+    } catch (error) {
+      const report: RuntimePatchReport = {
+        id: patch.id,
+        requirement: patch.requirement,
+        status: patch.requirement === "required" ? "failed" : "skipped",
+        message: error instanceof Error ? error.message : String(error)
+      };
+      reports.push(report);
+      if (patch.requirement === "required") {
+        throw new RuntimePatchError(patch, error, reports);
+      }
     }
-    const fallbackHelper = [
-      "let $ctxPartTokens=function(l){",
-      'let f=Array.isArray(l.parts)?l.parts.filter(function(x){return x&&x.type==="step-finish"&&x.tokens}):[];',
-      "for(let k=f.length-1;k>=0;k-=1){",
-      "let g=f[k].tokens||{},h=YRe(g.input)??0,y=YRe(g.cache&&g.cache.read)??0,w=YRe(g.cache&&g.cache.write)??0;",
-      "if(h>0||y>0||w>0)return{input:h,cache:{read:y,write:w}};}",
-      "return null};",
-      'let $ctxMsgTokens=function(l){let q=l.info.tokens;return q&&typeof q=="object"?{input:YRe(q.input)??0,cache:{read:YRe(q.cache&&q.cache.read)??0,write:YRe(q.cache&&q.cache.write)??0}}:{input:0,cache:{read:0,write:0}}};'
-    ].join("");
-    const replacement = `function aSi(e){${fallbackHelper}let t=0,r=0,n=0,o=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let v=$ctxPartTokens(l),m=$ctxMsgTokens(l);let c=m.input,d=m.cache.read,p=m.cache.write;if((c<=0&&d<=0&&p<=0)&&v){c=v.input;d=v.cache.read;p=v.cache.write}c<=0&&d<=0&&p<=0||(o+=1,t+=c,r+=d,n+=p,i=c,a=d,u=p)}`;
-    patched = patched.slice(0, anchorIndex) + replacement + patched.slice(anchorIndex + aggregateAnchor.length);
   }
-  if (!patched.includes("$ctxCache")) {
-    if (!patched.includes(projectionAnchor)) {
-      throw new Error("ZCode runtime is incompatible with the context-cache patch (projection anchor missing).");
-    }
-    patched = patched.replace(
-      projectionAnchor,
-      'function oSi(e,t){if(t<=0)return;let $ctxCache=aSi(e);for(let n=e.length-1;n>=0;n-=1){let o=e[n];if(!o)continue;if(o.info.role==="user"&&o.info.summary){let a=o.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Loe(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{...$ctxCache?{cache:$ctxCache}:{},cost:null,size:t,used:u}}}if(o.info.role!=="assistant"||o.info.summary)continue;let i=iSi(o.info.tokens);if(i!==void 0)return{...$ctxCache?{cache:$ctxCache}:{},cost:null,size:t,used:i}}return $ctxCache?{...$ctxCache?{cache:$ctxCache}:{},cost:null,size:t,used:void 0}:void 0}'
-    );
-  }
-  // The projection caller (t5e) has its own marker so a partial application
-  // (oSi patched but t5e not) is still detected instead of silently skipped.
-  if (!patched.includes(projectionCallerMarker)) {
-    if (!patched.includes(projectionCallerAnchor)) {
-      throw new Error("ZCode runtime is incompatible with the context-cache patch (projection caller anchor missing).");
-    }
-    patched = patched.replace(
-      projectionCallerAnchor,
-      'function t5e(e){let t=oSi(e.messages,e.projection.contextWindow);return Xki(nSi(e.projection,t?.cache)??t,eSi(e.persistedContextUsageBreakdownEvents??[]))}'
-    );
-  }
-  return patched;
+  return { runtime: patched, reports };
 }
 
-async function installTuiBridge(nextVendor: string): Promise<void> {
+async function installTuiBridge(nextVendor: string): Promise<RuntimePatchReport[]> {
   const runtimePath = join(nextVendor, "zcode.cjs");
   const runtime = await readFile(runtimePath, "utf8");
-  await writeFile(
-    runtimePath,
-    patchRuntimeContextCacheFromParts(
-      patchRuntimeLoginModelDefaults(
-        patchRuntimeZaiDesktopOAuth(
-          patchRuntimeOAuthHttpErrors(
-            patchRuntimeHttpNoContent(
-              patchRuntimeAgentAutoBackground(
-                patchRuntimeDetachedAgentLifecycle(
-                  patchRuntimeTerminalToolProjection(
-                    patchRuntimeGoalFailurePause(patchRuntimeTuiBridge(runtime))
-                  )
-                )
-              )
-            )
-          )
-        )
-      )
-    )
-  );
+  const result = applyRuntimePatchPlan(runtime);
+  await writeFile(runtimePath, result.runtime);
+  return result.reports;
 }
 
 async function findFile(directory: string, name: string): Promise<string | null> {
@@ -1031,21 +1226,32 @@ async function resolveSource(options: SyncOptions, temporaryDirectory: string): 
 async function sync(options: SyncOptions): Promise<void> {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), "zcode-cli-sync-"));
   const nextVendor = join(root, ".vendor-next");
+  const compatibilityJson = join(root, ".release", "runtime-compatibility.json");
+  const compatibilityMarkdown = join(root, ".release", "runtime-compatibility.md");
+  let source: RuntimeSource | undefined;
+  let runtimePatches: RuntimePatchReport[] = [];
+  await rm(compatibilityJson, { force: true });
+  await rm(compatibilityMarkdown, { force: true });
   try {
-    const source = await resolveSource(options, temporaryDirectory);
+    source = await resolveSource(options, temporaryDirectory);
     await rm(nextVendor, { recursive: true, force: true });
     await cp(source.glm, nextVendor, { recursive: true });
-    await installTuiBridge(nextVendor);
+    runtimePatches = await installTuiBridge(nextVendor);
     await installLocalTui(nextVendor);
     const node = process.env.ZCODE_NODE || Bun.which("node");
     if (!node) throw new Error("Node.js >=22.19 is required to validate the official ZCode runtime.");
     const cliVersion = await run(node, [join(nextVendor, "zcode.cjs"), "--version"], { capture: true });
+    const runtimeCapabilities = extractRuntimeCapabilities(
+      await readFile(join(nextVendor, "zcode.cjs"), "utf8")
+    );
     await writeFile(join(nextVendor, "extraction.json"), `${JSON.stringify({
       appVersion: source.appVersion,
       cliVersion,
       extractedAt: new Date().toISOString(),
       ...(source.lock ? { sha512: source.lock.sha512 } : {}),
       source: source.source,
+      runtimeCapabilities,
+      runtimePatches,
       tui: {
         implementation: "@zcode/tui",
         foundation: "@earendil-works/pi-tui"
@@ -1077,6 +1283,19 @@ async function sync(options: SyncOptions): Promise<void> {
     await rm(join(root, "vendor"), { recursive: true, force: true });
     await rename(nextVendor, join(root, "vendor"));
     console.log(`Prepared ${String(packageJson.name)}@${packageJson.version} with ${cliVersion}.`);
+  } catch (error) {
+    const report: RuntimeCompatibilityFailure = {
+      schemaVersion: 1,
+      ...(source ? { appVersion: source.appVersion } : {}),
+      generatedAt: new Date().toISOString(),
+      phase: !source
+        ? "runtime_discovery"
+        : error instanceof RuntimePatchError ? "runtime_patch" : "runtime_sync",
+      error: error instanceof Error ? error.message : String(error),
+      runtimePatches: error instanceof RuntimePatchError ? error.reports : runtimePatches
+    };
+    await writeRuntimeCompatibilityFailure(report, dirname(compatibilityJson));
+    throw error;
   } finally {
     await rm(nextVendor, { recursive: true, force: true });
     await rm(temporaryDirectory, { recursive: true, force: true });

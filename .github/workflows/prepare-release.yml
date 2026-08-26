@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 concurrency:
@@ -60,6 +61,45 @@ jobs:
 
       - name: Build and validate release candidate
         run: bun run release:prepare
+
+      - name: Summarize runtime compatibility failure
+        id: compatibility
+        if: failure() && hashFiles('.release/runtime-compatibility.md') != ''
+        run: |
+          PHASE=$(jq -r '.phase // "unknown"' .release/runtime-compatibility.json)
+          if [[ "$PHASE" == "runtime_discovery" ]]; then
+            echo "actionable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "actionable=true" >> "$GITHUB_OUTPUT"
+          fi
+          cat .release/runtime-compatibility.md >> "$GITHUB_STEP_SUMMARY"
+          echo "- Workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runtime compatibility report
+        if: failure() && hashFiles('.release/runtime-compatibility.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-compatibility-${{ github.run_id }}
+          path: |
+            .release/runtime-compatibility.json
+            .release/runtime-compatibility.md
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create or update runtime compatibility issue
+        if: failure() && github.event_name == 'schedule' && steps.compatibility.outputs.actionable == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: Automated upstream runtime compatibility failure
+        run: |
+          echo "- Workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> .release/runtime-compatibility.md
+          ISSUE_NUMBER=$(gh issue list --state open --search "${ISSUE_TITLE} in:title" --json number,title \
+            --jq ".[] | select(.title == \"${ISSUE_TITLE}\") | .number" | head -n 1)
+          if [[ -n "$ISSUE_NUMBER" ]]; then
+            gh issue edit "$ISSUE_NUMBER" --body-file .release/runtime-compatibility.md
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file .release/runtime-compatibility.md
+          fi
 
       - name: Increment build for a repackaged upstream runtime
         if: >-
@@ -169,6 +209,18 @@ jobs:
           echo "Prepared ${VERSION}: ${OPERATION}." >> "$GITHUB_STEP_SUMMARY"
           if [[ -n "$PR_URL" ]]; then
             echo "Release PR: ${PR_URL}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Close resolved runtime compatibility issue
+        if: success() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: Automated upstream runtime compatibility failure
+        run: |
+          ISSUE_NUMBER=$(gh issue list --state open --search "${ISSUE_TITLE} in:title" --json number,title \
+            --jq ".[] | select(.title == \"${ISSUE_TITLE}\") | .number" | head -n 1)
+          if [[ -n "$ISSUE_NUMBER" ]]; then
+            gh issue close "$ISSUE_NUMBER" --comment "Compatibility validation passed in ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
           fi
 
   keepalive:

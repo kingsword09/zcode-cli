@@ -1,4 +1,5 @@
 import { asString, isRecord } from "./types.ts";
+import { extractContextCacheTrend } from "./context-cache.ts";
 
 export type RuntimeToolStatus = "pending" | "running" | "completed" | "failed" | "denied";
 export type RuntimeBackgroundStatus =
@@ -360,6 +361,38 @@ export function normalizeRuntimeProjection(value: unknown): RuntimeProjectionSna
     } : undefined
   };
   return snapshot;
+}
+
+/** Enrich the stable local projection from persisted messages, without runtime internals. */
+export function mergeProjectionContextCache(
+  projection: RuntimeProjectionSnapshot | undefined,
+  messages: unknown
+): RuntimeProjectionSnapshot | undefined {
+  const usage = projection?.contextUsage;
+  if (!projection || !usage) return projection;
+
+  const trend = extractContextCacheTrend(messages);
+  if (trend.wholeTree.requests === 0) return projection;
+  const latest = trend.turns.findLast((turn) => turn.inputTokens !== undefined);
+  const summary = trend.wholeTree;
+  return {
+    ...projection,
+    contextUsage: {
+      ...usage,
+      cache: {
+        ...usage.cache,
+        inputTokens: latest?.inputTokens ?? usage.cache?.inputTokens,
+        cacheReadTokens: latest?.cacheReadTokens ?? usage.cache?.cacheReadTokens,
+        cacheWriteTokens: latest?.cacheWriteTokens ?? usage.cache?.cacheWriteTokens,
+        latestHitRate: latest?.hitRate ?? usage.cache?.latestHitRate,
+        hitRate: summary.hitRate ?? usage.cache?.hitRate,
+        hitRateRequestCount: summary.requests,
+        totalInputTokens: summary.inputTokens,
+        totalCacheReadTokens: summary.cacheReadTokens,
+        totalCacheWriteTokens: summary.cacheWriteTokens
+      }
+    }
+  };
 }
 
 export function isActiveRuntimeTool(tool: RuntimeActiveToolCall): boolean {

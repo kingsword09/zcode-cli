@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  mergeProjectionContextCache,
   normalizeRuntimeProjection,
   normalizeTodoGroups,
   normalizeTodos
@@ -137,6 +138,43 @@ describe("runtime projection normalization", () => {
         { source: "system_prompt", chars: 2_000 },
         { source: "messages", chars: 6_400 }
       ]
+    });
+  });
+
+  test("enriches cache usage from persisted step-finish parts without runtime symbols", () => {
+    const projection = normalizeRuntimeProjection({
+      sessionId: "session-legacy",
+      contextUsed: 2_000,
+      contextWindow: 10_000,
+      activeToolCalls: [],
+      backgroundJobs: []
+    });
+    const enriched = mergeProjectionContextCache(projection, [{
+      info: {
+        id: "assistant-1",
+        role: "assistant",
+        tokens: { input: 0, cache: { read: 0, write: 0 } }
+      },
+      parts: [{
+        type: "step-finish",
+        tokens: { input: 1_000, cache: { read: 900, write: 25 } }
+      }]
+    }]);
+
+    expect(enriched?.contextUsage).toMatchObject({
+      used: 2_000,
+      size: 10_000,
+      cache: {
+        inputTokens: 1_000,
+        cacheReadTokens: 900,
+        cacheWriteTokens: 25,
+        latestHitRate: 0.9,
+        hitRate: 0.9,
+        hitRateRequestCount: 1,
+        totalInputTokens: 1_000,
+        totalCacheReadTokens: 900,
+        totalCacheWriteTokens: 25
+      }
     });
   });
 

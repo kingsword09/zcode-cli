@@ -29,9 +29,12 @@ The synchronization command:
 2. downloads the matching installer;
 3. verifies its SHA-512 from the manifest;
 4. extracts `resources/glm`;
-5. builds and injects the local `@zcode/tui` adapter;
-6. validates the official CLI version;
-7. records provenance in `vendor/extraction.json`;
+5. applies the version-independent runtime patch plan and injects the local
+   `@zcode/tui` adapter;
+6. extracts the strict global CLI option contract and validates the official
+   CLI version;
+7. records provenance, CLI capabilities and each patch result in
+   `vendor/extraction.json`;
 8. records the remote artifact URL and SHA-512 in
    `zcode-runtime.lock.json`;
 9. aligns the npm version prefix with the ZCode App version while preserving
@@ -114,6 +117,21 @@ run **Prepare ZCode CLI release** with one of these modes:
 The modes use `release/zcode-cli` and `release/zcode-upstream` respectively. If
 both PRs are open, merge one and rerun the other preparation mode so its version
 is recalculated from the new `main` branch.
+
+Runtime patches are registered as `required` or `optional`. Required bridge,
+OAuth, HTTP and public CLI contract failures stop preparation. Optional
+diagnostics and presentation fixes record a `skipped` capability and allow the
+validated runtime to continue. Session cache aggregation lives in the local TUI
+and reads persisted messages through the adapter, so upstream minifier symbol
+changes do not affect it.
+
+If a required compatibility check fails, synchronization writes JSON and
+Markdown reports under `.release/`. The scheduled workflow uploads both files
+and creates or updates the fixed **Automated upstream runtime compatibility
+failure** issue. A later successful scheduled validation closes that issue.
+This separates an upstream incompatibility from download, checksum, permission
+and publishing failures without weakening the release gate. Discovery failures
+are still uploaded for diagnosis, but they do not create a compatibility issue.
 
 The workflow also runs a least-privilege keepalive job on scheduled events. It
 calls [GitHub's workflow-enable API](https://docs.github.com/en/rest/actions/workflows#enable-a-workflow)

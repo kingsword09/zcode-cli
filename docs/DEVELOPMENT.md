@@ -117,9 +117,14 @@ does not download a browser binary. Keep the executable discovery and launch
 logic in the official runtime; use `--browser-executable` for environments
 where the system Chrome/Chromium path is non-standard.
 
-Keep the injection classifier covered when runtime global options change. Do
-not add the flag to protocol or management commands; the runtime rejects it
-outside TUI, `--prompt` and `--target` invocations.
+Runtime synchronization extracts the strict `parseGlobalArgs` option table into
+`vendor/extraction.json`; the launcher consumes that capability manifest rather
+than maintaining a duplicate global-option list. Keep command-specific semantic
+constraints covered separately: for example, the runtime rejects `--surface`
+outside `--prompt`, `--target`, `app-server` and `agent-server` invocations.
+The launcher also supplies the runtime's official production `ZCODE_BASE_URL`
+when it is absent because bundled plugin MCP templates require an explicit
+value; an environment override remains authoritative.
 
 `zcode version`, `zcode --version` and `zcode -v` identify both packaged
 layers explicitly:

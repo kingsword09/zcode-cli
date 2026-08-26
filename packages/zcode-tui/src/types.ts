@@ -67,28 +67,11 @@ export type ListSkills = () => Promise<SkillSuggestionResult>;
 
 export type ListPluginReferences = () => Promise<unknown>;
 
-export interface TuiOptions {
-  initialMode?: string;
-  initialModel?: unknown;
-  initialThoughtLevel?: string;
-  loginRequired?: boolean;
-  locale?: string;
-  theme?: string;
-  developerMode?: boolean;
-  version?: string;
-  workspaceDirectory?: string;
-  workspaceGitBranch?: string;
-  noColor?: boolean;
-  effortOptions?: unknown[];
-  modelOptions?: unknown[];
-  slashCommands?: SlashCommandOption[];
-  stdin?: NodeJS.ReadStream;
-  stdout?: NodeJS.WriteStream;
-  stderr?: NodeJS.WriteStream;
+/** Stable boundary consumed by the local TUI; upstream details stay in the bridge. */
+export interface RuntimeAdapter {
   loadSessionTranscript?: () => Promise<unknown>;
   loadSessionContextMessages?: () => Promise<unknown>;
   listPluginReferences?: ListPluginReferences;
-  listWorkspacePathSuggestions?: ListWorkspacePathSuggestions;
   listSkills?: ListSkills;
   listModelOptions?: () => Promise<unknown[]>;
   setTransientModel?: (modelId: string) => Promise<unknown>;
@@ -115,13 +98,34 @@ export interface TuiOptions {
   ) => Promise<unknown>;
   submitPrompt: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   setMode?: (mode: string) => Promise<unknown>;
-  writeClipboardText?: (text: string) => Promise<void>;
-  readClipboardImage?: (options?: { abortSignal?: AbortSignal }) => Promise<unknown>;
   listMcpServers?: () => Promise<unknown>;
   refreshWorkflowPanel?: (options: { runId?: string }) => Promise<unknown>;
   stopWorkflow?: (options: { runId: string }) => Promise<unknown>;
   subscribeWorkflowEvents?: (listener: (event: unknown) => void) => (() => void) | void;
   subscribeSessionEvents?: (listener: (event: unknown) => void | Promise<void>) => (() => void) | void;
+}
+
+export interface TuiOptions extends RuntimeAdapter {
+  initialMode?: string;
+  initialModel?: unknown;
+  initialThoughtLevel?: string;
+  loginRequired?: boolean;
+  locale?: string;
+  theme?: string;
+  developerMode?: boolean;
+  version?: string;
+  workspaceDirectory?: string;
+  workspaceGitBranch?: string;
+  noColor?: boolean;
+  effortOptions?: unknown[];
+  modelOptions?: unknown[];
+  slashCommands?: SlashCommandOption[];
+  stdin?: NodeJS.ReadStream;
+  stdout?: NodeJS.WriteStream;
+  stderr?: NodeJS.WriteStream;
+  listWorkspacePathSuggestions?: ListWorkspacePathSuggestions;
+  writeClipboardText?: (text: string) => Promise<void>;
+  readClipboardImage?: (options?: { abortSignal?: AbortSignal }) => Promise<unknown>;
 }
 
 export function isRecord(value: unknown): value is UnknownRecord {

@@ -27,44 +27,53 @@ import {
 } from "./zai-oauth.ts";
 import { requestAppServer } from "./app-server-client.ts";
 import { runPluginCommand } from "./plugin-cli.ts";
+import {
+  capabilitiesFromExtractionMetadata,
+  type RuntimeCliOptionType
+} from "./runtime-capabilities.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifestPath = join(packageRoot, "package.json");
 const extractionMetadataPath = join(packageRoot, "vendor", "extraction.json");
 const runtimePath = join(packageRoot, "vendor", "zcode.cjs");
 const launcherPath = join(packageRoot, "bin", "zcode.js");
+const defaultZCodeBaseUrl = "https://zcode.z.ai";
 const defaultModelRetryMaxRetries = "5";
 const defaultBrowserUseArgument = "--browser-use=headless";
 const tuiRuntimeLogLimitBytes = 2 * 1024 * 1024;
 const versionArguments = new Set(["version", "--version", "-v"]);
-const runtimeBooleanOptions = new Set([
-  "--allow-main-worktree-yolo",
-  "--continue",
-  "--force",
-  "--force-mcs",
-  "--json",
-  "--no-browser",
-  "--no-color",
-  "--stdio",
-  "--target-replace",
-  "--verbose"
-]);
-const runtimeValueOptions = new Set([
-  "--allowed-tools",
-  "--attach",
-  "--browser-executable",
-  "--cwd",
-  "--locale",
-  "--max-turns",
-  "--mode",
-  "--permission-mode",
-  "--resume",
-  "--settings"
-]);
 const runtimeVariadicOptions = new Set(["--disallowedTools", "--disallowed-tools"]);
+const fallbackRuntimeOptionTypes: Readonly<Record<string, RuntimeCliOptionType>> = {
+  attach: "string",
+  "browser-executable": "string",
+  "browser-use": "string",
+  continue: "boolean",
+  cwd: "string",
+  force: "boolean",
+  "force-mcs": "boolean",
+  help: "boolean",
+  json: "boolean",
+  locale: "string",
+  mode: "string",
+  "no-browser": "boolean",
+  "no-color": "boolean",
+  "output-format": "string",
+  prompt: "string",
+  resume: "string",
+  stdio: "boolean",
+  surface: "string",
+  target: "string",
+  "target-replace": "boolean",
+  verbose: "boolean",
+  version: "boolean"
+};
 
 export function resolveModelRetryMaxRetries(env: NodeJS.ProcessEnv): string {
   return env.ZCODE_MODEL_RETRY_MAX_RETRIES?.trim() || defaultModelRetryMaxRetries;
+}
+
+export function resolveZCodeBaseUrl(env: NodeJS.ProcessEnv): string {
+  return env.ZCODE_BASE_URL?.trim() || defaultZCodeBaseUrl;
 }
 
 export function resolveNodeExecutable(): string {
@@ -82,6 +91,21 @@ function readJsonVersion(path: string, key: string): string | undefined {
     return safeVersion(value[key]);
   } catch {
     return undefined;
+  }
+}
+
+export function readRuntimeCliOptionTypes(
+  metadataPath = extractionMetadataPath
+): Readonly<Record<string, RuntimeCliOptionType>> {
+  try {
+    const metadata: unknown = JSON.parse(readFileSync(metadataPath, "utf8"));
+    const capabilities = capabilitiesFromExtractionMetadata(metadata);
+    if (!capabilities) return fallbackRuntimeOptionTypes;
+    return Object.fromEntries(
+      Object.entries(capabilities.cli.globalOptions).map(([name, option]) => [name, option.type])
+    );
+  } catch {
+    return fallbackRuntimeOptionTypes;
   }
 }
 
@@ -127,12 +151,16 @@ interface RuntimeInvocationInspection {
   passthrough: boolean;
 }
 
-function inspectRuntimeInvocation(args: string[]): RuntimeInvocationInspection {
+function inspectRuntimeInvocation(
+  args: string[],
+  runtimeOptionTypes: Readonly<Record<string, RuntimeCliOptionType>>
+): RuntimeInvocationInspection {
   let agentInvocation = false;
   let command: string | undefined;
   let explicitBrowserUse = false;
   let invalid = false;
   let passthrough = false;
+  let presentationSurface = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!;
@@ -176,14 +204,16 @@ function inspectRuntimeInvocation(args: string[]): RuntimeInvocationInspection {
         }
         continue;
       }
-      if (runtimeValueOptions.has(option)) {
+      const runtimeOptionType = runtimeOptionTypes[option.slice(2)];
+      if (runtimeOptionType === "string") {
+        presentationSurface ||= option === "--surface";
         if (!inlineValue) {
           if (index + 1 >= args.length || args[index + 1]!.startsWith("-")) invalid = true;
           else index += 1;
         }
         continue;
       }
-      if (runtimeBooleanOptions.has(option) && !inlineValue) continue;
+      if (runtimeOptionType === "boolean" && !inlineValue) continue;
       invalid = true;
       continue;
     }
@@ -207,11 +237,19 @@ function inspectRuntimeInvocation(args: string[]): RuntimeInvocationInspection {
     command ??= argument;
   }
 
+  if (presentationSurface
+    && !agentInvocation
+    && command !== "app-server"
+    && command !== "agent-server") invalid = true;
+
   return { agentInvocation, command, explicitBrowserUse, invalid, passthrough };
 }
 
-export function withDefaultBrowserUse(args: string[]): string[] {
-  const invocation = inspectRuntimeInvocation(args);
+export function withDefaultBrowserUse(
+  args: string[],
+  runtimeOptionTypes = readRuntimeCliOptionTypes()
+): string[] {
+  const invocation = inspectRuntimeInvocation(args, runtimeOptionTypes);
   if (invocation.explicitBrowserUse
     || invocation.passthrough
     || invocation.invalid
@@ -221,8 +259,11 @@ export function withDefaultBrowserUse(args: string[]): string[] {
   return [defaultBrowserUseArgument, ...args];
 }
 
-export function isTuiRuntimeInvocation(args: string[]): boolean {
-  const invocation = inspectRuntimeInvocation(args);
+export function isTuiRuntimeInvocation(
+  args: string[],
+  runtimeOptionTypes = readRuntimeCliOptionTypes()
+): boolean {
+  const invocation = inspectRuntimeInvocation(args, runtimeOptionTypes);
   return !invocation.agentInvocation
     && !invocation.invalid
     && !invocation.passthrough
@@ -244,6 +285,7 @@ function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, strin
   };
   const merged: NodeJS.ProcessEnv = {
     ...inherited,
+    ZCODE_BASE_URL: resolveZCodeBaseUrl(inherited),
     ZCODE_MODEL_RETRY_MAX_RETRIES: resolveModelRetryMaxRetries(inherited),
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,
     ZCODE_APP_CLI_ENTRY: launcherPath,

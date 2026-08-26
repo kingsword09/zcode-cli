@@ -1,13 +1,22 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, test } from "bun:test";
 
 import {
+  applyRuntimePatchPlan,
   chooseArtifact,
+  extractRuntimeCapabilities,
+  formatRuntimeCompatibilityFailure,
+  hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   manifestUrl,
   parseArgs,
+  parseRuntimePatchReports,
   parseRuntimeLock,
   patchRuntimeAgentAutoBackground,
-  patchRuntimeContextCacheFromParts,
+  patchRuntimeCliHelpContract,
   patchRuntimeDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
@@ -21,7 +30,8 @@ import {
   selectRuntimeLock,
   serviceManifestUrl,
   serviceReleasePlatform,
-  supportsMultiMessageFileRewind
+  supportsMultiMessageFileRewind,
+  writeRuntimeCompatibilityFailure
 } from "../scripts/sync-runtime.ts";
 import {
   compareReleaseVersions,
@@ -75,6 +85,44 @@ describe("runtime synchronization", () => {
     });
     expect(() => parseArgs(["--app", "/tmp/ZCode.app", "--lock", "runtime.json"])).toThrow(/cannot/);
     expect(() => parseArgs(["--version", "3.3.5"])).toThrow(/--app/);
+  });
+
+  test("extracts launcher option capabilities from the strict global parser", () => {
+    const runtime = 'parse=s(e=>parseArgs({options:{help:{short:"h",type:"boolean"},json:{type:"boolean"},"output-format":{type:"string"},prompt:{short:"p",type:"string"},attach:{multiple:!0,type:"string"},surface:{type:"string"},version:{short:"v",type:"boolean"}},strict:!0}),"parseGlobalArgs")';
+    expect(extractRuntimeCapabilities(runtime)).toEqual({
+      schemaVersion: 1,
+      cli: {
+        globalOptions: {
+          help: { type: "boolean" },
+          json: { type: "boolean" },
+          "output-format": { type: "string" },
+          prompt: { type: "string" },
+          attach: { type: "string", multiple: true },
+          surface: { type: "string" },
+          version: { type: "boolean" }
+        }
+      }
+    });
+    expect(() => extractRuntimeCapabilities("incompatible runtime")).toThrow(/global parser anchor/);
+  });
+
+  test("hides help options that are absent from the extracted parser contract", () => {
+    const runtime = [
+      "Options:",
+      "  --settings <path>  Load settings",
+      "  --max-turns <n>  Maximum turns",
+      "  --mode <mode>  Permission mode",
+      "  --surface <surface>  Presentation surface",
+      "",
+      'parse=s(e=>parseArgs({options:{help:{type:"boolean"},"max-turns":{type:"string"},mode:{type:"string"},prompt:{type:"string"},surface:{type:"string"},version:{type:"boolean"}},strict:!0}),"parseGlobalArgs")'
+    ].join("\n");
+
+    const patched = patchRuntimeCliHelpContract(runtime);
+    expect(patched).not.toContain("--settings");
+    expect(patched).toContain("--max-turns <n>");
+    expect(patched).toContain("--surface <surface>");
+    expect(hasRuntimeCliHelpContract(patched)).toBeTrue();
+    expect(patchRuntimeCliHelpContract(patched)).toBe(patched);
   });
 
   test("validates locked runtime inputs before downloading", () => {
@@ -307,130 +355,71 @@ describe("runtime synchronization", () => {
     );
   });
 
-  test("projects context cache usage from step-finish parts when message tokens are empty", () => {
-    const runtime = [
-      'function YRe(e){return typeof e=="number"&&Number.isInteger(e)&&e>=0?e:void 0}',
-      'function Loe(e){return typeof e=="number"&&Number.isInteger(e)&&e>0?e:void 0}',
-      'function Xki(e,t){return e}',
-      'function eSi(e){return}',
-      'function oSi(e,t){if(t<=0)return;let r=aSi(e);for(let n=e.length-1;n>=0;n-=1){let o=e[n];if(!o)continue;if(o.info.role==="user"&&o.info.summary){let a=o.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Loe(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{cost:null,size:t,used:u}}}if(o.info.role!=="assistant"||o.info.summary)continue;let i=iSi(o.info.tokens);if(i!==void 0)return{...r?{cache:r}:{},cost:null,size:t,used:i}}}',
-      'function nSi(e,t){if(!(e.contextUsed<=0||e.contextWindow<=0))return{...t?{cache:t}:{},cost:null,size:e.contextWindow,used:e.contextUsed}}',
-      'function aSi(e){let t=0,r=0,n=0,o=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;',
-      'let c=YRe(l.info.tokens.input)??0,d=YRe(l.info.tokens.cache.read)??0,p=YRe(l.info.tokens.cache.write)??0;',
-      'c<=0&&d<=0&&p<=0||(o+=1,t+=c,r+=d,n+=p,i=c,a=d,u=p)}',
-      'if(!(o<=0))return{inputTokens:i,cacheReadTokens:a,cacheWriteTokens:u,latestHitRate:i>0?a/i:null,hitRate:t>0?r/t:null,hitRateRequestCount:o,totalInputTokens:t,totalCacheReadTokens:r,totalCacheWriteTokens:n}}',
-      'function iSi(e){if(!e)return;let t=Loe(e.total);if(t!==void 0)return t;let r=Loe(e.input);if(r!==void 0)return r+(YRe(e.output)??0)}',
-      'function t5e(e){let t=oSi(e.messages,e.projection.contextWindow);return Xki(nSi(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,eSi(e.persistedContextUsageBreakdownEvents??[]))}',
-      'function fda(e){return e}'
-    ].join("");
-    const patched = patchRuntimeContextCacheFromParts(runtime);
-    const context = new Function(`${patched};return {aggregate:aSi,project:t5e};`)() as {
-      aggregate: (
-        messages: Array<{
-          info: { role: string; summary?: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } };
-          parts?: Array<{ type: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } }>;
-        }>
-      ) => Record<string, unknown> | undefined;
-      project: (state: {
-        messages: Array<{
-          info: { role: string; summary?: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } };
-          parts: Array<{ type: string; tokens?: { input?: number; cache?: { read?: number; write?: number } } }>;
-        }>;
-        persistedContextUsageBreakdownEvents?: unknown[];
-        projection: { contextUsed: number; contextWindow: number };
-      }) => Record<string, unknown> | undefined;
-    };
-    const aggregate = context.aggregate;
-
-    expect(patchRuntimeContextCacheFromParts(patched)).toBe(patched);
-    expect(() => patchRuntimeContextCacheFromParts("incompatible runtime")).toThrow(
-      /context-cache patch/
-    );
-
-    // Empty input: no messages with tokens or parts -> no cache block.
-    expect(aggregate([{ info: { role: "assistant", tokens: undefined }, parts: [] }])).toBeUndefined();
-
-    // Step-finish part fallback when message tokens are missing entirely.
-    const fromParts = aggregate([
+  test("applies required patches and records optional compatibility skips", () => {
+    const result = applyRuntimePatchPlan("runtime", [
       {
-        info: { role: "assistant", tokens: undefined },
-        parts: [
-          { type: "step-start" },
-          { type: "step-finish", tokens: { input: 1000, cache: { read: 900, write: 0 } } }
-        ]
+        id: "optional-diagnostic",
+        requirement: "optional",
+        apply: () => {
+          throw new Error("anchor moved");
+        }
+      },
+      {
+        id: "required-bridge",
+        requirement: "required",
+        apply: (runtime) => runtime.includes("|bridge") ? runtime : `${runtime}|bridge`,
+        verify: (runtime) => runtime.endsWith("|bridge")
       }
     ]);
-    expect(fromParts).toMatchObject({
-      inputTokens: 1000,
-      cacheReadTokens: 900,
-      cacheWriteTokens: 0,
-      latestHitRate: 0.9,
-      hitRate: 0.9,
-      hitRateRequestCount: 1,
-      totalInputTokens: 1000,
-      totalCacheReadTokens: 900
-    });
-    expect(context.project({
-      messages: [{
-        info: { role: "assistant", tokens: undefined },
-        parts: [{ type: "step-finish", tokens: { input: 1000, cache: { read: 900, write: 0 } } }]
-      }],
-      projection: { contextUsed: 1000, contextWindow: 100_000 }
-    })).toMatchObject({
-      used: 1000,
-      size: 100_000,
-      cache: {
-        inputTokens: 1000,
-        cacheReadTokens: 900,
-        latestHitRate: 0.9
-      }
-    });
 
-    // Message tokens win over parts; parts only fill the gap.
-    const preferMessage = aggregate([
+    expect(result.runtime).toBe("runtime|bridge");
+    expect(result.reports).toEqual([
       {
-        info: { role: "assistant", tokens: { input: 500, cache: { read: 500, write: 10 } } },
-        parts: [{ type: "step-finish", tokens: { input: 999, cache: { read: 1, write: 0 } } }]
-      }
+        id: "optional-diagnostic",
+        requirement: "optional",
+        status: "skipped",
+        message: "anchor moved"
+      },
+      { id: "required-bridge", requirement: "required", status: "applied" }
     ]);
-    expect(preferMessage).toMatchObject({ totalInputTokens: 500, totalCacheReadTokens: 500, totalCacheWriteTokens: 10 });
-
-    // Non-assistant and summary messages are ignored as before.
-    expect(aggregate([
-      { info: { role: "user" }, parts: [{ type: "step-finish", tokens: { input: 10, cache: { read: 1 } } }] },
-      { info: { role: "assistant", summary: "compact" }, parts: [{ type: "step-finish", tokens: { input: 10, cache: { read: 1 } } }] }
-    ])).toBeUndefined();
+    expect(() => applyRuntimePatchPlan("runtime", [{
+      id: "required-bridge",
+      requirement: "required",
+      apply: () => {
+        throw new Error("missing bridge anchor");
+      }
+    }])).toThrow(/Required runtime patch required-bridge failed/);
+    expect(parseRuntimePatchReports(result.reports)).toEqual(result.reports);
+    expect(parseRuntimePatchReports([{ ...result.reports[0], status: "unknown" }])).toBeUndefined();
   });
 
-  test("detects a partially applied context-cache patch instead of silently skipping t5e", () => {
-    // Simulate a runtime where oSi is patched ($ctxCache present) but t5e is not.
-    // Before the fix, the $ctxCache gate caused the whole block to skip, so t5e's
-    // stale `t?.used===contextUsed?t.cache:void 0` would silently survive.
-    const fullyPatched = patchRuntimeContextCacheFromParts([
-      'function YRe(e){return typeof e=="number"&&Number.isInteger(e)&&e>=0?e:void 0}',
-      'function Loe(e){return typeof e=="number"&&Number.isInteger(e)&&e>0?e:void 0}',
-      'function Xki(e,t){return e}',
-      'function eSi(e){return}',
-      'function oSi(e,t){if(t<=0)return;let r=aSi(e);for(let n=e.length-1;n>=0;n-=1){let o=e[n];if(!o)continue;if(o.info.role==="user"&&o.info.summary){let a=o.parts.find(u=>u.type==="compaction"&&u.compactBoundary);if(a?.type==="compaction"&&a.compactBoundary){let u=Loe(a.compactBoundary.truePostCompactTokenCount??a.compactBoundary.postCompactTokenCount);if(u!==void 0)return{cost:null,size:t,used:u}}}if(o.info.role!=="assistant"||o.info.summary)continue;let i=iSi(o.info.tokens);if(i!==void 0)return{...r?{cache:r}:{},cost:null,size:t,used:i}}}',
-      'function nSi(e,t){if(!(e.contextUsed<=0||e.contextWindow<=0))return{...t?{cache:t}:{},cost:null,size:e.contextWindow,used:e.contextUsed}}',
-      'function aSi(e){let t=0,r=0,n=0,o=0,i=0,a=0,u=0;for(let l of e){if(l.info.role!=="assistant"||l.info.summary)continue;let c=YRe(l.info.tokens.input)??0,d=YRe(l.info.tokens.cache.read)??0,p=YRe(l.info.tokens.cache.write)??0;c<=0&&d<=0&&p<=0||(o+=1,t+=c,r+=d,n+=p,i=c,a=d,u=p)}if(!(o<=0))return{inputTokens:i,cacheReadTokens:a,cacheWriteTokens:u,latestHitRate:i>0?a/i:null,hitRate:t>0?r/t:null,hitRateRequestCount:o,totalInputTokens:t,totalCacheReadTokens:r,totalCacheWriteTokens:n}}',
-      'function iSi(e){if(!e)return;let t=Loe(e.total);if(t!==void 0)return t;let r=Loe(e.input);if(r!==void 0)return r+(YRe(e.output)??0)}',
-      'function t5e(e){let t=oSi(e.messages,e.projection.contextWindow);return Xki(nSi(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t,eSi(e.persistedContextUsageBreakdownEvents??[]))}'
-    ].join(""));
-    expect(fullyPatched).toContain("nSi(e.projection,t?.cache)??t");
+  test("formats and writes actionable compatibility reports for CI and issue updates", async () => {
+    const report = {
+      schemaVersion: 1,
+      appVersion: "3.9.1",
+      generatedAt: "2026-08-26T01:30:00.000Z",
+      phase: "runtime_patch" as const,
+      error: "Required runtime patch tui-bridge failed: anchor missing",
+      runtimePatches: [{
+        id: "tui-bridge",
+        requirement: "required" as const,
+        status: "failed" as const,
+        message: "anchor | missing"
+      }]
+    } as const;
+    const markdown = formatRuntimeCompatibilityFailure(report);
+    expect(markdown).toContain("App version: `3.9.1`");
+    expect(markdown).toContain("Required runtime patch tui-bridge failed");
+    expect(markdown).toContain("anchor \\| missing");
 
-    // Roll back ONLY the t5e patch (revert to the stale caller) while keeping oSi.
-    const partial = fullyPatched.replace(
-      "nSi(e.projection,t?.cache)??t",
-      "nSi(e.projection,t?.used===e.projection.contextUsed?t.cache:void 0)??t"
-    );
-    expect(partial).not.toContain("nSi(e.projection,t?.cache)??t");
-    // Re-applying must detect and fix the missing t5e patch — not silently skip it.
-    const repaired = patchRuntimeContextCacheFromParts(partial);
-    expect(repaired).toContain("nSi(e.projection,t?.cache)??t");
-    expect(repaired).not.toContain("t?.used===e.projection.contextUsed?t.cache:void 0");
-    // Idempotence on the fully-patched runtime is preserved.
-    expect(patchRuntimeContextCacheFromParts(fullyPatched)).toBe(fullyPatched);
+    const directory = await mkdtemp(join(tmpdir(), "zcode-runtime-report-"));
+    try {
+      const paths = await writeRuntimeCompatibilityFailure(report, directory);
+      expect(await Bun.file(paths.jsonPath).json()).toEqual(report);
+      expect(await Bun.file(paths.markdownPath).text()).toBe(markdown);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test("maps supported static updater manifests", () => {
@@ -573,13 +562,11 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("E.listSkills=async()=>await H(e)");
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
     expect(patched).toContain("E.readTodos=async()=>await(await S()).readTodos?.()??[]");
-    expect(patched).toContain("E.readRuntimeProjection=async()=>{let e=await S(),t=await e.runtime?.getProjection?.();if(!t)return null;");
+    expect(patched).toContain("E.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await S(),t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;");
     expect(patched).toContain(".filter(o=>o.isBackgrounded===!0).map(o=>");
     expect(patched).toContain("backgroundTaskDetails:r");
     expect(patched).toContain('loadSessionContextMessages:a(async()=>await e.sessionStore.messages({sessionID:e.sessionId}),"loadSessionContextMessages")');
-    expect(patched).toContain("e.loadSessionContextMessages?.()");
-    expect(patched).toContain("n=aSi(o)");
-    expect(patched).toContain("$ctxRuntimeUsage");
+    expect(patched).not.toContain("$zRuntimeProjectionBridge.loadSessionContextMessages?.()");
     expect(patched).not.toContain("e.loadSessionTranscript?.()");
     expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
     expect(patched).toContain("E.cancelBackgroundTask=async e=>await(await S()).cancelBackgroundTask?.(e)??null");
@@ -631,46 +618,29 @@ describe("runtime synchronization", () => {
     const projectionStart = patched.indexOf("E.readRuntimeProjection=async()=>");
     const projectionEnd = patched.indexOf(",E.readSessionUsage=", projectionStart);
     const projectionAssignment = patched.slice(projectionStart, projectionEnd);
-    const rawMessages = [{ info: { role: "assistant" }, parts: [] }];
     const bridge: { readRuntimeProjection?: () => Promise<Record<string, unknown>> } = {};
     const readRuntimeProjection = new Function(
       "E",
       "S",
-      "aSi",
       `${projectionAssignment};return E.readRuntimeProjection;`
     )(
       bridge,
       async () => ({
-        loadSessionContextMessages: async () => rawMessages,
         runtime: {
           getProjection: () => ({
             activeToolCalls: [],
             backgroundTasks: [],
-            contextUsed: 0,
+            contextUsed: 1_000,
             contextWindow: 100_000
           }),
           runtimeTaskRegistry: { all: () => ({}) }
         }
-      }),
-      (messages: unknown) => {
-        expect(messages).toBe(rawMessages);
-        return {
-          inputTokens: 1_000,
-          cacheReadTokens: 900,
-          latestHitRate: 0.9
-        };
-      }
+      })
     ) as () => Promise<Record<string, unknown>>;
     expect(await readRuntimeProjection()).toMatchObject({
-      contextUsage: {
-        used: 1_000,
-        size: 100_000,
-        cache: {
-          inputTokens: 1_000,
-          cacheReadTokens: 900,
-          latestHitRate: 0.9
-        }
-      }
+      contextUsed: 1_000,
+      contextWindow: 100_000,
+      backgroundTaskDetails: []
     });
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     const previousInterruptPatch = patched.replace("e?.waitForIdle===!0", "e?.waitForIdle===!1");

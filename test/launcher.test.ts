@@ -18,18 +18,30 @@ import {
   isTuiRuntimeInvocation,
   isVersionInvocation,
   normalizeLoginArgs,
+  readRuntimeCliOptionTypes,
   readDistributionVersion,
   readRuntimeVersion,
   resolveModelRetryMaxRetries,
+  resolveZCodeBaseUrl,
   withDefaultBrowserUse
 } from "../src/launcher.ts";
 import { classifyZaiOAuthInvocation } from "../src/zai-oauth.ts";
 
 describe("launcher routing", () => {
+  const runtime39OptionTypes = {
+    ...readRuntimeCliOptionTypes(),
+    "output-format": "string" as const
+  };
+
   test("uses five runtime retries by default and preserves an explicit override", () => {
     expect(resolveModelRetryMaxRetries({})).toBe("5");
     expect(resolveModelRetryMaxRetries({ ZCODE_MODEL_RETRY_MAX_RETRIES: " 2 " })).toBe("2");
     expect(resolveModelRetryMaxRetries({ ZCODE_MODEL_RETRY_MAX_RETRIES: " " })).toBe("5");
+  });
+
+  test("supplies the official plugin API origin while preserving an explicit override", () => {
+    expect(resolveZCodeBaseUrl({})).toBe("https://zcode.z.ai");
+    expect(resolveZCodeBaseUrl({ ZCODE_BASE_URL: " https://example.test " })).toBe("https://example.test");
   });
 
   test("reads a safe npm distribution version", async () => {
@@ -152,6 +164,22 @@ describe("launcher routing", () => {
       "--prompt",
       "inspect this page"
     ]);
+    expect(withDefaultBrowserUse([
+      "--output-format",
+      "json",
+      "--surface",
+      "terminal",
+      "--prompt",
+      "inspect this page"
+    ], runtime39OptionTypes)).toEqual([
+      "--browser-use=headless",
+      "--output-format",
+      "json",
+      "--surface",
+      "terminal",
+      "--prompt",
+      "inspect this page"
+    ]);
     expect(withDefaultBrowserUse(["--target=verify the site"])).toEqual([
       "--browser-use=headless",
       "--target=verify the site"
@@ -159,30 +187,6 @@ describe("launcher routing", () => {
     expect(withDefaultBrowserUse(["--print", "inspect this page"])).toEqual([
       "--browser-use=headless",
       "--print",
-      "inspect this page"
-    ]);
-    expect(withDefaultBrowserUse([
-      "--settings",
-      "custom.json",
-      "--permission-mode",
-      "plan",
-      "--max-turns",
-      "3",
-      "--allowed-tools",
-      "Skill",
-      "--prompt",
-      "inspect this page"
-    ])).toEqual([
-      "--browser-use=headless",
-      "--settings",
-      "custom.json",
-      "--permission-mode",
-      "plan",
-      "--max-turns",
-      "3",
-      "--allowed-tools",
-      "Skill",
-      "--prompt",
       "inspect this page"
     ]);
     expect(withDefaultBrowserUse(["--browser-executable", "/opt/chrome", "tui"])).toEqual([
@@ -204,6 +208,8 @@ describe("launcher routing", () => {
       ["app-server"],
       ["login"],
       ["commands", "list"],
+      ["--surface", "terminal", "tui"],
+      ["--settings", "custom.json", "--prompt", "inspect this page"],
       ["--help"],
       ["--version"],
       ["--unknown"]
@@ -214,8 +220,10 @@ describe("launcher routing", () => {
 
   test("recognizes TUI invocations after consuming global option values", () => {
     expect(isTuiRuntimeInvocation([])).toBe(true);
-    expect(isTuiRuntimeInvocation(["--cwd", "/tmp/project", "--settings", "custom.json", "tui"])).toBe(true);
+    expect(isTuiRuntimeInvocation(["--cwd", "/tmp/project", "--mode", "plan", "tui"])).toBe(true);
+    expect(isTuiRuntimeInvocation(["--output-format", "json", "tui"], runtime39OptionTypes)).toBe(true);
     expect(isTuiRuntimeInvocation(["--browser-use", "headless", "--cwd", "/tmp/project", "tui"])).toBe(true);
+    expect(isTuiRuntimeInvocation(["--surface", "terminal", "tui"])).toBe(false);
     expect(isTuiRuntimeInvocation(["--prompt", "inspect this page"])).toBe(false);
     expect(isTuiRuntimeInvocation(["plugins", "list"])).toBe(false);
     expect(isTuiRuntimeInvocation(["--help"])).toBe(false);

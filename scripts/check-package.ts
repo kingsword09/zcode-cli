@@ -6,8 +6,9 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseRuntimeCapabilities } from "../src/runtime-capabilities.ts";
 import { parseReleaseVersion } from "./release-version.ts";
-import { parseRuntimeLock } from "./sync-runtime.ts";
+import { parseRuntimeLock, parseRuntimePatchReports, runtimePatchPlan } from "./sync-runtime.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const publishedFiles = [
@@ -46,6 +47,8 @@ interface ExtractionMetadata {
   cliVersion?: unknown;
   source?: unknown;
   sha512?: unknown;
+  runtimeCapabilities?: unknown;
+  runtimePatches?: unknown;
 }
 
 async function sha512(path: string): Promise<string> {
@@ -144,6 +147,20 @@ export async function validatePackageTree(base = root): Promise<void> {
   }
   if (typeof extraction.cliVersion !== "string" || !/^\d+\.\d+\.\d+/u.test(extraction.cliVersion)) {
     throw new Error("Extracted runtime has no valid CLI version.");
+  }
+  if (!parseRuntimeCapabilities(extraction.runtimeCapabilities)) {
+    throw new Error("Extracted runtime has no valid capability manifest.");
+  }
+  const reports = new Map(
+    (parseRuntimePatchReports(extraction.runtimePatches) ?? []).map((report) => [report.id, report])
+  );
+  for (const patch of runtimePatchPlan) {
+    const report = reports.get(patch.id);
+    const status = report?.status;
+    if (!report || report.requirement !== patch.requirement
+      || (patch.requirement === "required" && status !== "applied" && status !== "already_present")) {
+      throw new Error(`Extracted runtime patch report is invalid for ${patch.id}.`);
+    }
   }
 
   const sourceTui = join(base, "packages", "zcode-tui", "dist", "index.js");

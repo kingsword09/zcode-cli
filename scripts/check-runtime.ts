@@ -3,15 +3,20 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { formatVersionOutput, readDistributionVersion } from "../src/launcher.ts";
+import { capabilitiesFromExtractionMetadata } from "../src/runtime-capabilities.ts";
 import {
+  extractRuntimeCapabilities,
+  hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
-  patchRuntimeContextCacheFromParts,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
+  parseRuntimePatchReports,
+  runtimePatchPlan,
   supportsMultiMessageFileRewind
 } from "./sync-runtime.ts";
 
@@ -28,6 +33,24 @@ if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode ru
 const packageManifest = await Bun.file(join(root, "package.json")).json() as {
   dependencies?: Record<string, unknown>;
 };
+const extractionMetadata: unknown = await Bun.file(join(root, "vendor", "extraction.json")).json();
+const metadataRecord = extractionMetadata && typeof extractionMetadata === "object"
+  ? extractionMetadata as Record<string, unknown>
+  : {};
+const patchReports = new Map(
+  (parseRuntimePatchReports(metadataRecord.runtimePatches) ?? []).map((report) => [report.id, report])
+);
+const patchEnabled = (id: string): boolean => {
+  const status = patchReports.get(id)?.status;
+  return status === "applied" || status === "already_present";
+};
+for (const patch of runtimePatchPlan) {
+  const report = patchReports.get(patch.id);
+  if (!report || report.requirement !== patch.requirement
+    || (patch.requirement === "required" && !patchEnabled(patch.id))) {
+    throw new Error(`Runtime patch report is missing or invalid for ${patch.id}.`);
+  }
+}
 const playwrightManifest = await Bun.file(require.resolve("playwright-core/package.json")).json() as {
   version?: unknown;
 };
@@ -37,18 +60,24 @@ if (packageManifest.dependencies?.["playwright-core"] !== "1.59.1"
 }
 
 const runtimeSource = await Bun.file(runtime).text();
+const metadataCapabilities = capabilitiesFromExtractionMetadata(extractionMetadata);
+if (!metadataCapabilities
+  || !isDeepStrictEqual(metadataCapabilities, extractRuntimeCapabilities(runtimeSource))) {
+  throw new Error("The extracted runtime capability manifest is missing or stale; run `bun run sync` again.");
+}
 if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
-  || patchRuntimeContextCacheFromParts(runtimeSource) !== runtimeSource
-  || patchRuntimeGoalFailurePause(runtimeSource) !== runtimeSource
+  || (patchEnabled("goal-failure-pause") && patchRuntimeGoalFailurePause(runtimeSource) !== runtimeSource)
   || patchRuntimeHttpNoContent(runtimeSource) !== runtimeSource
   || !hasRuntimeHttpNoContentGuard(runtimeSource)
-  || !runtimeSource.includes("nSi(e.projection,t?.cache)??t")
+  || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
+  || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
   || !runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes('return await import("playwright-core")')
   || !runtimeSource.includes('pluginsReferenceCatalog:"plugins/referenceCatalog"')
   || !runtimeSource.includes('pluginsMarketplaceAdd:"plugins/marketplace/add"')
   || !runtimeSource.includes('pluginsInstall:"plugins/install"')
-  || runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')
+  || (patchEnabled("oauth-http-errors")
+    && runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 0}'))
   || !runtimeSource.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
   || !runtimeSource.includes(".loadSessionTranscript=async()=>await(await")
   || !runtimeSource.includes('"loadSessionContextMessages"')
@@ -64,12 +93,16 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !runtimeSource.includes(".subscribeSessionEvents=")
   || !runtimeSource.includes(".sendBackgroundTaskMessage=async")
   || !runtimeSource.includes("backgroundTaskDetails")
-  || !runtimeSource.includes("autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:")
-  || runtimeSource.split("Detached background agent lifecycle failed").length < 3
+  || (patchEnabled("agent-auto-background")
+    && !runtimeSource.includes("autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:"))
+  || (patchEnabled("detached-agent-lifecycle")
+    && runtimeSource.split("Detached background agent lifecycle failed").length < 3)
   || !runtimeSource.includes('if(e?.restart===!0&&o.status==="running")')
   || !runtimeSource.includes('e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId')
-  || !runtimeSource.includes('status:"idle",currentTurnId:void 0,activeToolCalls:[],totalTokenCount:')
-  || !runtimeSource.includes('status:"error",currentTurnId:void 0,activeToolCalls:[],lastError:')
+  || (patchEnabled("terminal-tool-projection")
+    && !runtimeSource.includes('status:"idle",currentTurnId:void 0,activeToolCalls:[],totalTokenCount:'))
+  || (patchEnabled("terminal-tool-projection")
+    && !runtimeSource.includes('status:"error",currentTurnId:void 0,activeToolCalls:[],lastError:'))
   || !/runtimeTaskRegistry\?\.all\?\.\(\)\?\?\{\}\)\.filter\(([A-Za-z_$][\w$]*)=>\1\.isBackgrounded===!0\)\.map\(/u.test(runtimeSource)
   || !supportsMultiMessageFileRewind(runtimeSource)
   || !/messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"/u.test(runtimeSource)

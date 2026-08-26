@@ -174,6 +174,7 @@ import {
 import { SkillCatalog } from "./skills.ts";
 import {
   isActiveBackgroundJob,
+  mergeProjectionContextCache,
   normalizeRuntimeProjection,
   normalizeTodoGroups,
   normalizeTodos,
@@ -4634,9 +4635,12 @@ class ZCodeTui {
     try {
       do {
         this.runtimeRefreshPending = false;
-        const [projectionResult, todosResult] = await Promise.allSettled([
+        const [projectionResult, todosResult, contextMessagesResult] = await Promise.allSettled([
           this.options.readRuntimeProjection?.(),
-          this.options.readTodos?.()
+          this.options.readTodos?.(),
+          this.options.readRuntimeProjection && this.options.loadSessionContextMessages
+            ? this.options.loadSessionContextMessages()
+            : Promise.resolve(undefined)
         ]);
         const next: RuntimePollState = {
           projection: this.runtimeProjection,
@@ -4644,7 +4648,11 @@ class ZCodeTui {
           todoGroups: this.todoGroups
         };
         if (projectionResult.status === "fulfilled" && projectionResult.value !== undefined) {
-          next.projection = normalizeRuntimeProjection(projectionResult.value) ?? next.projection;
+          const projection = normalizeRuntimeProjection(projectionResult.value);
+          next.projection = contextMessagesResult.status === "fulfilled"
+            && contextMessagesResult.value !== undefined
+            ? mergeProjectionContextCache(projection, contextMessagesResult.value) ?? next.projection
+            : projection ?? next.projection;
           if (isRecord(projectionResult.value) && Array.isArray(projectionResult.value.todoGroups)) {
             next.todoGroups = normalizeTodoGroups(projectionResult.value);
           }

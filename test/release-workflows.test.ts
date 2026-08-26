@@ -125,13 +125,27 @@ describe("release workflows", () => {
     expect(workflow.on.schedule).toEqual([
       { cron: "30 1 * * *", timezone: "Asia/Shanghai" }
     ]);
-    expect(workflow.permissions).toEqual({ contents: "write", "pull-requests": "write" });
+    expect(workflow.permissions).toEqual({ contents: "write", issues: "write", "pull-requests": "write" });
     expect(job.if).toContain("github.event_name == 'schedule'");
     expect(job.if).toContain("github.ref_name == github.event.repository.default_branch");
     expect(checkout?.with?.["persist-credentials"]).toBe(false);
     expect(setupNode?.with?.["package-manager-cache"]).toBe(false);
     expect(setupBun).toBeDefined();
     expect(releaseBuild?.run).toBe("bun run release:prepare");
+    const compatibilitySummary = steps.find((step) => step.name === "Summarize runtime compatibility failure");
+    const compatibilityUpload = findAction(steps, "actions/upload-artifact", actionShas.uploadArtifact);
+    const compatibilityIssue = steps.find((step) => step.name === "Create or update runtime compatibility issue");
+    const resolvedIssue = steps.find((step) => step.name === "Close resolved runtime compatibility issue");
+    expect(compatibilitySummary?.if).toContain("failure()");
+    expect(compatibilitySummary?.run).toContain("runtime-compatibility.md");
+    expect(compatibilitySummary?.run).toContain('PHASE" == "runtime_discovery"');
+    expect(compatibilityUpload?.if).toContain("runtime-compatibility.json");
+    expect(compatibilityUpload?.with?.["if-no-files-found"]).toBe("error");
+    expect(compatibilityIssue?.if).toContain("steps.compatibility.outputs.actionable == 'true'");
+    expect(compatibilityIssue?.run).toContain("gh issue edit");
+    expect(compatibilityIssue?.run).toContain("gh issue create");
+    expect(resolvedIssue?.if).toContain("success()");
+    expect(resolvedIssue?.run).toContain("gh issue close");
     expect(releaseMetadata?.env?.BASE_VERSION).toBe("${{ steps.base.outputs.package_version }}");
     expect(releaseMetadata?.run).toContain(
       "compareReleaseVersions(process.env.PACKAGE_VERSION, process.env.BASE_VERSION) > 0"

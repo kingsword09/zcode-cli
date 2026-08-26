@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { validatePackageTree } from "../scripts/check-package.ts";
+import { runtimePatchPlan } from "../scripts/sync-runtime.ts";
 import {
   type PackFile,
   type PackResult,
@@ -86,6 +87,10 @@ describe("release package", () => {
 
     expect(syncStep).toBeGreaterThan(-1);
     expect(testStep).toBeGreaterThan(syncStep);
+    expect(source).toContain('phase: "release_validation"');
+    expect(source).toContain("latestRuntimeSynced = latest");
+    expect(source).toContain("if (latestRuntimeSynced && !existsSync(reportPath))");
+    expect(source).toContain("writeRuntimeCompatibilityFailure(report)");
   });
 
   test("accepts reviewed paths and rejects omissions or development files", () => {
@@ -159,7 +164,16 @@ describe("release package", () => {
         appVersion: lock.appVersion,
         cliVersion: "0.15.2",
         source: lock.url,
-        sha512: lock.sha512
+        sha512: lock.sha512,
+        runtimeCapabilities: {
+          schemaVersion: 1,
+          cli: { globalOptions: { help: { type: "boolean" } } }
+        },
+        runtimePatches: runtimePatchPlan.map((patch) => ({
+          id: patch.id,
+          requirement: patch.requirement,
+          status: "already_present"
+        }))
       })}\n`,
       "vendor/node_modules/@zcode/tui/dist/index.js": "export const value = 1;\n",
       "vendor/node_modules/@zcode/tui/package.json": `${JSON.stringify(tuiPackage)}\n`,
