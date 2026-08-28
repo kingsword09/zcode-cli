@@ -109,6 +109,7 @@ export interface TuiOptions extends RuntimeAdapter {
   initialMode?: string;
   initialModel?: unknown;
   initialThoughtLevel?: string;
+  initialTuiMode?: "regular" | "fullscreen";
   loginRequired?: boolean;
   locale?: string;
   theme?: string;

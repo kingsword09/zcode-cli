@@ -8,6 +8,7 @@ import {
   truncateToWidth,
   type Component,
   type Container,
+  type OverlayHandle,
   type SelectItem,
   type TUI
 } from "@earendil-works/pi-tui";
@@ -24,6 +25,63 @@ import {
 export interface ChoiceItem extends SelectItem {
   payload?: unknown;
   preview?: Component;
+}
+
+const fullscreenDialogContentMaxWidth = 100;
+
+class FullscreenDialogSurface implements Component {
+  focused = false;
+
+  constructor(
+    private readonly dialog: Component,
+    private readonly theme: ZCodeTheme
+  ) {}
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(1, width);
+    if ("focused" in this.dialog) {
+      (this.dialog as Component & { focused: boolean }).focused = this.focused;
+    }
+    const inset = safeWidth >= 12 ? 2 : 0;
+    const contentWidth = Math.max(
+      1,
+      Math.min(fullscreenDialogContentMaxWidth, safeWidth - inset * 2)
+    );
+    const prefix = " ".repeat(inset);
+    const rule = this.theme.muted("─".repeat(safeWidth));
+    return [
+      rule,
+      ...this.dialog.render(contentWidth).map((line) => (
+        truncateToWidth(`${prefix}${line}`, safeWidth, "", true)
+      )),
+      rule
+    ];
+  }
+
+  handleInput(data: string): void {
+    this.dialog.handleInput?.(data);
+  }
+
+  invalidate(): void {
+    this.dialog.invalidate();
+  }
+}
+
+function showFullscreenDialog(
+  ui: TUI,
+  theme: ZCodeTheme,
+  dialog: Component
+): { focus: Component; handle: OverlayHandle } | undefined {
+  if (ui.mode !== "fullscreen" || typeof ui.showOverlay !== "function") return undefined;
+  const surface = new FullscreenDialogSurface(dialog, theme);
+  return {
+    focus: surface,
+    handle: ui.showOverlay(surface, {
+      anchor: "bottom-left",
+      maxHeight: "100%",
+      width: "100%"
+    })
+  };
 }
 
 class ChoiceItemDetails implements Component {
@@ -329,11 +387,13 @@ export function choose(
     };
     dialog.setSelectionPreview(previewFor(list.getSelectedItem()));
     let settled = false;
+    let overlayHandle: OverlayHandle | undefined;
     const finish = (item: ChoiceItem | null) => {
       if (settled) return;
       settled = true;
       options.signal?.removeEventListener("abort", onAbort);
-      host.removeChild(dialog);
+      if (overlayHandle) overlayHandle.hide();
+      else host.removeChild(dialog);
       ui.requestRender();
       resolve(item);
     };
@@ -341,8 +401,16 @@ export function choose(
     list.onSelect = (item) => finish(choicesByValue.get(item.value) ?? null);
     list.onSelectionChange = (item) => dialog.setSelectionPreview(previewFor(item));
     list.onCancel = () => finish(null);
-    host.addChild(dialog);
-    ui.setFocus(dialog);
+    // Mount as an overlay in fullscreen mode so TuiAltScreen defers viewport
+    // input (PageUp/PageDown/Home/End) to the focused dialog. In regular mode
+    // keep the inline host layout to preserve the existing visual placement.
+    const fullscreenDialog = showFullscreenDialog(ui, theme, dialog);
+    if (fullscreenDialog) {
+      overlayHandle = fullscreenDialog.handle;
+    } else {
+      host.addChild(dialog);
+    }
+    ui.setFocus(fullscreenDialog?.focus ?? dialog);
     ui.requestRender();
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted) finish(null);
@@ -350,6 +418,8 @@ export function choose(
 }
 
 class TextPromptDialog implements Component {
+  focused = false;
+
   constructor(
     private readonly title: string,
     private readonly prompt: string,
@@ -360,6 +430,9 @@ class TextPromptDialog implements Component {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
+    if ("focused" in this.input) {
+      (this.input as Component & { focused: boolean }).focused = this.focused;
+    }
     return [
       ...wrapTerminalText(this.theme.bold(this.title), safeWidth),
       ...wrapTerminalText(this.theme.muted(this.prompt), safeWidth),
@@ -368,6 +441,10 @@ class TextPromptDialog implements Component {
       "",
       ...wrapTerminalText(this.theme.muted(this.help), safeWidth)
     ];
+  }
+
+  handleInput(data: string): void {
+    (this.input as Component & { handleInput?: (input: string) => void }).handleInput?.(data);
   }
 
   invalidate(): void {
@@ -475,19 +552,28 @@ export function promptText(
       sanitizeTerminalText(options.help ?? "Enter confirm · Esc cancel", { preserveSgr: false })
     );
     let settled = false;
+    let overlayHandle: OverlayHandle | undefined;
     const finish = (value: string | null): void => {
       if (settled) return;
       settled = true;
       options.signal?.removeEventListener("abort", onAbort);
-      host.removeChild(dialog);
+      if (overlayHandle) overlayHandle.hide();
+      else host.removeChild(dialog);
       ui.requestRender();
       resolve(value);
     };
     const onAbort = () => finish(null);
     input.onSubmit = (value) => finish(value);
     input.onEscape = () => finish(null);
-    host.addChild(dialog);
-    ui.setFocus(input);
+    const fullscreenDialog = showFullscreenDialog(ui, theme, dialog);
+    if (fullscreenDialog) {
+      overlayHandle = fullscreenDialog.handle;
+    } else {
+      host.addChild(dialog);
+    }
+    // Keep focus on the overlay root. TuiAltScreen uses the root focus state
+    // to defer viewport keys; TextPromptDialog forwards input to its child.
+    ui.setFocus(fullscreenDialog?.focus ?? dialog);
     ui.requestRender();
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted) finish(null);

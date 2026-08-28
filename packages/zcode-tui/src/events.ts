@@ -222,6 +222,32 @@ export function isModelCancellationEvent(event: StreamEvent): boolean {
   );
 }
 
+const toolCancellationValues = new Set([
+  "aborterror",
+  "cancelled",
+  "canceled",
+  "tool_cancelled",
+  "tool_canceled"
+]);
+
+export function isToolCancellation(value: unknown): boolean {
+  if (value instanceof Error) {
+    return toolCancellationValues.has(value.name.toLowerCase())
+      || /\b(?:tool|command|process|bash)\b.{0,40}\b(?:cancelled|canceled)\b/iu.test(value.message);
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return toolCancellationValues.has(normalized)
+      || /\b(?:tool|command|process|bash)\b.{0,40}\b(?:cancelled|canceled)\b/iu.test(value);
+  }
+  if (!isRecord(value)) return false;
+  const markers = [value.type, value.code, value.name, value.status, value.reason];
+  if (markers.some((marker) => (
+    typeof marker === "string" && toolCancellationValues.has(marker.trim().toLowerCase())
+  ))) return true;
+  return value.error !== value && isToolCancellation(value.error);
+}
+
 export function responseText(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   return asString(value.response) ?? asString(value.message) ?? asString(value.text);

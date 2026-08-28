@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  isToolCancellation,
   historyText,
   isModelCancellationEvent,
   modelLabel,
@@ -40,6 +41,22 @@ describe("ZCode event adapter", () => {
     });
     expect(cancelled && isModelCancellationEvent(cancelled)).toBeTrue();
     expect(failed && isModelCancellationEvent(failed)).toBeFalse();
+  });
+
+  test("distinguishes tool cancellation payloads from real tool failures", () => {
+    expect(isToolCancellation({
+      type: "tool_cancelled",
+      message: "Bash was cancelled and the child process was asked to stop",
+      code: "TOOL_CANCELLED",
+      stack: "internal stack"
+    })).toBeTrue();
+    expect(isToolCancellation({ status: "failed", error: { code: "TOOL_CANCELLED" } })).toBeTrue();
+    expect(isToolCancellation(new DOMException("Aborted", "AbortError"))).toBeTrue();
+    expect(isToolCancellation({
+      type: "tool_error",
+      message: "Command exited with code 1",
+      code: "COMMAND_FAILED"
+    })).toBeFalse();
   });
 
   test("normalizes protocol streaming events", () => {

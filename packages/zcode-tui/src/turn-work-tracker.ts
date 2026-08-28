@@ -68,6 +68,15 @@ export class TurnWorkTracker {
     return this.isActive();
   }
 
+  cancel(): void {
+    this.foregroundActive = false;
+    this.awaitingProjection = false;
+    this.projectionToolActive = false;
+    this.projectionTurnActive = false;
+    this.turnId = undefined;
+    this.taskIds.clear();
+  }
+
   reconcile(projection: RuntimeProjectionSnapshot): boolean {
     const jobs = projection.backgroundJobs;
     for (const job of jobs) {

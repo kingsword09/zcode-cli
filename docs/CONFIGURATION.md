@@ -336,6 +336,31 @@ diagnostics in an isolated environment:
 ZCODE_TUI_RUNTIME_LOG=/tmp/zcode-tui-runtime.log zcode
 ```
 
+## TUI display mode
+
+The interactive TUI uses regular scrollback output by default. Set
+`ui.tuiMode` to `"fullscreen"` to use the terminal's alternate screen with an
+independently scrollable transcript, a fixed composer, and mouse-wheel/
+scrollbar navigation. The composer remains available while older transcript
+content is being reviewed.
+
+```json
+{
+  "ui": {
+    "tuiMode": "fullscreen"
+  }
+}
+```
+
+The same setting can be changed from `/settings` (or `/config`) under **Display
+mode**. `ZCODE_TUI_MODE=fullscreen` or `ZCODE_TUI_MODE=regular` temporarily
+overrides the saved value for the current shell; the settings picker labels
+this override and does not remove it.
+
+Fullscreen mode is restored on normal exit and on handled `SIGINT`, `SIGTERM`,
+or `SIGHUP` shutdowns. A hard `SIGKILL` cannot be intercepted by any terminal
+application.
+
 ## Theme
 
 Set `ui.theme` to `"auto"` (terminal detection), `"dark"`, or `"light"` in the

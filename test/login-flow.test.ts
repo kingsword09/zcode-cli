@@ -4,6 +4,7 @@ import {
   loginFailureDiagnostic,
   shouldSuspendForLoginCommand,
   shouldUseNoBrowserForLogin,
+  suppressTuiAiSdkWarnings,
   suspendedZaiLoginCommand
 } from "../packages/zcode-tui/src/index.ts";
 
@@ -41,5 +42,25 @@ describe("TUI external login routing", () => {
       "Usage: zcode [command]",
       "/goal [action] Show or set the current session goal"
     ].join("\n"))).toBe("Unknown option '--oauth'");
+  });
+
+  test("disables the AI SDK console banner without replacing a runtime handler", () => {
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      AI_SDK_LOG_WARNINGS?: unknown;
+    };
+    const previous = runtimeGlobal.AI_SDK_LOG_WARNINGS;
+    const handler = () => {};
+    try {
+      runtimeGlobal.AI_SDK_LOG_WARNINGS = undefined;
+      suppressTuiAiSdkWarnings();
+      expect(runtimeGlobal.AI_SDK_LOG_WARNINGS).toBe(false);
+
+      runtimeGlobal.AI_SDK_LOG_WARNINGS = handler;
+      suppressTuiAiSdkWarnings();
+      expect(runtimeGlobal.AI_SDK_LOG_WARNINGS).toBe(handler);
+    } finally {
+      if (previous === undefined) delete runtimeGlobal.AI_SDK_LOG_WARNINGS;
+      else runtimeGlobal.AI_SDK_LOG_WARNINGS = previous;
+    }
   });
 });

@@ -131,6 +131,11 @@ try {
   await waitFor("foreground Esc cancellation turn", /Bash cancel-pressure/i, foregroundCancelStart);
   terminal.write("\x1b");
   await waitFor("foreground Esc cancellation", /Turn cancelled\./i, foregroundCancelStart, 2_000);
+  const cancellationSettled = output.length;
+  await Bun.sleep(1_200);
+  if (/[🕐-🕛] [1-9]\d*s/u.test(plainText(output.slice(cancellationSettled)))) {
+    throw new Error("Turn timer kept advancing after foreground Esc cancellation.");
+  }
   if (child.exitCode !== null) throw new Error("Esc exited ZCode while cancelling a foreground turn.");
   terminal.write("\x03");
 } catch (error) {
@@ -161,9 +166,12 @@ if (/Model request failed/i.test(plain.slice(cancelTurnStart))) {
 for (const [label, pattern] of [
   ["bounded active tool input", /input characters omitted from active tool stream/i],
   ["bounded active tool output", /output characters omitted from active tool stream/i],
-  ["bounded cancelled tool result", /completed tool payload retained as a bounded preview/i]
+  ["quiet cancelled tool", /■ Bash cancel-pressure · cancelled/i]
 ] as const) {
   if (!pattern.test(plain)) throw new Error(`Missing ${label}.\n${plain.slice(-5_000)}`);
+}
+if (/TOOL_CANCELLED|internal vendor stack|Bash cancel-pressure · failed/i.test(plain)) {
+  throw new Error(`Cancelled tool leaked failure internals.\n${plain.slice(-5_000)}`);
 }
 
 console.log("TUI output-pressure steering, Esc recovery, and cancellation smoke test passed.");

@@ -104,6 +104,7 @@
   "ui": {
     "locale": "auto",
     "theme": "auto",
+    "tuiMode": "regular",
     "notifications": {
       "method": "auto",
       "condition": "unfocused"

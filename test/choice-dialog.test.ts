@@ -11,6 +11,81 @@ import { choose, promptText } from "../packages/zcode-tui/src/choice-dialog.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
 describe("TUI choice dialog", () => {
+  test("renders fullscreen dialogs as isolated bottom panes", async () => {
+    const host = new Container();
+    const focusState: { current: Component | null } = { current: null };
+    let overlay: { component: Component; options?: Record<string, unknown> } | undefined;
+    let hidden = false;
+    const ui = {
+      mode: "fullscreen",
+      terminal: { columns: 120, rows: 30 },
+      requestRender() {},
+      setFocus(component: Component | null) {
+        focusState.current = component;
+        if (component && "focused" in component) {
+          (component as Component & { focused: boolean }).focused = true;
+        }
+      },
+      showOverlay(component: Component, options?: Record<string, unknown>) {
+        overlay = { component, options };
+        return {
+          focus() {},
+          hide() { hidden = true; },
+          isFocused: () => true,
+          isHidden: () => false,
+          setHidden() {},
+          unfocus() {}
+        };
+      }
+    } as unknown as TUI;
+    const overlayComponent = (): Component => {
+      const component = overlay?.component;
+      if (!component) throw new Error("Fullscreen dialog did not mount an overlay.");
+      return component;
+    };
+
+    const pending = choose(ui, host, createTheme(false), {
+      title: "ZCode settings",
+      prompt: "Display mode: fullscreen · applied",
+      items: [
+        { value: "providers", label: "Model providers", description: "Saved: local/GLM-5.2" },
+        { value: "display", label: "Display mode", description: "Current: Fullscreen" }
+      ]
+    });
+
+    expect(host.children).toHaveLength(0);
+    expect(overlay?.options).toMatchObject({
+      anchor: "bottom-left",
+      maxHeight: "100%",
+      width: "100%"
+    });
+    const lines = overlayComponent().render(120);
+    expect(lines[0]).toBe("─".repeat(120));
+    expect(lines.at(-1)).toBe("─".repeat(120));
+    expect(lines.join("\n")).toContain("  ZCode settings");
+    expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true);
+    expect(focusState.current).toBe(overlayComponent());
+
+    focusState.current?.handleInput?.("\x1b");
+    expect(await pending).toBeNull();
+    expect(hidden).toBeTrue();
+
+    hidden = false;
+    overlay = undefined;
+    const promptPending = promptText(ui, host, createTheme(false), {
+      title: "Implementation instructions",
+      prompt: "Enter guidance for the active turn."
+    });
+    const promptLines = overlayComponent().render(120);
+    expect(promptLines[0]).toBe("─".repeat(120));
+    expect(promptLines.at(-1)).toBe("─".repeat(120));
+    focusState.current?.handleInput?.("Keep the bottom pane isolated.");
+    expect(overlayComponent().render(120).join("\n")).toContain("Keep the bottom pane isolated.");
+    focusState.current?.handleInput?.("\r");
+    expect(await promptPending).toBe("Keep the bottom pane isolated.");
+    expect(hidden).toBeTrue();
+  });
+
   test("renders after a long transcript instead of compositing into its viewport", async () => {
     const root = new Container();
     const transcript = new Text(

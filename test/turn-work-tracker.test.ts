@@ -116,4 +116,21 @@ describe("turn work tracker", () => {
     expect(tracker.finishForeground(true)).toBeTrue();
     expect(tracker.reconcile(projection({ currentTurnId: "turn-newer" }))).toBeFalse();
   });
+
+  test("drops all retained work when the user cancels the turn", () => {
+    const tracker = new TurnWorkTracker();
+    tracker.begin();
+    tracker.bindTurn("turn-current");
+    tracker.handle(event({ type: "background_task_started", taskId: "task-a", turnId: "turn-current" }));
+    expect(tracker.finishForeground(true)).toBeTrue();
+    expect(tracker.reconcile(projection({
+      activeToolCalls: [{ toolCallId: "tool-a", toolName: "Bash", status: "running" }],
+      backgroundJobs: [job("task-a", "running")],
+      currentTurnId: "turn-current"
+    }))).toBeTrue();
+
+    tracker.cancel();
+    expect(tracker.isActive()).toBeFalse();
+    expect(tracker.ownsTask("task-a")).toBeFalse();
+  });
 });

@@ -157,6 +157,12 @@ const timeout = setTimeout(() => {
 let interactionError: unknown;
 try {
   await waitFor("welcome screen", /ZCode/i);
+  if (!plainText(output).includes("Ask a task about this workspace")) {
+    throw new Error("Regular TUI did not render the session welcome intro.");
+  }
+  if (!plainText(output).includes("╭─ ◆ ZCODE")) {
+    throw new Error("Regular TUI did not render the framed session header.");
+  }
   if (!await Bun.file(configPath).exists()) {
     throw new Error("The launcher did not create config.json before starting the TUI.");
   }
@@ -217,6 +223,9 @@ try {
     /(?:Configured BigModel Coding Plan|已配置 BigModel Coding Plan)[\s\S]*◈ bigmodel\/glm-5\.2/i,
     bigmodelSetupStart
   );
+  await sendAndWait("/status\r", "status details", /Runtime version\s+\d+/i);
+  terminal.write("\r");
+  await Bun.sleep(50);
   await sendAndWait("/help\r", "help output", /Slash commands:|Usage:/i);
   await sendAndWait("/mode plan\r", "plan mode", /mode switched to plan|current mode: plan|◈ default ─ ◉ plan/i);
   terminal.write("/exit\r");
@@ -261,8 +270,11 @@ if (process.env.ZCODE_TUI_SMOKE_DEBUG === "1") console.log(plain);
 
 if (code !== 0) throw new Error(`TUI smoke test exited with ${code}.\n${plain.slice(-4_000)}`);
 if (!/ZCODE/i.test(plain)) throw new Error(`TUI welcome screen was not rendered.\n${plain.slice(-4_000)}`);
-if (!plain.includes(`ZCODE  v${packageVersion}`) || !/runtime v\d+/u.test(plain)) {
-  throw new Error(`The TUI did not render the npm and runtime versions separately.\n${plain.slice(-4_000)}`);
+if (!plain.includes(`ZCODE  v${packageVersion}`)) {
+  throw new Error(`The TUI header did not render the CLI version.\n${plain.slice(-4_000)}`);
+}
+if (!/Runtime version\s+\d+/u.test(plain)) {
+  throw new Error(`The /status view did not render the runtime version.\n${plain.slice(-4_000)}`);
 }
 if (!plain.includes(`Update available! ${packageVersion} → ${availableVersion}`)) {
   throw new Error(`The TUI did not render the cached update notice.\n${plain.slice(-4_000)}`);

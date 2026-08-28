@@ -104,6 +104,17 @@ async function runPressureTurn(
     await Bun.sleep(30);
     for (let index = 0; index < (cancellable ? 100_000 : 5_000); index += 1) {
       if (options.abortSignal?.aborted || semanticInterrupt.signal.aborted) {
+        await emit(options, "tool_call_error", {
+          error: {
+            type: "tool_cancelled",
+            message: "Bash was cancelled and the child process was asked to stop",
+            code: "TOOL_CANCELLED",
+            stack: "Error: internal vendor stack"
+          },
+          input: { command },
+          toolCallId,
+          toolName: "Bash"
+        });
         if (semanticInterrupt.signal.aborted) {
           await emit(options, "model.network_status", {
             type: "model_request_failed",
@@ -172,7 +183,8 @@ await runTui({
       if (pendingInputIds?.length) {
         throw new Error(`Foreground interrupt received pending inputs: ${pendingInputIds.join(", ")}`);
       }
-      activeTurnInterrupt.abort(new Error(reason));
+      // Model runtimes may acknowledge stop without aborting the TUI's local
+      // submission signal. ZCode must settle that signal and timer itself.
       return { kind: "stopped" };
     }
     if (!reason?.includes("steer instructions")) {

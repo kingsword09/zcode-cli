@@ -49,7 +49,7 @@
     "sync:local": "bun run build && bun scripts/sync-runtime.ts --app /Applications/ZCode.app",
     "check": "bun run build && bun scripts/check-runtime.ts",
     "check:oauth-callback": "bun scripts/smoke-oauth-callback.ts",
-    "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts && bun scripts/smoke-tui-clear.ts && bun scripts/smoke-tui-session-title.ts && bun scripts/smoke-tui-pressure.ts && bun scripts/smoke-tui-widths.ts",
+    "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts && bun scripts/smoke-tui-clear.ts && bun scripts/smoke-tui-session-title.ts && bun scripts/smoke-tui-pressure.ts && bun scripts/smoke-tui-widths.ts && bun scripts/smoke-tui-fullscreen.ts && bun scripts/smoke-tui-fullscreen-switch.ts && bun scripts/smoke-tui-fullscreen-layout.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "verify:tui-perf": "bun scripts/verify-tui-perf.ts",
@@ -68,7 +68,7 @@
     "provenance": true
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.80.6",
+    "@earendil-works/pi-tui": "^0.84.3",
     "playwright-core": "1.59.1"
   },
   "devDependencies": {

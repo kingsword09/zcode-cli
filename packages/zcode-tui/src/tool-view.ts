@@ -264,7 +264,16 @@ function resultContent(
 function errorText(value: unknown): string | undefined {
   if (value instanceof Error) return sanitizeTerminalText(value.message, { preserveSgr: false });
   const direct = asString(value);
-  return direct ? sanitizeTerminalText(direct, { preserveSgr: false }) : stringify(value);
+  if (direct) return sanitizeTerminalText(direct, { preserveSgr: false });
+  if (!isRecord(value)) return stringify(value);
+  const message = asString(value.message) ?? asString(value.detail) ?? asString(value.description);
+  if (message) return sanitizeTerminalText(message, { preserveSgr: false });
+  if (value.error !== value) {
+    const nested = errorText(value.error);
+    if (nested) return nested;
+  }
+  const code = asString(value.code) ?? asString(value.type) ?? asString(value.name);
+  return code ? sanitizeTerminalText(code, { preserveSgr: false }) : undefined;
 }
 
 function statePresentation(state: string, theme: ZCodeTheme): { icon: string; suffix?: string } {
@@ -288,7 +297,7 @@ function statePresentation(state: string, theme: ZCodeTheme): { icon: string; su
 
 function stateBackground(state: string, theme: ZCodeTheme): ((text: string) => string) | undefined {
   const normalized = state.toLowerCase();
-  if (normalized === "failed" || normalized === "error" || normalized === "cancelled") {
+  if (normalized === "failed" || normalized === "error") {
     return theme.toolErrorBackground;
   }
   return normalized === "waiting_permission" ? theme.toolPendingBackground : undefined;
@@ -334,6 +343,10 @@ function toolText(
     summary && theme.muted(oneLine(summary)),
     presentation.suffix && theme.muted(`· ${presentation.suffix}`)
   ].filter(Boolean).join(" ");
+
+  if (options.state.toLowerCase() === "cancelled") {
+    return { header, images: [], truncated: false };
+  }
 
   const sections: string[] = [];
   let truncated = false;

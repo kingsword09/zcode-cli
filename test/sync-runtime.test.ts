@@ -660,6 +660,25 @@ describe("runtime synchronization", () => {
     expect(modernPatched).toContain("r=await e.sessionStore.getSession(e.sessionId);return p(r?R(t,r):t)");
     expect(modernPatched).toContain("targetMessageIds&&t.targetMessageIds.length>0");
     expect(modernPatched).not.toContain("Array.isArray(t.targetMessageIds)");
+
+    const nativeSteerRuntime = `${runtimeWithApp.replace(
+      "E.sendInput=async(A,$)=>{let c=t.runtime.getActiveTurnInfo();if(c)return t.runtime.steerTurn({commandKind:$?.commandKind,inputId:$?.inputId,queryId:$?.queryId,expectedTurnId:$?.expectedTurnId,input:A});return Kvt(await S(),D,O1(t))},",
+      "E.sendInput=async(A,$)=>{let d=$?.delivery??\"auto\";return t.runtime.admitPrompt(A,[],{...$,delivery:d,traceContext:$?.traceContext})},"
+      + "function admit(A,$){if($?.delivery===\"steer_active_turn\")return this.steerTurn({commandKind:$?.commandKind,delivery:void 0,expectedTurnId:$?.expectedTurnId,input:A,inputId:$?.inputId,intent:I($?.intent,\"queue\"),queryId:$?.queryId,toolDisallowlist:$?.toolDisallowlist})}"
+    )}async function send(H,Z){let Q=await A(),X=await Q.sendInput(H,Z);return X.kind!==\"started_turn\"?X:l1t(X.result,Q,R5(t))}`;
+    const nativeSteerPatched = patchRuntimeTuiBridge(nativeSteerRuntime);
+    expect(nativeSteerPatched).toContain('delivery==="steer_active_turn"');
+    expect(nativeSteerPatched).toContain('intent:I($?.intent,"queue")');
+    expect(nativeSteerPatched).not.toContain('pendingInputId:$?.pendingInputId');
+    expect(nativeSteerPatched).toContain('l1t(await(X.result??X.completion),Q,R5(t))');
+    expect(nativeSteerPatched).not.toContain('l1t(X.result,Q,R5(t))');
+    expect(patchRuntimeTuiBridge(nativeSteerPatched)).toBe(nativeSteerPatched);
+    expect(() => patchRuntimeTuiBridge(
+      nativeSteerRuntime.replace(
+        "return t.runtime.admitPrompt(A,[],{...$,delivery:d,traceContext:$?.traceContext})",
+        "return t.runtime.submitPrompt(A,$)"
+      )
+    )).toThrow(/active-turn steer delivery anchor missing/);
   });
 
   test("upgrades an already-patched runtime that lacks the transient model bridge", () => {

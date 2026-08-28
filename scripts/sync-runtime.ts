@@ -479,6 +479,13 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const activeTranscriptPattern = /sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u;
   const activeTurnSteerPattern = /(\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\2\?\.inputId,queryId:\2\?\.queryId,expectedTurnId:\2\?\.expectedTurnId,)(?:delivery:"guide",)?(?:pendingInputId:\2\?\.pendingInputId,)?input:/u;
   const activeTurnGuidePattern = /\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\1\?\.inputId,queryId:\1\?\.queryId,expectedTurnId:\1\?\.expectedTurnId,delivery:"guide",pendingInputId:\1\?\.pendingInputId,input:/u;
+  const nativeActiveTurnSteerPattern = /([A-Za-z_$][\w$]*)\?\.delivery==="steer_active_turn".{0,700}?\.steerTurn\(\{commandKind:\1\?\.commandKind,delivery:[^,}]+,expectedTurnId:\1\?\.expectedTurnId,input:[^,}]+,inputId:\1\?\.inputId,intent:.{1,160}?,queryId:\1\?\.queryId,/u;
+  const nativePromptAdmissionPattern = /\.runtime\.admitPrompt\([^{}]{0,500}\{\.\.\.([A-Za-z_$][\w$]*),delivery:[A-Za-z_$][\w$]*,traceContext:\1\?\.traceContext/u;
+  const legacyStartedTurnResultPattern = /return ([A-Za-z_$][\w$]*)\.kind!=="started_turn"\?\1:([A-Za-z_$][\w$]*)\(\1\.result,([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\)/u;
+  const supportsActiveTurnSteer = (value: string): boolean => (
+    activeTurnGuidePattern.test(value)
+    || (nativeActiveTurnSteerPattern.test(value) && nativePromptAdmissionPattern.test(value))
+  );
   const listSkillsBridgePattern = /\.listSkills=async\(\)=>await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)/u;
   const listSkillsOptionPattern = /listSkills:[A-Za-z_$][\w$]*\.listSkills/u;
   const listModelOptionsOptionPattern = /listModelOptions:[A-Za-z_$][\w$]*\.listModelOptions/u;
@@ -508,7 +515,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && runtime.includes(interruptWaitForIdleMarker)
     && runtime.includes(".promoteQueuedInput=async(")
     && runtime.includes(queuedInputPromotionMarker)
-    && activeTurnGuidePattern.test(runtime)
+    && !legacyStartedTurnResultPattern.test(runtime)
+    && supportsActiveTurnSteer(runtime)
     && transcriptMessageIdPattern.test(runtime)
     && transcriptAgentMessageIdPattern.test(runtime)
     && supportsMultiMessageFileRewind(runtime)
@@ -541,7 +549,11 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (alreadyPatched) return runtime;
 
   let patched = runtime;
-  if (!activeTurnGuidePattern.test(patched)) {
+  patched = patched.replace(
+    legacyStartedTurnResultPattern,
+    'return $1.kind!=="started_turn"?$1:$2(await($1.result??$1.completion),$3,$4($5))'
+  );
+  if (!supportsActiveTurnSteer(patched)) {
     if (!activeTurnSteerPattern.test(patched)) {
       throw new Error("ZCode runtime is incompatible with the TUI bridge (active-turn steer delivery anchor missing).");
     }

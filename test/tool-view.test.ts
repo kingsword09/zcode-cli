@@ -49,6 +49,46 @@ describe("TUI tool execution view", () => {
     expect(card).not.toContain('"message": "boom"');
   });
 
+  test("renders user-cancelled tools as a quiet single-line state", () => {
+    const card = toolCard({
+      name: "Bash",
+      state: "cancelled",
+      input: { command: "bun test 2>&1 | tail -20" },
+      error: {
+        type: "tool_cancelled",
+        message: "Bash was cancelled and the child process was asked to stop",
+        code: "TOOL_CANCELLED",
+        stack: "Error: internal vendor stack"
+      },
+      progress: { stdoutTail: "partial output before cancellation" }
+    });
+
+    expect(card).toBe("■ Bash bun test 2>&1 | tail -20 · cancelled");
+    expect(card).not.toContain("failed");
+    expect(card).not.toContain("Error:");
+    expect(card).not.toContain("TOOL_CANCELLED");
+    expect(card).not.toContain("vendor stack");
+    expect(card).not.toContain("partial output");
+  });
+
+  test("shows only the message for structured tool failures", () => {
+    const card = toolCard({
+      name: "Bash",
+      state: "failed",
+      input: { command: "false" },
+      error: {
+        code: "COMMAND_FAILED",
+        message: "Command exited with code 1",
+        stack: "Error: internal vendor stack"
+      }
+    });
+
+    expect(card).toContain("✗ Bash false · failed");
+    expect(card).toContain("Error: Command exited with code 1");
+    expect(card).not.toContain("COMMAND_FAILED");
+    expect(card).not.toContain("vendor stack");
+  });
+
   test("keeps active payloads intact and compacts them at the terminal state", () => {
     const result = { stdout: `HEAD-${"x".repeat(1_000_000)}-TAIL`, success: true };
     const view = new ToolExecutionView(createTheme(false), {

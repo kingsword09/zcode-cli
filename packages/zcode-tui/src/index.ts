@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { basename } from "node:path";
 
 import {
@@ -26,12 +27,18 @@ import {
   Container,
   Editor,
   isKeyRelease,
+  isViewportTUI,
   Markdown,
   matchesKey,
   ProcessTerminal,
+  ScrollView,
   Spacer,
   Text,
-  TUI,
+  TuiAltScreen,
+  TuiMainScreen,
+  VStack,
+  type TUI,
+  type TuiMode,
   type Component,
   type SlashCommand
 } from "@earendil-works/pi-tui";
@@ -57,6 +64,7 @@ import {
 import {
   historyText,
   isModelCancellationEvent,
+  isToolCancellation,
   modelLabel,
   normalizeEvent,
   responseText,
@@ -126,6 +134,11 @@ import {
   type NotificationSettings,
   type TurnNotificationKind
 } from "./notifications.ts";
+import {
+  readTuiMode,
+  resolveTuiMode,
+  writeTuiMode
+} from "./tui-mode.ts";
 import {
   effortPicker,
   explicitModelRequest,
@@ -233,7 +246,10 @@ import { TurnPresentationRegistry } from "./turn-presentation-registry.ts";
 import { TurnWorkTracker } from "./turn-work-tracker.ts";
 import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
 import { UpdateAvailableView, updateCommand } from "./update-available-view.ts";
-import { Divider, WelcomeBanner } from "./welcome-banner.ts";
+import {
+  FullscreenHeader,
+  SessionWelcome
+} from "./fullscreen-header.ts";
 import { WorkspaceAutocompleteProvider } from "./workspace-autocomplete.ts";
 import { readWorkspaceDiff } from "./workspace-diff.ts";
 import { workedDurationLabel, WorkDurationView } from "./work-duration-view.ts";
@@ -284,6 +300,7 @@ const runtimeCommandSummaries = new Map([
 
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
+const fullscreenWelcomeTransitionMs = 180;
 const updateAvailableBlockId = "update_available";
 const modelRetryBlockIdPrefix = "model_retry_status";
 const questionBackValue = "__back__";
@@ -431,22 +448,103 @@ class ConditionalContainer extends Container {
   }
 }
 
+/**
+ * AI SDK emits its warning banner through console.info when no handler is
+ * installed. In the interactive TUI that stdout write is terminal content,
+ * so suppress only the default banner while preserving a runtime-provided
+ * structured warning handler.
+ */
+export function suppressTuiAiSdkWarnings(): void {
+  const global = globalThis as typeof globalThis & {
+    AI_SDK_LOG_WARNINGS?: unknown;
+  };
+  if (typeof global.AI_SDK_LOG_WARNINGS === "function") return;
+  try {
+    global.AI_SDK_LOG_WARNINGS = false;
+  } catch {
+    // A host may expose a read-only global; warning suppression is optional.
+  }
+}
+
+// The runtime loads this module before it initializes the interactive app.
+// Install the TUI-safe default early enough to cover startup model discovery.
+suppressTuiAiSdkWarnings();
+
+/**
+ * The upstream alternate-screen renderer intentionally reserves Home/End and
+ * PageUp/PageDown for viewport navigation. ZCode's composer is a real editor,
+ * so it needs the same priority as a modal overlay while it has focus.
+ */
+class ZCodeAltScreen extends TuiAltScreen {
+  private viewportInputDeferral?: (data: string) => boolean;
+  private currentInput?: string;
+
+  setViewportInputDeferral(deferral: (data: string) => boolean): void {
+    this.viewportInputDeferral = deferral;
+  }
+
+  setCurrentInput(data: string | undefined): void {
+    this.currentInput = data;
+  }
+
+  protected override isOverlayFocused(): boolean {
+    if (super.isOverlayFocused()) return true;
+    return this.viewportInputDeferral?.(this.currentInput ?? "") === true;
+  }
+}
+
+/** Feed focus reports to the notifier before the TUI's own input listeners. */
+class NotifyingProcessTerminal extends ProcessTerminal {
+  constructor(
+    private readonly beforeInput: (data: string) => void,
+    private readonly afterInput?: () => void
+  ) {
+    super();
+  }
+
+  override start(onInput: (data: string) => void, onResize: () => void): void {
+    super.start((data) => {
+      this.beforeInput(data);
+      try {
+        onInput(data);
+      } finally {
+        this.afterInput?.();
+      }
+    }, onResize);
+  }
+}
+
+function signalExitCode(signal: NodeJS.Signals): number {
+  const number = (osConstants.signals as Record<string, number>)[signal];
+  return typeof number === "number" ? 128 + number : 1;
+}
+
 class ZCodeTui {
   private readonly animateTurnTimer: boolean;
   private readonly colorsEnabled: boolean;
   private readonly distributionVersion?: string;
   private readonly themePreference: ZCodeThemePreference;
   private readonly theme: ZCodeTheme;
-  private readonly ui: TUI;
+  private ui: TUI;
   private readonly transcript: Transcript;
   private readonly choiceHost = new Container();
   private readonly composerHost = new ConditionalContainer(() => this.choiceDepth === 0);
+  private readonly headerHost = new Container();
+  private readonly transcriptHost = new Container();
+  private readonly sessionWelcomeHost = new ConditionalContainer(
+    () => this.tuiMode === "fullscreen" && this.fullscreenWelcomeVisible
+  );
+  private readonly editorHost = new Container();
+  private readonly fullscreenHeader: FullscreenHeader;
+  private readonly sessionWelcome: SessionWelcome;
+  private fullscreenTranscript?: ScrollView;
+  private fullscreenLayout?: VStack;
   private readonly runtimeActivity: RuntimeActivityView;
   private readonly status: StatusLine;
   private readonly turnStatus: FooterBar;
   private readonly queuedInputView: QueuedInputView;
   private readonly attachmentBar: AttachmentBar;
-  private readonly editor: Editor;
+  private editor: Editor;
   private readonly assistantStream: AssistantStream;
   private readonly notifications: TurnNotifier;
   private readonly skillCatalog: SkillCatalog;
@@ -483,8 +581,10 @@ class ZCodeTui {
   private currentToolGroupBlockId?: string;
   private currentToolGroupMessageId?: string;
   private pendingAttachments: PromptImageAttachment[] = [];
+  private readonly editorHistory: string[] = [];
   private mode: Mode;
   private model: string;
+  private tuiMode: TuiMode;
   private thoughtLevel?: string;
   private modelOptions: unknown[];
   private effortOptions: unknown[];
@@ -500,6 +600,9 @@ class ZCodeTui {
   private workflowRefreshInFlight = false;
   private choiceDepth = 0;
   private settingSwitchInFlight = false;
+  private fullscreenWelcomeVisible = true;
+  private fullscreenWelcomeTransitionTimer?: ReturnType<typeof setTimeout>;
+  private sessionHasContent = false;
   private rewindEscapePending = false;
   private rewindEscapeTimer?: ReturnType<typeof setTimeout>;
   private rewindFlowActive = false;
@@ -531,8 +634,6 @@ class ZCodeTui {
   private backgroundHandoffInterruptInFlight = false;
   private updateCheckAbortController?: AbortController;
   private loginRequired: boolean;
-  private readonly loginWarning = new Text("", 1, 0);
-  private readonly loginHelp = new Text("", 1, 0);
 
   constructor(private readonly options: TuiOptions) {
     this.animateTurnTimer = turnTimerAnimationEnabled();
@@ -544,6 +645,20 @@ class ZCodeTui {
     ) || undefined;
     this.theme = createTheme(this.colorsEnabled, initialColorScheme(this.themePreference));
     this.transcript = new Transcript(this.theme.searchMatch);
+    const workspace = options.workspaceDirectory ?? process.cwd();
+    const runtimeVersion = sanitizeTerminalText(options.version ?? "unknown", { preserveSgr: false });
+    this.fullscreenHeader = new FullscreenHeader(this.theme, {
+      branch: options.workspaceGitBranch,
+      distributionVersion: this.distributionVersion,
+      runtimeVersion,
+      workspace
+    });
+    this.sessionWelcome = new SessionWelcome(
+      this.theme,
+      (width) => this.fullscreenHeader.location(width),
+      (width) => this.fullscreenHeader.identity(width),
+      { loginRequired: options.loginRequired === true, includeIdentity: true }
+    );
     this.mode = normalizedMode(options.initialMode);
     this.model = modelLabel(options.initialModel);
     this.thoughtLevel = options.initialThoughtLevel;
@@ -551,7 +666,8 @@ class ZCodeTui {
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.loginRequired = options.loginRequired === true;
     this.skillCatalog = new SkillCatalog(options.listSkills);
-    this.ui = new TUI(new ProcessTerminal(), true);
+    this.tuiMode = resolveTuiMode(process.env, { ui: { tuiMode: options.initialTuiMode } });
+    this.ui = this.createTui(this.tuiMode);
     this.notifications = new TurnNotifier({
       writeTerminal: (data) => this.ui.terminal.write(data)
     });
@@ -587,10 +703,10 @@ class ZCodeTui {
       onRender: () => this.ui.requestRender()
     });
     this.runtimeActivity = new RuntimeActivityView(this.theme);
-    this.editor = new Editor(this.ui, this.theme.editor, { paddingX: 1, autocompleteMaxVisible: 7 });
+    this.editor = this.createEditor(this.ui);
     this.assistantStream = new AssistantStream(
       this.theme,
-      (component, blockOptions) => this.transcript.addBlock(component, blockOptions)
+      (component, blockOptions) => this.addTranscriptBlock(component, blockOptions)
     );
     this.done = new Promise((resolve) => {
       this.resolveDone = resolve;
@@ -607,52 +723,105 @@ class ZCodeTui {
     } catch (error) {
       notificationConfigError = error instanceof Error ? error.message : String(error);
     }
+    // Resolve the effective TUI mode from env > options > config. The vendor
+    // runtime does not forward initialTuiMode, so read the persisted config
+    // here and rebuild the TUI instance before start() when it differs from
+    // the constructor's default.
+    try {
+      const configEnv = { ...process.env };
+      delete configEnv.ZCODE_TUI_MODE;
+      const fromConfig = await readTuiMode(configEnv);
+      const effective = resolveTuiMode(process.env, {
+        ui: { tuiMode: this.options.initialTuiMode ?? fromConfig }
+      });
+      if (effective !== this.tuiMode) {
+        this.ui = this.createTui(effective);
+        this.tuiMode = effective;
+        this.editor = this.createEditor(this.ui);
+      }
+    } catch {
+      // Config unreadable — keep the constructor's resolved mode.
+    }
     const updateCheck = this.distributionVersion
       ? await readStartupUpdate({ currentVersion: this.distributionVersion }).catch(() => undefined)
       : undefined;
-    this.ui.start();
-    await this.resolveTerminalColorScheme();
-    this.buildLayout();
-    if (notificationConfigError) {
-      this.addNotice(`Unable to load notification settings: ${notificationConfigError}`, "warning");
-    }
-    await this.restoreInitialTranscript();
-    if (updateCheck?.availableVersion && this.distributionVersion) {
-      this.addUpdateAvailable(this.distributionVersion, updateCheck.availableVersion);
-    }
-    this.bindInput();
-    this.notifications.start();
-    this.ui.setFocus(this.editor);
-    this.updateMetadata();
-    this.updateTurnStatus();
-    this.ui.requestRender(true);
-    this.startUpdateRefresh(updateCheck);
-    if (!this.loginRequired) void this.refreshGoal();
-    if (!this.loginRequired) void this.refreshSessionUsage();
-    if (await readSetupPending().catch(() => false)) {
-      if (await readConfiguredModelAccess().catch(() => null)) {
-        // The user already configured model access outside the wizard (for
-        // example via `zcode login` or a hand-edited config.json); honor that
-        // as completed setup instead of showing the wizard again.
-        await clearSetupPending().catch(() => {});
-      } else {
-        void this.runFirstRunSetup();
+    // Ensure the TUI cleans up terminal state (alt screen, mouse, cursor)
+    // even when the process is killed by an external signal.
+    const onSigint = () => this.handleSignal("SIGINT");
+    const onSigterm = () => this.handleSignal("SIGTERM");
+    const onSighup = () => this.handleSignal("SIGHUP");
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
+    if (process.platform !== "win32") process.once("SIGHUP", onSighup);
+    let startAttempted = false;
+    try {
+      if (this.stopped) {
+        await this.done;
+        return;
+      }
+      startAttempted = true;
+      this.ui.start();
+      if (this.stopped) {
+        await this.done;
+        return;
+      }
+      await this.resolveTerminalColorScheme();
+      this.buildLayout();
+      if (notificationConfigError) {
+        this.addNotice(`Unable to load notification settings: ${notificationConfigError}`, "warning");
+      }
+      await this.restoreInitialTranscript();
+      if (this.transcript.blockCount > 0) this.enterSessionRail(true);
+      if (updateCheck?.availableVersion && this.distributionVersion) {
+        this.addUpdateAvailable(this.distributionVersion, updateCheck.availableVersion);
+      }
+      this.bindInput();
+      this.notifications.start();
+      this.focusEditor();
+      this.updateMetadata();
+      this.updateTurnStatus();
+      this.ui.requestRender(true);
+      this.startUpdateRefresh(updateCheck);
+      if (!this.loginRequired) void this.refreshGoal();
+      if (!this.loginRequired) void this.refreshSessionUsage();
+      if (await readSetupPending().catch(() => false)) {
+        if (await readConfiguredModelAccess().catch(() => null)) {
+          // The user already configured model access outside the wizard (for
+          // example via `zcode login` or a hand-edited config.json); honor that
+          // as completed setup instead of showing the wizard again.
+          await clearSetupPending().catch(() => {});
+        } else {
+          void this.runFirstRunSetup();
+        }
+      }
+      this.scheduleRuntimePoll(0);
+      void this.loadHistory();
+      if (this.options.subscribeSessionEvents) {
+        this.unsubscribeSession = this.options.subscribeSessionEvents((event) => {
+          this.onSessionEvent(event);
+        }) ?? undefined;
+      }
+      if (this.options.subscribeWorkflowEvents) {
+        this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
+          this.debugEvent("workflow", event);
+          void this.refreshWorkflowFromEvent();
+        }) ?? undefined;
+      }
+      await this.done;
+    } finally {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      if (process.platform !== "win32") process.off("SIGHUP", onSighup);
+      if (startAttempted && !this.stopped) {
+        this.stop();
+        await this.done;
       }
     }
-    this.scheduleRuntimePoll(0);
-    void this.loadHistory();
-    if (this.options.subscribeSessionEvents) {
-      this.unsubscribeSession = this.options.subscribeSessionEvents((event) => {
-        this.onSessionEvent(event);
-      }) ?? undefined;
-    }
-    if (this.options.subscribeWorkflowEvents) {
-      this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
-        this.debugEvent("workflow", event);
-        void this.refreshWorkflowFromEvent();
-      }) ?? undefined;
-    }
-    await this.done;
+  }
+
+  private handleSignal(signal: NodeJS.Signals): void {
+    process.exitCode = signalExitCode(signal);
+    if (!this.stopped) this.stop();
   }
 
   private async resolveTerminalColorScheme(): Promise<void> {
@@ -669,33 +838,171 @@ class ZCodeTui {
     }
   }
 
+  private createTui(mode: TuiMode): TUI {
+    let fullscreenTui: ZCodeAltScreen | undefined;
+    const terminal = new NotifyingProcessTerminal((data) => {
+      fullscreenTui?.setCurrentInput(data);
+      this.notifications?.handleInput(data);
+    }, () => fullscreenTui?.setCurrentInput(undefined));
+    if (mode !== "fullscreen") return new TuiMainScreen(terminal, true);
+
+    const tui = new ZCodeAltScreen(terminal, true, undefined, {
+      copySelection: async (text) => {
+        const writeClipboardText = this.options.writeClipboardText;
+        if (!writeClipboardText) return false;
+        try {
+          await writeClipboardText(text);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      mouse: true,
+      wheelScrollLines: 3
+    });
+    fullscreenTui = tui;
+    tui.setViewportInputDeferral((data) => {
+      const focused = tui.getFocusedComponent();
+      if (focused === this.attachmentBar) {
+        return matchesKey(data, "home") || matchesKey(data, "end");
+      }
+      if (focused !== this.editor) return false;
+      if (matchesKey(data, "home") || matchesKey(data, "end")
+        || matchesKey(data, "ctrl+home") || matchesKey(data, "ctrl+end")) return true;
+      return matchesKey(data, "pageUp") || matchesKey(data, "pageDown")
+        || matchesKey(data, "ctrl+pageUp") || matchesKey(data, "ctrl+pageDown");
+    });
+    return tui;
+  }
+
   private buildLayout(): void {
-    const workspace = this.options.workspaceDirectory ?? process.cwd();
-    const runtimeVersion = sanitizeTerminalText(this.options.version ?? "unknown", { preserveSgr: false });
-    this.ui.addChild(new WelcomeBanner(this.theme, {
-      branch: this.options.workspaceGitBranch,
-      distributionVersion: this.distributionVersion,
-      runtimeVersion,
-      workspace
-    }));
-    this.ui.addChild(new Divider("─", this.theme.muted));
-    this.ui.addChild(this.loginWarning);
-    this.ui.addChild(this.loginHelp);
+    const fullscreen = isViewportTUI(this.ui);
+    this.fullscreenHeader.setPhase(
+      fullscreen && this.fullscreenWelcomeVisible ? "welcome" : "rail"
+    );
+    this.sessionWelcome.setLoginRequired(this.loginRequired);
+    this.sessionWelcome.setIncludeIdentity(!fullscreen);
+    this.headerHost.clear();
     this.updateLoginWarning();
-    this.ui.addChild(new Spacer(1));
-    this.ui.addChild(this.transcript);
-    this.ui.addChild(this.runtimeActivity);
-    this.ui.addChild(this.choiceHost);
+    if (!fullscreen) {
+      // Regular mode owns terminal scrollback. Keep a single session intro at
+      // the top so it naturally scrolls away as the conversation grows.
+      if (!this.sessionHasContent) this.mountRegularSessionWelcome();
+    }
+
+    this.transcriptHost.clear();
+    this.sessionWelcomeHost.clear();
+    if (fullscreen) this.sessionWelcome.setIncludeIdentity(false);
+    this.sessionWelcomeHost.addChild(this.sessionWelcome);
+    if (fullscreen) this.transcriptHost.addChild(this.sessionWelcomeHost);
+    this.transcriptHost.addChild(this.transcript);
+    this.transcriptHost.addChild(this.runtimeActivity);
+    this.transcriptHost.addChild(this.choiceHost);
+
+    this.editorHost.clear();
+    this.editorHost.addChild(this.editor);
+    this.composerHost.clear();
     this.composerHost.addChild(this.turnStatus);
     this.composerHost.addChild(this.queuedInputView);
     this.composerHost.addChild(this.attachmentBar);
-    this.composerHost.addChild(this.editor);
+    this.composerHost.addChild(this.editorHost);
     this.composerHost.addChild(this.status);
-    this.ui.addChild(this.composerHost);
 
+    this.mountLayout();
+  }
+
+  private enterSessionRail(immediate = false): void {
+    this.sessionHasContent = true;
+    if (this.tuiMode !== "fullscreen") return;
+    const phase = this.fullscreenHeader.getPhase();
+    if (phase === "rail") {
+      this.fullscreenWelcomeVisible = false;
+      this.sessionWelcome.setTransitioning(false);
+      return;
+    }
+    if (phase === "transition" && !immediate) return;
+    if (this.fullscreenWelcomeTransitionTimer) {
+      clearTimeout(this.fullscreenWelcomeTransitionTimer);
+      this.fullscreenWelcomeTransitionTimer = undefined;
+    }
+    if (immediate || !this.animateTurnTimer) {
+      this.fullscreenWelcomeVisible = false;
+      this.sessionWelcome.setTransitioning(false);
+      this.fullscreenHeader.setPhase("rail");
+      this.ui.requestRender(true);
+      return;
+    }
+
+    this.sessionWelcome.setTransitioning(true);
+    this.fullscreenHeader.setPhase("transition");
+    this.ui.requestRender();
+    this.fullscreenWelcomeTransitionTimer = setTimeout(() => {
+      this.fullscreenWelcomeTransitionTimer = undefined;
+      if (this.stopped || this.tuiMode !== "fullscreen") return;
+      this.fullscreenWelcomeVisible = false;
+      this.sessionWelcome.setTransitioning(false);
+      this.fullscreenHeader.setPhase("rail");
+      this.ui.requestRender();
+    }, fullscreenWelcomeTransitionMs);
+    this.fullscreenWelcomeTransitionTimer.unref?.();
+  }
+
+  private resetSessionPresentation(): void {
+    if (this.fullscreenWelcomeTransitionTimer) {
+      clearTimeout(this.fullscreenWelcomeTransitionTimer);
+      this.fullscreenWelcomeTransitionTimer = undefined;
+    }
+    this.sessionHasContent = false;
+    this.fullscreenWelcomeVisible = true;
+    this.fullscreenHeader.setPhase("welcome");
+    this.sessionWelcome.setTransitioning(false);
+    if (this.tuiMode === "regular") this.mountRegularSessionWelcome();
+    this.ui.requestRender();
+  }
+
+  private mountRegularSessionWelcome(): void {
+    this.headerHost.clear();
+    this.sessionWelcome.setIncludeIdentity(true);
+    this.headerHost.addChild(this.sessionWelcome);
+    this.headerHost.addChild(new Spacer(1));
+  }
+
+  private addTranscriptBlock(
+    component: Component,
+    options: Parameters<Transcript["addBlock"]>[1] = {}
+  ): string {
+    this.enterSessionRail();
+    return this.transcript.addBlock(component, options);
+  }
+
+  private mountLayout(): void {
+    if (isViewportTUI(this.ui)) {
+      this.fullscreenTranscript ??= new ScrollView(this.transcriptHost, {
+        follow: "end",
+        primary: true,
+        overscroll: "chain",
+        scrollbar: "always"
+      });
+      this.fullscreenLayout ??= new VStack([
+        { component: this.fullscreenHeader, basis: 1, shrink: 0, minSize: 1 },
+        { component: this.fullscreenTranscript, basis: 0, grow: 1, minSize: 1 },
+        { component: this.composerHost, basis: "auto", shrink: 1, minSize: 1 }
+      ]);
+      this.ui.setLayoutRoot(this.fullscreenLayout);
+      return;
+    }
+    this.ui.clear();
+    this.ui.addChild(this.headerHost);
+    this.ui.addChild(this.transcriptHost);
+    this.ui.addChild(this.composerHost);
+  }
+
+  private createEditor(tui: TUI): Editor {
+    const editor = new Editor(tui, this.theme.editor, { paddingX: 1, autocompleteMaxVisible: 7 });
+    for (const input of [...this.editorHistory].reverse()) editor.addToHistory(input);
     const commands = this.autocompleteCommands();
     const workspaceDirectory = this.options.workspaceDirectory ?? process.cwd();
-    this.editor.setAutocompleteProvider(
+    editor.setAutocompleteProvider(
       new WorkspaceAutocompleteProvider(
         commands,
         workspaceDirectory,
@@ -704,25 +1011,104 @@ class ZCodeTui {
         this.options.listPluginReferences ?? createRuntimePluginReferenceLister(workspaceDirectory)
       )
     );
-    this.editor.onSubmit = (text) => void this.submit(text);
+    editor.onSubmit = (text) => void this.submit(text);
+    return editor;
+  }
+
+  private focusEditor(): void {
+    this.ui.setFocus(this.editor);
+  }
+
+  private rememberEditorHistory(input: string): void {
+    const trimmed = input.trim();
+    if (!trimmed || this.editorHistory[0] === trimmed) return;
+    this.editorHistory.unshift(trimmed);
+    if (this.editorHistory.length > 100) this.editorHistory.pop();
+  }
+
+  private async switchTuiMode(next: TuiMode): Promise<void> {
+    if (this.settingSwitchInFlight) return;
+    if (next === this.tuiMode) return;
+    // Background tasks do not block a display switch, but any active
+    // foreground or suspended submission does.
+    if (this.activeSubmissions > 0 || this.turnAbortController) {
+      this.addNotice("Wait for the active turn before switching display mode.", "warning");
+      return;
+    }
+    this.settingSwitchInFlight = true;
+    const savedDraft = this.editor.getText();
+    const hadSessionContent = this.sessionHasContent || this.transcript.blockCount > 0;
+    const previousUi = this.ui;
+    const previousMode = this.tuiMode;
+    let previousStopped = false;
+    try {
+      this.notifications.stop();
+      previousStopped = true;
+      this.ui.stop({ preserveScreen: true });
+      this.ui = this.createTui(next);
+      this.tuiMode = next;
+      this.sessionHasContent = hadSessionContent;
+      this.fullscreenWelcomeVisible = !hadSessionContent;
+      this.fullscreenHeader.setPhase(hadSessionContent ? "rail" : "welcome");
+      this.editor = this.createEditor(this.ui);
+      this.fullscreenTranscript = undefined;
+      this.fullscreenLayout = undefined;
+      this.buildLayout();
+      this.ui.start();
+      this.bindInput();
+      this.focusEditor();
+      if (savedDraft) this.editor.setText(savedDraft);
+      this.ui.requestRender(true);
+      this.notifications.start();
+      try {
+        await writeTuiMode(next);
+      } catch (error) {
+        this.addNotice(error instanceof Error ? error.message : String(error), "error");
+      }
+    } catch (error) {
+      if (this.ui !== previousUi || previousStopped) {
+        if (this.ui !== previousUi) {
+          try {
+            this.ui.stop({ preserveScreen: true });
+          } catch {
+            // Continue with the best-effort rollback below.
+          }
+        }
+        this.ui = previousUi;
+        this.tuiMode = previousMode;
+        this.sessionHasContent = hadSessionContent;
+        this.fullscreenWelcomeVisible = previousMode === "fullscreen" ? !hadSessionContent : true;
+        this.fullscreenHeader.setPhase(hadSessionContent ? "rail" : "welcome");
+        this.fullscreenTranscript = undefined;
+        this.fullscreenLayout = undefined;
+        this.editor = this.createEditor(this.ui);
+        if (savedDraft) this.editor.setText(savedDraft);
+        this.buildLayout();
+        try {
+          this.ui.start();
+          this.bindInput();
+          this.focusEditor();
+          this.notifications.start();
+          this.ui.requestRender(true);
+        } catch {
+          // Preserve the original switch failure in the user-facing notice.
+        }
+      }
+      this.addNotice(`Display mode switch failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    } finally {
+      this.settingSwitchInFlight = false;
+    }
   }
 
   private updateLoginWarning(): void {
-    const configPath = userConfigPathHint();
-    this.loginWarning.setText(
-      this.loginRequired ? this.theme.warning("Model access is not configured.") : ""
-    );
-    this.loginHelp.setText(
-      this.loginRequired
-        ? this.theme.warning(`Run /login, or configure a custom provider in ${configPath}.`)
-        : ""
-    );
+    this.sessionWelcome.setLoginRequired(this.loginRequired);
   }
 
   private setLoginRequired(required: boolean): void {
     const changed = this.loginRequired !== required;
     this.loginRequired = required;
     this.updateLoginWarning();
+    this.ui.requestRender();
     if (changed && !required) {
       void this.refreshGoal();
       void this.refreshSessionUsage();
@@ -785,10 +1171,12 @@ class ZCodeTui {
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     } finally {
-      this.ui.start();
-      this.notifications.start();
-      this.ui.setFocus(this.editor);
-      this.ui.requestRender(true);
+      if (!this.stopped) {
+        this.ui.start();
+        this.notifications.start();
+        this.focusEditor();
+        this.ui.requestRender(true);
+      }
     }
 
     const access = code === 0 ? await readConfiguredModelAccess() : null;
@@ -862,6 +1250,22 @@ class ZCodeTui {
       if (!matchesKey(data, "escape")) {
         this.clearRewindEscape();
         this.recentSteerCommit = undefined;
+      }
+      const focusedComponent = (this.ui as TUI & {
+        getFocusedComponent?: () => Component | null;
+      }).getFocusedComponent?.();
+      if (this.tuiMode === "fullscreen"
+        && this.fullscreenTranscript
+        && focusedComponent === this.editor
+        && !this.editor.getText()
+        && (matchesKey(data, "pageUp") || matchesKey(data, "pageDown"))) {
+        if (matchesKey(data, "pageUp")) {
+          this.fullscreenTranscript.scrollBy(-Math.max(1, this.fullscreenTranscript.viewportHeight - 4));
+        } else {
+          this.fullscreenTranscript.scrollBy(Math.max(1, this.fullscreenTranscript.viewportHeight - 4));
+        }
+        this.ui.requestRender();
+        return { consume: true };
       }
       if (matchesKey(data, "up") && this.canEnterAttachmentSelection()) {
         this.enterAttachmentSelection();
@@ -1001,7 +1405,10 @@ class ZCodeTui {
     const input = (queuedSubmission?.input ?? rawInput).trim();
     if (!input || this.stopped) return;
     const submission = queuedSubmission ?? protectSubmission(input);
-    if (submission.recordHistory) this.editor.addToHistory(input);
+    if (submission.recordHistory) {
+      this.rememberEditorHistory(input);
+      this.editor.addToHistory(input);
+    }
 
     if (input === "/exit" || input === "/quit") {
       this.stop();
@@ -1388,11 +1795,9 @@ class ZCodeTui {
       pendingInputIds: this.inputQueue.admittedPendingInputIds(),
       reason: "TUI interrupted the active model step to submit steer instructions.",
       reservationId: request.reservationId
-    }).then((outcome) => {
+    }).then(() => {
       if (!this.isPendingSteerInterrupt(turnEpoch, abortController)) return;
-      if (!isRecord(outcome) || asString(outcome.kind) !== "stopped") {
-        abortController.abort();
-      }
+      abortController.abort();
     }).catch(() => {
       if (this.isPendingSteerInterrupt(turnEpoch, abortController)) {
         abortController.abort();
@@ -1412,9 +1817,9 @@ class ZCodeTui {
       abortController.abort();
       return;
     }
-    void interruptTurn({ reason: "TUI interrupted the active foreground turn." }).then((outcome) => {
+    void interruptTurn({ reason: "TUI interrupted the active foreground turn." }).then(() => {
       if (this.turnAbortController !== abortController || abortController.signal.aborted) return;
-      if (!isRecord(outcome) || asString(outcome.kind) !== "stopped") abortController.abort();
+      abortController.abort();
     }).catch(() => {
       if (this.turnAbortController === abortController && !abortController.signal.aborted) {
         abortController.abort();
@@ -1485,6 +1890,7 @@ class ZCodeTui {
       emitSessionTerminalTitle(this.options.stdout ?? process.stdout, "");
       this.sessionMetrics = {};
       this.restoreTranscript(restoredMessages(result.restoredMessages));
+      if (this.transcript.blockCount > 0) this.enterSessionRail(true);
     }
 
     const response = responseText(result);
@@ -1625,10 +2031,23 @@ class ZCodeTui {
       this.updateToolView(tool, "running", event.result, undefined, event.progress);
     } else if (event.kind === "result") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
-      this.updateToolView(tool, toolSucceeded(event.result) ? "complete" : "failed", event.result, undefined, event.progress);
+      const cancelled = isToolCancellation(event.result);
+      this.updateToolView(
+        tool,
+        cancelled ? "cancelled" : toolSucceeded(event.result) ? "complete" : "failed",
+        event.result,
+        undefined,
+        event.progress
+      );
     } else if (event.kind === "error" && (event.toolCallId || event.toolName)) {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
-      this.updateToolView(tool, "failed", event.result, event.error, event.progress);
+      this.updateToolView(
+        tool,
+        isToolCancellation(event.error ?? event.result) ? "cancelled" : "failed",
+        event.result,
+        event.error,
+        event.progress
+      );
     } else if (event.kind === "closed" && (event.toolCallId || event.toolName)) {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
       if (!tool.view.isTerminal()) this.updateToolView(tool, "complete", event.result, event.error, event.progress);
@@ -1885,7 +2304,9 @@ class ZCodeTui {
         ? { output: part.output, display: part.resultDisplay }
         : part.output;
       if (part.output !== undefined || part.resultDisplay !== undefined) tool.outputText = undefined;
-      this.updateToolView(tool, restoredToolState(part.status), result, part.error, {
+      this.updateToolView(tool, isToolCancellation(part.error ?? result)
+        ? "cancelled"
+        : restoredToolState(part.status), result, part.error, {
         parentToolCallId: part.parentToolCallId,
         childToolCallId: part.childToolCallId,
         agentId: part.agentId,
@@ -2020,6 +2441,7 @@ class ZCodeTui {
 
   private clearTranscriptProjection(): void {
     this.transcript.clear();
+    this.resetSessionPresentation();
     this.assistantStream.clear();
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
@@ -2032,6 +2454,7 @@ class ZCodeTui {
   }
 
   private appendThinking(delta: string, partId?: string, messageId?: string): void {
+    if (delta.trim()) this.enterSessionRail();
     if (partId) {
       let view = this.thinkingParts.get(partId);
       if (!view) {
@@ -2063,6 +2486,7 @@ class ZCodeTui {
 
   private addUserMessage(text: string, attachmentCount = 0, messageId?: string): void {
     const safeText = sanitizeTerminalText(text, { preserveSgr: false });
+    this.enterSessionRail();
     const suffix = attachmentCount > 0 ? `  [${attachmentCount} image${attachmentCount === 1 ? "" : "s"}]` : "";
     this.currentToolGroup = undefined;
     this.transcript.addBlock(
@@ -2073,6 +2497,7 @@ class ZCodeTui {
   }
 
   private addAssistantMessage(text: string, partId?: string, messageId?: string): void {
+    this.enterSessionRail();
     this.currentToolGroup = undefined;
     this.transcript.addBlock(new RichMarkdown(text, 1, this.theme), {
       id: partId,
@@ -2152,6 +2577,7 @@ class ZCodeTui {
     partId?: string,
     messageId?: string
   ): ToolViewState {
+    this.enterSessionRail();
     const anonymous = !toolCallId
       ? Array.from(this.toolViews.values()).findLast((tool) => tool.name === (toolName ?? "tool") && !tool.view.isTerminal())
       : undefined;
@@ -2537,7 +2963,7 @@ class ZCodeTui {
     const submission = this.inputQueue.editLatestFollowUp();
     if (!submission) return;
     this.editor.setText(submission.input);
-    this.ui.setFocus(this.editor);
+    this.focusEditor();
   }
 
   private async attachClipboardImage(): Promise<void> {
@@ -2589,7 +3015,7 @@ class ZCodeTui {
 
   private leaveAttachmentSelection(): void {
     this.attachmentBar.deactivate();
-    this.ui.setFocus(this.editor);
+    this.focusEditor();
     this.ui.requestRender();
   }
 
@@ -2608,7 +3034,7 @@ class ZCodeTui {
   private syncAttachmentBar(): void {
     const wasActive = this.attachmentBar.isActive();
     this.attachmentBar.setAttachments(this.pendingAttachments);
-    if (wasActive && !this.attachmentBar.isActive()) this.ui.setFocus(this.editor);
+    if (wasActive && !this.attachmentBar.isActive()) this.focusEditor();
     this.ui.requestRender();
   }
 
@@ -3247,6 +3673,7 @@ class ZCodeTui {
       const backend = notificationDeliveryLabel(effective.method, diagnostics.backend);
       const methodOverride = Boolean(process.env.ZCODE_TUI_NOTIFICATION_METHOD?.trim());
       const conditionOverride = Boolean(process.env.ZCODE_TUI_NOTIFICATION_CONDITION?.trim());
+      const tuiModeOverride = process.env.ZCODE_TUI_MODE?.trim().toLowerCase();
       const savedConfig = await readUserConfig()
         .then((config) => (isRecord(config.model) ? config.model as Record<string, unknown> : undefined))
         .catch(() => undefined);
@@ -3278,6 +3705,13 @@ class ZCodeTui {
             description: conditionOverride
               ? `Current: ${effective.condition} · Saved: ${stored.condition} (environment override)`
               : `Current: ${stored.condition}`
+          },
+          {
+            value: "tui-mode",
+            label: "Display mode",
+            description: tuiModeOverride === "fullscreen" || tuiModeOverride === "regular"
+              ? `Current: ${this.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"} (environment override)`
+              : `Current: ${this.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"}`
           }
         ],
         selectedIndex: selectedSettingIndex
@@ -3288,6 +3722,43 @@ class ZCodeTui {
         selectedSettingIndex = 0;
         await this.showModelProviderSettings();
         feedback = "Changes save immediately · Esc closes settings";
+        continue;
+      }
+
+      if (setting.value === "tui-mode") {
+        selectedSettingIndex = 3;
+        const selected = await this.showChoice({
+          title: "Display mode",
+          prompt: "Switch between regular and fullscreen TUI.",
+          help: "Up/Down choose · Enter apply · Esc back",
+          items: [
+            {
+              value: "regular",
+              label: "Regular",
+              description: "Scrollback-style output (default)"
+            },
+            {
+              value: "fullscreen",
+              label: "Fullscreen",
+              description: "Alternate screen with scrollable transcript and scrollbars"
+            }
+          ],
+          selectedIndex: this.tuiMode === "fullscreen" ? 1 : 0
+        });
+        if (!selected) {
+          feedback = "No changes · Esc closes settings";
+          continue;
+        }
+        const next = selected.value as TuiMode;
+        if (next === this.tuiMode) {
+          feedback = "Display mode unchanged";
+          continue;
+        }
+        await this.switchTuiMode(next);
+        feedback = this.tuiMode === next
+          ? `Display mode: ${next} · applied`
+          : "Could not switch display mode";
+        selectedSettingIndex = 3;
         continue;
       }
 
@@ -3663,6 +4134,7 @@ class ZCodeTui {
         this.lastAssistantText = "";
         this.turnAssistantText = "";
         this.restoreTranscript(restored);
+        if (this.transcript.blockCount > 0) this.enterSessionRail(true);
         this.editor.setText(target.text);
       }
 
@@ -4353,7 +4825,7 @@ class ZCodeTui {
       return await choose(this.ui, this.choiceHost, this.theme, options);
     } finally {
       this.choiceDepth = Math.max(0, this.choiceDepth - 1);
-      this.ui.setFocus(this.editor);
+      this.focusEditor();
       this.ui.requestRender();
     }
   }
@@ -4364,7 +4836,7 @@ class ZCodeTui {
       return await promptText(this.ui, this.choiceHost, this.theme, options);
     } finally {
       this.choiceDepth = Math.max(0, this.choiceDepth - 1);
-      this.ui.setFocus(this.editor);
+      this.focusEditor();
       this.ui.requestRender();
     }
   }
@@ -4400,7 +4872,10 @@ class ZCodeTui {
         break;
       }
     }
-    for (const input of history.reverse()) this.editor.addToHistory(input);
+    for (const input of history.reverse()) {
+      this.rememberEditorHistory(input);
+      this.editor.addToHistory(input);
+    }
   }
 
   private async restoreInitialTranscript(): Promise<void> {
@@ -4758,7 +5233,10 @@ class ZCodeTui {
     this.finalizeUnresolvedTools(unfinishedToolState);
     this.turnDiffs.finishTurn();
     this.currentToolGroup = undefined;
-    if (!this.turnWork.finishForeground(Boolean(this.options.readRuntimeProjection))) {
+    if (unfinishedToolState === "cancelled") {
+      this.turnWork.cancel();
+      this.settleTurnTiming();
+    } else if (!this.turnWork.finishForeground(Boolean(this.options.readRuntimeProjection))) {
       this.settleTurnTiming();
     }
     this.activity = undefined;
@@ -4819,6 +5297,7 @@ class ZCodeTui {
     this.updateCheckAbortController?.abort();
     if (this.turnTimer) clearInterval(this.turnTimer);
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
+    if (this.fullscreenWelcomeTransitionTimer) clearTimeout(this.fullscreenWelcomeTransitionTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
     if (this.runtimePollTimer) clearTimeout(this.runtimePollTimer);
     this.unsubscribeSession?.();
@@ -4826,37 +5305,51 @@ class ZCodeTui {
     const elapsedMilliseconds = this.turnStartedAt === undefined
       ? this.turnElapsedMilliseconds
       : Math.max(0, performance.now() - this.turnStartedAt);
-    this.notifications.stop();
-    this.ui.stop();
+    try {
+      this.notifications.stop();
+    } catch {
+      // Notification cleanup must not prevent terminal restoration.
+    }
+    try {
+      this.ui.stop();
+    } catch {
+      // Keep resolving the run even if a terminal implementation fails.
+    }
     void this.finishStop(elapsedMilliseconds);
   }
 
   private async finishStop(elapsedMilliseconds: number): Promise<void> {
-    await this.refreshExitUsage();
-    const summary = buildExitSummary({
-      elapsedMilliseconds,
-      metrics: this.sessionMetrics,
-      sessionId: this.sessionId ?? this.runtimeProjection?.sessionId,
-      width: this.ui.terminal.columns
-    });
-    const lines = [
-      summary.divider && this.theme.muted(summary.divider),
-      summary.tokenUsage,
-      summary.resumeCommand
-        ? `To continue this session, run ${this.theme.accent(summary.resumeCommand)}`
-        : undefined
-    ].filter((line): line is string => Boolean(line));
-    if (lines.length > 0) {
-      try {
-        (this.options.stdout ?? process.stdout).write(`${lines.join("\n")}\n`);
-      } catch {
-        // Exit diagnostics must not prevent terminal cleanup.
+    try {
+      await this.refreshExitUsage();
+      const summary = buildExitSummary({
+        elapsedMilliseconds,
+        metrics: this.sessionMetrics,
+        sessionId: this.sessionId ?? this.runtimeProjection?.sessionId,
+        width: this.ui.terminal.columns
+      });
+      const lines = [
+        summary.divider && this.theme.muted(summary.divider),
+        summary.tokenUsage,
+        summary.resumeCommand
+          ? `To continue this session, run ${this.theme.accent(summary.resumeCommand)}`
+          : undefined
+      ].filter((line): line is string => Boolean(line));
+      if (lines.length > 0) {
+        try {
+          (this.options.stdout ?? process.stdout).write(`${lines.join("\n")}\n`);
+        } catch {
+          // Exit diagnostics must not prevent terminal cleanup.
+        }
       }
+    } catch {
+      // Exit diagnostics are supplementary; terminal cleanup is authoritative.
+    } finally {
+      this.resolveDone();
     }
-    this.resolveDone();
   }
 }
 
 export async function runTui(options: TuiOptions): Promise<void> {
+  suppressTuiAiSdkWarnings();
   await new ZCodeTui(options).run();
 }
