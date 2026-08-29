@@ -1572,6 +1572,9 @@ class ZCodeTui {
     const callOptions: PromptCallOptions = {
       abortSignal: abortController.signal,
       delivery: steering ? "steer_active_turn" : "start_turn",
+      // Steers must request guide delivery; the runtime only injects
+      // guide-classified pending inputs into the active turn.
+      queueDelivery: steering ? "guide" : undefined,
       expectedTurnId: steering ? this.activeTurnId : undefined,
       inputId,
       pendingInputReservationId: queuedSubmission?.pendingInputReservationId,

@@ -12,6 +12,8 @@ export interface SlashCommandOption {
 export interface PromptCallOptions {
   abortSignal?: AbortSignal;
   delivery?: "auto" | "start_turn" | "steer_active_turn";
+  /** Requested pending-input classification; steers need "guide" to be injected into the active turn. */
+  queueDelivery?: "guide" | "queue";
   expectedTurnId?: string;
   inputId?: string;
   pendingInputReservationId?: string;

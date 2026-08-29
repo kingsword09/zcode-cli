@@ -394,6 +394,9 @@ await runTui({
       if (options.delivery !== "steer_active_turn") {
         throw new Error(`Active-turn input used unexpected delivery mode: ${String(options.delivery)}`);
       }
+      if (options.queueDelivery !== "guide") {
+        throw new Error(`Active steer used unexpected queue delivery: ${String(options.queueDelivery)}`);
+      }
       if (promptText === "Edit this rejected steer.") {
         if (options.expectedTurnId !== "turn_feature") {
           throw new Error(`Rejected steer used unexpected expected turn: ${String(options.expectedTurnId)}`);
