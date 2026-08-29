@@ -24,6 +24,7 @@ interface ConfigTemplate {
   };
   ui: {
     theme: string;
+    copyOnSelect: boolean;
     notifications: {
       method: string;
       condition: string;
@@ -47,6 +48,7 @@ test("custom-provider config template is internally consistent", async () => {
   expect(config.modelStream.idleTimeoutMs).toBe(60_000);
   expect(config.subagents.autoBackgroundMs).toBe(1_000);
   expect(config.ui.theme).toBe("auto");
+  expect(config.ui.copyOnSelect).toBe(true);
   expect(config.ui.notifications).toEqual({ method: "auto", condition: "unfocused" });
   // The runtime's user-config model schema is strict: only main/lite are accepted
   // (model.available is a runtime-internal key injected by the app host, not user config).

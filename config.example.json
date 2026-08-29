@@ -102,6 +102,7 @@
     "locale": "auto",
     "theme": "auto",
     "tuiMode": "regular",
+    "copyOnSelect": true,
     "notifications": {
       "method": "auto",
       "condition": "unfocused"

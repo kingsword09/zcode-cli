@@ -68,7 +68,7 @@
     "provenance": true
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.84.3",
+    "@earendil-works/pi-tui": "^0.84.4",
     "playwright-core": "1.59.1"
   },
   "devDependencies": {

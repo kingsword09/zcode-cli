@@ -361,6 +361,24 @@ Fullscreen mode is restored on normal exit and on handled `SIGINT`, `SIGTERM`,
 or `SIGHUP` shutdowns. A hard `SIGKILL` cannot be intercepted by any terminal
 application.
 
+### Copy on select
+
+Releasing a mouse selection in fullscreen mode copies the selected text to the
+system clipboard. Set `ui.copyOnSelect` to `false` to keep copying manual:
+drags then only highlight, and the terminal's native selection (hold Shift or
+the modifier your emulator documents while dragging) still works. The setting
+only affects fullscreen mode; regular scrollback mode has no mouse selection.
+The same toggle is available in `/settings` under **Fullscreen copy on
+select**.
+
+```json
+{
+  "ui": {
+    "copyOnSelect": false
+  }
+}
+```
+
 ## Theme
 
 Set `ui.theme` to `"auto"` (terminal detection), `"dark"`, or `"light"` in the

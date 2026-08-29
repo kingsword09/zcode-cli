@@ -140,6 +140,10 @@ import {
   writeTuiMode
 } from "./tui-mode.ts";
 import {
+  readCopyOnSelect,
+  writeCopyOnSelect
+} from "./copy-on-select.ts";
+import {
   effortPicker,
   explicitModelRequest,
   isEffortPickerRequest,
@@ -585,6 +589,7 @@ class ZCodeTui {
   private mode: Mode;
   private model: string;
   private tuiMode: TuiMode;
+  private copyOnSelect = true;
   private thoughtLevel?: string;
   private modelOptions: unknown[];
   private effortOptions: unknown[];
@@ -723,6 +728,13 @@ class ZCodeTui {
     } catch (error) {
       notificationConfigError = error instanceof Error ? error.message : String(error);
     }
+    // The constructor built the TUI before user config was readable; reconcile
+    // copy-on-select here so a tuiMode rebuild below also carries the value.
+    try {
+      this.setCopyOnSelect(await readCopyOnSelect());
+    } catch {
+      // Config unreadable — keep the constructor's default (enabled).
+    }
     // Resolve the effective TUI mode from env > options > config. The vendor
     // runtime does not forward initialTuiMode, so read the persisted config
     // here and rebuild the TUI instance before start() when it differs from
@@ -838,6 +850,16 @@ class ZCodeTui {
     }
   }
 
+  /** The live fullscreen alt screen, when the active TUI is the fullscreen one. */
+  private get fullscreenAltScreen(): ZCodeAltScreen | undefined {
+    return this.ui instanceof ZCodeAltScreen ? this.ui : undefined;
+  }
+
+  private setCopyOnSelect(enabled: boolean): void {
+    this.copyOnSelect = enabled;
+    this.fullscreenAltScreen?.setCopyOnSelect(enabled);
+  }
+
   private createTui(mode: TuiMode): TUI {
     let fullscreenTui: ZCodeAltScreen | undefined;
     const terminal = new NotifyingProcessTerminal((data) => {
@@ -857,6 +879,10 @@ class ZCodeTui {
           return false;
         }
       },
+      // pi-tui copies the selection on mouse release by default; ui.copyOnSelect
+      // opts out so a drag only highlights and copying stays manual (/copy,
+      // native terminal selection).
+      copyOnSelect: this.copyOnSelect,
       mouse: true,
       wheelScrollLines: 3
     });
@@ -1216,7 +1242,7 @@ class ZCodeTui {
     }
     for (const command of [
       { name: "cls", description: "Clear the visible transcript (the runtime's /clear starts a new session)" },
-      { name: "copy", description: "Copy the latest assistant response" },
+      { name: "copy", description: "Copy the active fullscreen selection or latest assistant response" },
       { name: "paste-image", description: "Attach an image from the system clipboard" },
       { name: "attachments", description: "Manage or clear pending attachments", argumentHint: "[clear]" },
       { name: "activity", description: "Inspect every active tool and open task" },
@@ -1429,7 +1455,7 @@ class ZCodeTui {
       return;
     }
     if (input === "/copy") {
-      await this.copyLastResponse();
+      await this.copySelectionOrLastResponse();
       return;
     }
     if (input === "/paste-image") {
@@ -3715,6 +3741,11 @@ class ZCodeTui {
             description: tuiModeOverride === "fullscreen" || tuiModeOverride === "regular"
               ? `Current: ${this.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"} (environment override)`
               : `Current: ${this.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"}`
+          },
+          {
+            value: "copy-on-select",
+            label: "Fullscreen copy on select",
+            description: `Current: ${this.copyOnSelect ? "Enabled" : "Disabled"}`
           }
         ],
         selectedIndex: selectedSettingIndex
@@ -3762,6 +3793,46 @@ class ZCodeTui {
           ? `Display mode: ${next} · applied`
           : "Could not switch display mode";
         selectedSettingIndex = 3;
+        continue;
+      }
+
+      if (setting.value === "copy-on-select") {
+        selectedSettingIndex = 4;
+        const selected = await this.showChoice({
+          title: "Fullscreen copy on select",
+          prompt: "Only applies to fullscreen mode. Releasing a mouse selection copies it to the clipboard.",
+          help: "Up/Down choose · Enter save · Esc back",
+          items: [
+            {
+              value: "enabled",
+              label: "Enabled",
+              description: "Release copies the selection (default)"
+            },
+            {
+              value: "disabled",
+              label: "Disabled",
+              description: "Selection only highlights; copy manually via /copy or the terminal"
+            }
+          ],
+          selectedIndex: this.copyOnSelect ? 0 : 1
+        });
+        if (!selected) {
+          feedback = "No changes · Esc closes settings";
+          continue;
+        }
+        const next = selected.value === "enabled";
+        if (next === this.copyOnSelect) {
+          feedback = "Copy on select unchanged";
+          continue;
+        }
+        try {
+          await writeCopyOnSelect(next);
+          this.setCopyOnSelect(next);
+          feedback = `Copy on select ${next ? "enabled" : "disabled"} · saved`;
+        } catch (error) {
+          this.addNotice(error instanceof Error ? error.message : String(error), "error");
+          feedback = "Could not save the setting · select it to retry";
+        }
         continue;
       }
 
@@ -4844,7 +4915,13 @@ class ZCodeTui {
     }
   }
 
-  private async copyLastResponse(): Promise<void> {
+  private async copySelectionOrLastResponse(): Promise<void> {
+    const fullscreen = this.fullscreenAltScreen;
+    if (fullscreen?.hasActiveSelection()) {
+      await fullscreen.copyActiveSelectionToClipboard();
+      return;
+    }
+
     const text = this.transcript.selectedText() ?? this.lastAssistantText;
     if (!text) {
       this.addNotice("There is no assistant response to copy.", "muted");
