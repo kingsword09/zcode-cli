@@ -207,7 +207,8 @@ boundary, the steer stays in a waiting row next to the editor instead of being
 shown as committed conversation history. Once the runtime confirms injection,
 the message moves into the transcript at its actual position and uses the normal
 user-message `›` prefix. The `↪` marker is reserved for the temporary waiting
-row.
+row. `Ctrl+C` clears a non-empty editor draft first, including during an active
+turn. With an empty editor it cancels the active turn, or exits when idle.
 
 To keep a follow-up editable instead, press `Tab` while the editor contains
 text and completion is closed. The input remains in the local next-turn queue.

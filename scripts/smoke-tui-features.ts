@@ -221,6 +221,14 @@ try {
     4_000
   );
   await sendAndWait(
+    "Discard this active-turn draft.",
+    "active-turn draft",
+    /Discard this active-turn draft\./i
+  );
+  terminal.write("\x03");
+  await Bun.sleep(renderSettleMilliseconds);
+  if (child.exitCode !== null) throw new Error("Ctrl+C exited ZCode instead of clearing the active-turn draft.");
+  await sendAndWait(
     "Keep the final response concise.\r",
     "pending active-turn steer",
     /Steering current turn · 1 waiting[\s\S]*↪ Keep the final response concise\.[\s\S]*waiting for the next model step/i

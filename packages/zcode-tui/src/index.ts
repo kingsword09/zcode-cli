@@ -1408,12 +1408,12 @@ class ZCodeTui {
         return { consume: true };
       }
       if (matchesKey(data, "ctrl+c")) {
-        if (this.turnAbortController) {
+        if (this.editor.getText()) {
+          this.editor.setText("");
+        } else if (this.turnAbortController) {
           this.pendingSteerInterrupt = undefined;
           this.turnAbortController.abort();
           this.updateActivity("cancelling…");
-        } else if (this.editor.getText()) {
-          this.editor.setText("");
         } else {
           this.stop();
         }
