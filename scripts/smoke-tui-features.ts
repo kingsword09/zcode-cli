@@ -30,6 +30,7 @@ const child = Bun.spawn([process.execPath, fixture], {
     TERM_PROGRAM: "iTerm.app",
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,
     ZCODE_APP_CLI_ENTRY: fixture,
+    ZCODE_TUI_FEATURE_SMOKE: "1",
     ZCODE_TUI_NOTIFICATION_METHOD: "osc9",
     ZCODE_TUI_NOTIFICATION_CONDITION: "unfocused"
   },

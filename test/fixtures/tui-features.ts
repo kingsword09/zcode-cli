@@ -1043,9 +1043,11 @@ await runTui({
   setMode: async (nextMode) => ({ mode: nextMode })
 });
 
-if (coordinatorNoticeCount !== 2) {
-  throw new Error(`Expected two coordinator notices, received ${coordinatorNoticeCount}.`);
-}
-if (backgroundCancellationAttempts.join(",") !== "esc_owned,esc_declined") {
-  throw new Error(`Unexpected Esc cancellation attempts: ${backgroundCancellationAttempts.join(",")}`);
+if (process.env.ZCODE_TUI_FEATURE_SMOKE === "1") {
+  if (coordinatorNoticeCount !== 2) {
+    throw new Error(`Expected two coordinator notices, received ${coordinatorNoticeCount}.`);
+  }
+  if (backgroundCancellationAttempts.join(",") !== "esc_owned,esc_declined") {
+    throw new Error(`Unexpected Esc cancellation attempts: ${backgroundCancellationAttempts.join(",")}`);
+  }
 }
