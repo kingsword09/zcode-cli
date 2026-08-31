@@ -1428,6 +1428,16 @@ class ZCodeTui {
           this.clearRewindEscape();
           return { consume: true };
         }
+        // Clear search/cursor state before interrupting so Esc dismisses the
+        // /search view first; a second Esc (or ctrl+c) interrupts the turn.
+        if (this.transcript.searchStatus() || this.transcript.cursorStatus()) {
+          this.clearRewindEscape();
+          this.transcript.clearSearch();
+          this.transcript.clearCursor();
+          this.updateMetadata();
+          this.ui.requestRender(true);
+          return { consume: true };
+        }
         if (this.turnAbortController) {
           this.clearRewindEscape();
           const pendingSteer = this.inputQueue.hasPendingSteers();
@@ -1440,14 +1450,6 @@ class ZCodeTui {
           } else {
             this.requestForegroundTurnInterrupt();
           }
-          return { consume: true };
-        }
-        if (this.transcript.searchStatus() || this.transcript.cursorStatus()) {
-          this.clearRewindEscape();
-          this.transcript.clearSearch();
-          this.transcript.clearCursor();
-          this.updateMetadata();
-          this.ui.requestRender(true);
           return { consume: true };
         }
         if (!this.editor.getText() && this.activeSubmissions === 0) {
