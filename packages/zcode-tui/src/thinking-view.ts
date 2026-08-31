@@ -19,7 +19,10 @@ export class ThinkingView extends Box {
 
   append(delta: string): void {
     if (!delta) return;
-    this.text += sanitizeTerminalText(delta, { preserveSgr: false });
+    const sanitized = sanitizeTerminalText(delta, { preserveSgr: false });
+    if (!sanitized) return;
+    this.completed = false;
+    this.text += sanitized;
     this.dirty = true;
   }
 

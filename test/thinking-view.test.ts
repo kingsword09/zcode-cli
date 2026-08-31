@@ -40,6 +40,21 @@ describe("TUI thinking view", () => {
     expect(lines.every((line) => visibleWidth(line) <= 30)).toBe(true);
   });
 
+  test("resumes the same card when reasoning continues after a text block", () => {
+    const view = new ThinkingView(createTheme(false));
+
+    view.append("Inspecting ");
+    view.complete();
+    view.append("the remaining files.");
+
+    const active = view.render(52).map((line) => line.trimEnd()).join("\n");
+    expect(active).toContain("◇ Thinking · active");
+    expect(active.match(/Inspecting the remaining files\./g)).toHaveLength(1);
+
+    view.complete();
+    expect(view.render(52).join("\n")).toContain("◇ Thought");
+  });
+
   test("keeps routine thinking content free of full-width backgrounds", () => {
     const view = new ThinkingView(createTheme(true, "light"));
     view.append("Inspecting the runtime.");

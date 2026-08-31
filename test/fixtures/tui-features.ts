@@ -702,8 +702,21 @@ await runTui({
       attempt: 2,
       maxAttempts: 6
     });
-    await emit(options, { kind: "reasoning_delta", delta: "Inspecting " });
-    await emit(options, { kind: "reasoning_delta", delta: "the repository before using tools." });
+    const interleavedModelBlocks = [
+      { reasoning: "Inspecting ", text: "我会检查 vercel-l" },
+      { reasoning: "the repository ", text: "abs/native 与 Compose Desktop" },
+      { reasoning: "before using tools.", text: " 的 WebView 路径。" }
+    ];
+    for (const [index, block] of interleavedModelBlocks.entries()) {
+      const reasoningPartId = `stream_reasoning_${index}`;
+      const textPartId = `stream_text_${index}`;
+      await emit(options, { kind: "reasoning_start", partId: reasoningPartId });
+      await emit(options, { kind: "reasoning_delta", partId: reasoningPartId, delta: block.reasoning });
+      await emit(options, { kind: "reasoning_end", partId: reasoningPartId });
+      await emit(options, { kind: "text_start", partId: textPartId });
+      await emit(options, { kind: "text_delta", partId: textPartId, delta: block.text });
+      await emit(options, { kind: "text_end", partId: textPartId });
+    }
     await emit(options, { kind: "tool_input_start", toolCallId: "call_plan", toolName: "TodoWrite" });
     await emit(options, {
       kind: "tool_input_delta",

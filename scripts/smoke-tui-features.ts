@@ -491,6 +491,7 @@ for (const [label, pattern] of [
   ["updated plan", /● Updated Plan/i],
   ["plan summary", /2 completed · 1 in progress · 0 pending/i],
   ["active plan item", /□ Verify the TUI/i],
+  ["continuous interleaved model text", /我会检查 vercel-labs\/native 与 Compose Desktop 的 WebView 路径。/u],
   ["pre-tool assistant commentary", /I will inspect the repository first\./i],
   ["tool execution", /Read 1 file · ⎿ demo\.ts/i],
   ["tool result", /source text/i],

@@ -2112,27 +2112,23 @@ class ZCodeTui {
     }
     if (event.kind === "text_start") {
       this.currentToolGroup = undefined;
-      this.completeThinking();
-      this.assistantStream.breakSegment();
     } else if (event.kind === "text_delta" && event.delta) {
       this.currentToolGroup = undefined;
-      this.completeThinking();
-      this.recordAssistantText(this.assistantStream.append(event.delta, event.partId, event.messageId));
+      this.recordAssistantText(this.assistantStream.append(event.delta, undefined, event.messageId));
     } else if (event.kind === "text_end") {
-      this.assistantStream.breakSegment();
+      // Provider content blocks are transport boundaries. Tool and turn events
+      // define the visible transcript boundaries.
     } else if (event.kind === "reasoning_start") {
       this.currentToolGroup = undefined;
-      this.assistantStream.breakSegment();
       this.updateActivity("thinking…", false);
     } else if (event.kind === "reasoning_delta") {
       this.currentToolGroup = undefined;
-      this.assistantStream.breakSegment();
       this.updateActivity("thinking…", false);
       if (event.delta && (this.currentThinking || event.delta.trim())) {
-        this.appendThinking(event.delta, event.partId, event.messageId);
+        this.appendThinking(event.delta, undefined, event.messageId);
       }
     } else if (event.kind === "reasoning_end") {
-      this.completeThinking(event.partId);
+      this.settleThinking();
     } else if (event.kind === "tool_input_start") {
       const tool = this.ensureToolView(event.toolCallId, event.toolName, event.partId, event.messageId);
       tool.input = undefined;
@@ -2602,10 +2598,16 @@ class ZCodeTui {
     this.currentThinking.append(delta);
   }
 
-  private completeThinking(partId?: string): void {
+  private settleThinking(partId?: string): ThinkingView | undefined {
     const thinking = partId ? this.thinkingParts.get(partId) : this.currentThinking;
-    if (!thinking) return;
+    if (!thinking) return undefined;
     thinking.complete();
+    return thinking;
+  }
+
+  private completeThinking(partId?: string): void {
+    const thinking = this.settleThinking(partId);
+    if (!thinking) return;
     if (this.currentThinking === thinking) {
       this.currentThinking = undefined;
       this.currentThinkingPartId = undefined;
