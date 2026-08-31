@@ -11,6 +11,7 @@ import {
   formatRuntimeCompatibilityFailure,
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
+  hasRuntimeNetworkRetryGuard,
   manifestUrl,
   parseArgs,
   parseRuntimePatchReports,
@@ -21,6 +22,7 @@ import {
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
+  patchRuntimeNetworkRetryClassification,
   patchRuntimeOAuthHttpErrors,
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge,
@@ -216,6 +218,117 @@ describe("runtime synchronization", () => {
       "runtime without the HTTP wrapper"
     );
     expect(hasRuntimeHttpNoContentGuard("runtime without the HTTP wrapper")).toBe(false);
+  });
+
+  test("classifies wrapped transport failures without retrying in place after output", () => {
+    const runtime = [
+      "var yt2={ModelRequestFailed:'model_request_failed',ProviderNotConfigured:'provider_not_configured'},",
+      "it2={Cancelled:'cancelled',NetworkError:'network_error',AuthFailed:'auth_failed',ServerError:'server_error',Unknown:'unknown'},",
+      "nn2={NetworkError:'network_error',AuthRefresh:'auth_refresh',ServerError:'server_error'},",
+      "SS=new Set(['provider_overloaded']);",
+      "function jV(e){return!1}",
+      "function pu2(e){return e}",
+      "function s$(e){let t=e,r=new WeakSet;for(;t&&typeof t==='object'&&!r.has(t);){r.add(t);if(typeof t.statusCode==='number')return t.statusCode;t=t.cause}}",
+      "function p_(e){return}",
+      "function hdr2(e){return}",
+      "function ddr2(e,t){return!1}",
+      "function U_e2(e){return!1}",
+      "function Ob2(e){return e&&typeof e==='object'?e:void 0}",
+      "function d1o2(e){let t=e?.trim().toUpperCase();return t==='ECONNRESET'||t==='EPIPE'||t==='CONNECTIONCLOSED'}",
+      "function fdr2(e){return!1}",
+      "function Mye2(e){return e.retryable&&e.reason!==it2.Cancelled}",
+      "function oO(e,t){return e===null||typeof e!==\"object\"?!1:t.has(e)?!0:(t.add(e),!1)}",
+      "function pP(e){return e!==null&&typeof e===\"object\"?e:{}}",
+      "function qQ(e,t){let r=e[t];return typeof r===\"string\"&&r.length>0?r:void 0}",
+      "function w$(e){let t=e?.toUpperCase();return t===\"ECONNRESET\"||t===\"ECONNREFUSED\"||t===\"EAI_AGAIN\"||t===\"ENOTFOUND\"||t===\"ENETUNREACH\"||t===\"EHOSTUNREACH\"||t===\"UND_ERR_SOCKET\"||t===\"UND_ERR_CONNECT_TIMEOUT\"}",
+      "function Rq(e){return kq(e,new WeakSet)}",
+      "function kq(e,t){if(oO(e,t))return;let r=pP(e),n=qQ(r,\"code\");if(n)return n;let o=r.cause;if(o&&o!==e)return kq(o,t)}",
+      "function qq(e,t){if(t){if(w$(t)||SS.has(t))return!0;let r=t.toLowerCase();if(r===\"network_error\"||r===\"network_error_retryable\")return!0}return jV(e)}",
+      "function Wb(e,t){let r=pu2(e),n=s$(r),o=Rq(r),i=p_(r),a=hdr2(i);",
+      "if(ddr2(r,t))return{code:yt2.ModelRequestFailed,message:'cancelled',reason:it2.Cancelled,retryReason:nn2.NetworkError,retryable:!1,statusCode:n};",
+      "if(n===401||n===403)return{code:yt2.ProviderNotConfigured,message:'auth failed',reason:it2.AuthFailed,retryReason:nn2.AuthRefresh,retryable:!1,statusCode:n};",
+      "if(w$(o))return{code:yt2.ModelRequestFailed,message:\"Network connection failed for the provider request.\",reason:it2.NetworkError,retryReason:nn2.NetworkError,retryable:!0,retryAfterMs:a,statusCode:n};",
+      "let d=fdr2(r);return{code:yt2.ModelRequestFailed,message:'Model request failed.',reason:d?it2.ServerError:it2.Unknown,retryReason:d?nn2.ServerError:nn2.NetworkError,retryable:d,statusCode:n}}",
+      "function s9o(e,t){let r=pu2(e);if(U_e2(r)||d1o2(Rq(r)))return!0;if(t!==void 0)return!1;let n=Ob2(r)?.providerCode;return d1o2(typeof n==\"number\"?String(n):n)}",
+      "function z9o(e){return e.emittedRetryBoundaryEvent||e.attempt>=e.maxAttempts||e.failure.reason===it2.Cancelled?!1:e.preserveProviderStreamBoundaries===!0&&s9o(e.error,e.httpResponseStatus)?!0:Mye2(e.failure)?e.preserveProviderStreamBoundaries!==!0||e.streamFailurePhase!==\"response_body\":!1}",
+      "function* walk(e){let t=e,r=new WeakSet;for(let n=0;n<=6;n+=1){if(!t||typeof t!=='object'||r.has(t))return;r.add(t);yield t;t=t.cause}}",
+      "function recoverable(e){for(let t of walk(e)){if(t.retryable===!0)return!0;let r=pP(t.context);if(r.retryable===!0)return!0}return!1}"
+    ].join("");
+    const patched = patchRuntimeNetworkRetryClassification(runtime);
+
+    expect(hasRuntimeNetworkRetryGuard(runtime)).toBe(false);
+    expect(hasRuntimeNetworkRetryGuard(patched)).toBe(true);
+    expect(patched).toContain("function $zTransportChain(e,t){");
+    expect(patched).toContain("return e.emittedRetryBoundaryEvent||e.attempt>=e.maxAttempts");
+    expect(patched).not.toContain("e.emittedRetryBoundaryEvent&&!$zTransportChain");
+    expect(() => new Function(patched)).not.toThrow();
+    expect(patchRuntimeNetworkRetryClassification(patched)).toBe(patched);
+    expect(() => patchRuntimeNetworkRetryClassification("incompatible runtime")).toThrow(/incompatible/);
+
+    const load = new Function(
+      `${patched};return {classify:Wb,decide:qq,gate:z9o,recoverable,stale:s9o,transport:e=>$zTransportChain(e,new WeakSet)};`
+    ) as () => {
+      classify: (error: unknown) => {
+        code: string;
+        reason: string;
+        retryable: boolean;
+      };
+      decide: (error: unknown, reason?: string) => boolean;
+      gate: (failure: Record<string, unknown>) => boolean;
+      recoverable: (error: unknown) => boolean;
+      stale: (error: unknown, status?: number) => boolean;
+      transport: (error: unknown) => boolean;
+    };
+    const { classify, decide, gate, recoverable, stale, transport } = load();
+
+    const socket = Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" });
+    const terminated = Object.assign(new TypeError("terminated"), { cause: socket });
+    const wrapped = Object.assign(new Error("Model request failed"), {
+      code: "model_request_failed",
+      cause: terminated
+    });
+    const authorized = Object.assign(new Error("Model request failed"), {
+      code: "model_request_failed",
+      cause: Object.assign(new Error("Unauthorized"), { statusCode: 401, cause: socket })
+    });
+
+    expect(transport(wrapped)).toBe(true);
+    expect(decide(wrapped)).toBe(true);
+    expect(decide({}, "network_error")).toBe(true);
+    expect(classify(wrapped)).toMatchObject({
+      code: "model_request_failed",
+      reason: "network_error",
+      retryable: true
+    });
+    expect(transport(authorized)).toBe(true);
+    expect(classify(authorized).retryable).toBe(false);
+    expect(transport({ cause: { message: "write EPIPE" } })).toBe(true);
+    expect(transport({ cause: { code: "ETIMEDOUT", message: "connect failed" } })).toBe(true);
+    expect(stale(wrapped)).toBe(true);
+
+    const failure = classify(wrapped);
+    const beforeOutput = {
+      emittedRetryBoundaryEvent: false,
+      attempt: 1,
+      maxAttempts: 6,
+      failure,
+      error: wrapped,
+      preserveProviderStreamBoundaries: false
+    };
+    expect(gate(beforeOutput)).toBe(true);
+    expect(gate({ ...beforeOutput, emittedRetryBoundaryEvent: true })).toBe(false);
+    expect(gate({ ...beforeOutput, attempt: 6 })).toBe(false);
+    expect(gate({ ...beforeOutput, failure: { ...failure, reason: "cancelled" } })).toBe(false);
+    expect(recoverable({ cause: wrapped, context: { retryable: failure.retryable } })).toBe(true);
+
+    const cyclic: { code?: string; cause?: unknown } = { code: "model_request_failed" };
+    const cyclicCause: { code?: string; cause?: unknown } = {
+      code: "model_request_failed",
+      cause: cyclic
+    };
+    cyclic.cause = cyclicCause;
+    expect(transport(cyclic)).toBe(false);
+    expect(decide(cyclic)).toBe(false);
   });
 
   test("adds a Desktop authorization-code completion path while retaining official persistence", () => {

@@ -904,6 +904,155 @@ export function patchRuntimeHttpNoContent(runtime: string): string {
   return changed ? patched : runtime;
 }
 
+function escapeRegExpName(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function countRegExpMatches(source: string, pattern: RegExp): number {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  return Array.from(source.matchAll(new RegExp(pattern.source, flags))).length;
+}
+
+/** Detect the local transport classifier while preserving the emitted-output retry boundary. */
+export function hasRuntimeNetworkRetryGuard(runtime: string): boolean {
+  return runtime.includes("var $zTransportCodes=[")
+    && runtime.includes("function $zTransportCode(e){")
+    && runtime.includes("function $zTransportChain(e,t){")
+    && /if\(\$zTransportChain\(e,new WeakSet\)\)return!0;return [A-Za-z_$][\w$]*\(e\)\}/u.test(runtime)
+    && /\|\|\$zTransportChain\([A-Za-z_$][\w$]*,new WeakSet\)\)return\{code:/u.test(runtime)
+    && /\|\|\$zTransportChain\([A-Za-z_$][\w$]*,new WeakSet\)\)return!0;if\(t!==void 0\)return!1;/u.test(runtime)
+    && /function [A-Za-z_$][\w$]*\(e\)\{return e\.emittedRetryBoundaryEvent\|\|e\.attempt>=e\.maxAttempts\|\|e\.failure\.reason===[A-Za-z_$][\w$]*\.Cancelled\?!1:/u.test(runtime);
+}
+
+/**
+ * Recover transport failures whose deep `cause.code` is hidden by a wrapping
+ * `model_request_failed` code. The emitted-output gate remains unchanged: once
+ * content is visible, the turn-level stream recovery owns discard/anchor logic.
+ */
+export function patchRuntimeNetworkRetryClassification(runtime: string): string {
+  if (hasRuntimeNetworkRetryGuard(runtime)) return runtime;
+  if (runtime.includes("function $zTransportCode(e){")
+    || runtime.includes("function $zTransportChain(e,t){")) {
+    throw new Error("ZCode runtime contains a partial network retry patch.");
+  }
+
+  const whitelistPattern = /function ([A-Za-z_$][\w$]*)\(e\)\{let t=e\?\.toUpperCase\(\);return t==="ECONNRESET"\|\|t==="ECONNREFUSED"\|\|t==="EAI_AGAIN"\|\|t==="ENOTFOUND"\|\|t==="ENETUNREACH"\|\|t==="EHOSTUNREACH"\|\|t==="UND_ERR_SOCKET"\|\|t==="UND_ERR_CONNECT_TIMEOUT"\}/u;
+  const extractorPattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return ([A-Za-z_$][\w$]*)\(e,new WeakSet\)\}function \2\(e,t\)\{if\(([A-Za-z_$][\w$]*)\(e,t\)\)return;let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(e\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\4,"code"\);if\(\6\)return \6;let [A-Za-z_$][\w$]*=\4\.cause;if\([A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*!==e\)return \2\([A-Za-z_$][\w$]*,t\)\}/u;
+  const classifierPattern = /function ([A-Za-z_$][\w$]*)\(e,t\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(e\),[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\(\2\),([A-Za-z_$][\w$]*)=EXTRACTOR\(\2\),/u;
+  const streamGatePattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e\.emittedRetryBoundaryEvent\|\|e\.attempt>=e\.maxAttempts\|\|e\.failure\.reason===([A-Za-z_$][\w$]*)\.Cancelled\?!1:/u;
+
+  const whitelistMatch = whitelistPattern.exec(runtime);
+  const extractorMatch = extractorPattern.exec(runtime);
+  if (!whitelistMatch || !extractorMatch) {
+    throw new Error("ZCode runtime is incompatible with the network retry patch (error-code anchors missing).");
+  }
+
+  const whitelist = whitelistMatch[1]!;
+  const extractor = extractorMatch[1]!;
+  const seen = extractorMatch[3]!;
+  const normalizer = extractorMatch[5]!;
+  const stringGetter = extractorMatch[7]!;
+  const classifierFullPattern = new RegExp(
+    classifierPattern.source.replace("EXTRACTOR", escapeRegExpName(extractor)),
+    "u"
+  );
+  const classifier = classifierFullPattern.exec(runtime);
+  if (!classifier) {
+    throw new Error("ZCode runtime is incompatible with the network retry patch (classifier anchor missing).");
+  }
+  const classifierError = classifier[2]!;
+  const classifierCode = classifier[3]!;
+
+  const networkBranchPattern = new RegExp(
+    `if\\(${escapeRegExpName(whitelist)}\\(${escapeRegExpName(classifierCode)}\\)\\)return\\{code:([A-Za-z_$][\\w$]*)\\.ModelRequestFailed,message:"Network connection failed for the provider request\\."`,
+    "u"
+  );
+  const networkBranch = networkBranchPattern.exec(runtime);
+  const classifierEnd = runtime.indexOf("function ", classifier.index + classifier[0].length);
+  if (!networkBranch || networkBranch.index < classifier.index
+    || (classifierEnd >= 0 && networkBranch.index >= classifierEnd)) {
+    throw new Error("ZCode runtime is incompatible with the network retry patch (network branch anchor missing).");
+  }
+
+  const retryDecisionPattern = new RegExp(
+    `function ([A-Za-z_$][\\w$]*)\\(e,t\\)\\{if\\(t\\)\\{if\\(${escapeRegExpName(whitelist)}\\(t\\)\\|\\|([A-Za-z_$][\\w$]*)\\.has\\(t\\)\\)return!0;let ([A-Za-z_$][\\w$]*)=t\\.toLowerCase\\(\\);if\\(\\3==="network_error"\\|\\|\\3==="network_error_retryable"\\)return!0\\}return ([A-Za-z_$][\\w$]*)\\(e\\)\\}`,
+    "u"
+  );
+  const retryDecision = retryDecisionPattern.exec(runtime);
+  if (!retryDecision) {
+    throw new Error("ZCode runtime is incompatible with the network retry patch (retry decision anchor missing).");
+  }
+
+  const staleStreamPattern = new RegExp(
+    `function ([A-Za-z_$][\\w$]*)\\(e,t\\)\\{let ([A-Za-z_$][\\w$]*)=([A-Za-z_$][\\w$]*)\\(e\\);if\\(([A-Za-z_$][\\w$]*)\\(\\2\\)\\|\\|([A-Za-z_$][\\w$]*)\\(${escapeRegExpName(extractor)}\\(\\2\\)\\)\\)return!0;`,
+    "u"
+  );
+  const staleStream = staleStreamPattern.exec(runtime);
+  if (!staleStream) {
+    throw new Error("ZCode runtime is incompatible with the network retry patch (stale stream anchor missing).");
+  }
+
+  for (const [pattern, label] of [
+    [whitelistPattern, "network error-code whitelist"],
+    [extractorPattern, "cause-chain error-code extractor"],
+    [classifierFullPattern, "model request failure classifier"],
+    [networkBranchPattern, "classifier network branch"],
+    [retryDecisionPattern, "final retry decision"],
+    [staleStreamPattern, "stale stream detector"],
+    [streamGatePattern, "emitted-output stream gate"]
+  ] as const) {
+    if (countRegExpMatches(runtime, pattern) !== 1) {
+      throw new Error(`ZCode runtime is incompatible with the network retry patch (${label} is not unique).`);
+    }
+  }
+
+  const transportCodes = [
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "EPIPE",
+    "CONNECTIONCLOSED",
+    "ETIMEDOUT",
+    "ETIMEOUT",
+    "UND_ERR_SOCKET",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_BODY_TIMEOUT"
+  ];
+  const transportText = JSON.stringify(transportCodes);
+  const chainProbe = [
+    `var $zTransportCodes=${transportText};`,
+    "function $zTransportCode(e){let t=e?.trim().toUpperCase();return!!t&&$zTransportCodes.includes(t)}",
+    "function $zTransportText(e){let t=e?.toUpperCase();return!!t&&$zTransportCodes.some(r=>t.includes(r))}",
+    `function $zTransportChain(e,t){if(${seen}(e,t))return!1;let r=${normalizer}(e),n=${normalizer}(r.error),o=${normalizer}(r.context);if($zTransportCode(${stringGetter}(r,"code"))||$zTransportCode(${stringGetter}(r,"providerCode"))||$zTransportCode(${stringGetter}(n,"code"))||$zTransportCode(${stringGetter}(n,"providerCode"))||$zTransportCode(${stringGetter}(o,"code"))||$zTransportCode(${stringGetter}(o,"providerCode"))||$zTransportText(${stringGetter}(r,"message"))||$zTransportText(${stringGetter}(n,"message"))||$zTransportText(${stringGetter}(o,"message")))return!0;let i=r.cause;return i&&i!==e?$zTransportChain(i,t):!1}`
+  ].join("");
+
+  let patched = runtime.replace(
+    retryDecisionPattern,
+    (_match, decision: string, reasonSet: string, reason: string, fallback: string) => (
+      `${chainProbe}function ${decision}(e,t){if(t){if(${whitelist}(t)||${reasonSet}.has(t))return!0;let ${reason}=t.toLowerCase();if(${reason}==="network_error"||${reason}==="network_error_retryable")return!0}if($zTransportChain(e,new WeakSet))return!0;return ${fallback}(e)}`
+    )
+  );
+  patched = patched.replace(
+    networkBranchPattern,
+    (_match, codeEnum: string) => `if(${whitelist}(${classifierCode})||$zTransportChain(${classifierError},new WeakSet))return{code:${codeEnum}.ModelRequestFailed,message:"Network connection failed for the provider request."`
+  );
+  patched = patched.replace(
+    staleStreamPattern,
+    (_match, detector: string, error: string, unwrap: string, idle: string, staleCode: string) => (
+      `function ${detector}(e,t){let ${error}=${unwrap}(e);if(${idle}(${error})||${staleCode}(${extractor}(${error}))||$zTransportChain(${error},new WeakSet))return!0;`
+    )
+  );
+
+  if (!hasRuntimeNetworkRetryGuard(patched)) {
+    throw new Error("ZCode runtime network retry patch failed postcondition verification.");
+  }
+  return patched;
+}
+
 export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
   if (runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')) return runtime;
 
@@ -1104,6 +1253,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeHttpNoContent,
     verify: hasRuntimeHttpNoContentGuard
+  },
+  {
+    id: "network-retry-classification",
+    requirement: "required",
+    apply: patchRuntimeNetworkRetryClassification,
+    verify: hasRuntimeNetworkRetryGuard
   },
   {
     id: "oauth-http-errors",

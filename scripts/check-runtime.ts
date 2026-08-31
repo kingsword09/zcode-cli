@@ -12,9 +12,11 @@ import {
   extractRuntimeCapabilities,
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
+  hasRuntimeNetworkRetryGuard,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
+  patchRuntimeNetworkRetryClassification,
   parseRuntimePatchReports,
   runtimePatchPlan,
   supportsMultiMessageFileRewind
@@ -69,6 +71,8 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || (patchEnabled("goal-failure-pause") && patchRuntimeGoalFailurePause(runtimeSource) !== runtimeSource)
   || patchRuntimeHttpNoContent(runtimeSource) !== runtimeSource
   || !hasRuntimeHttpNoContentGuard(runtimeSource)
+  || patchRuntimeNetworkRetryClassification(runtimeSource) !== runtimeSource
+  || !hasRuntimeNetworkRetryGuard(runtimeSource)
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
   || !runtimeSource.includes('"plugin://"')
