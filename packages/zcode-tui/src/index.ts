@@ -231,6 +231,7 @@ import { ToolGroupView } from "./tool-group-view.ts";
 import { ToolTreeView } from "./tool-tree-view.ts";
 import { TurnDiffStore } from "./turn-diff-store.ts";
 import {
+  isAgentDispatchTool,
   isGroupedInformationTool,
   type ToolProgressData
 } from "./tool-renderers.ts";
@@ -311,6 +312,8 @@ const questionBackValue = "__back__";
 const questionOtherValue = "__other__";
 const questionDoneValue = "__done__";
 const backgroundTaskAttentionStatuses = new Set(["failed", "timed_out", "spawn_error", "lost"]);
+const defaultBackgroundResumeMessage =
+  "Continue the assigned task from the last completed step. Re-check the current workspace state and finish the remaining work.";
 
 function backgroundTaskKindLabel(job: RuntimeBackgroundJob): string {
   switch (job.taskKind) {
@@ -330,8 +333,7 @@ function backgroundTaskSortRank(job: RuntimeBackgroundJob): number {
 
 function backgroundAgentPart(part: RestoredPart): boolean {
   if (part.type !== "tool") return false;
-  const name = part.toolName.trim().toLowerCase();
-  if (name !== "agent" && name !== "subagent") return false;
+  if (!isAgentDispatchTool(part.toolName)) return false;
   const input = isRecord(part.input) ? part.input : undefined;
   const output = isRecord(part.output) ? part.output : undefined;
   const nestedOutput = isRecord(output?.output) ? output.output : undefined;
@@ -344,6 +346,35 @@ function backgroundAgentPart(part: RestoredPart): boolean {
     || nestedOutput?.status === "async_launched"
     || nestedOutput?.status === "backgrounded"
     || typeof nestedOutput?.backgroundTaskId === "string";
+}
+
+/**
+ * Conversation-facing notice for a task-center action (resume / restart /
+ * guidance). Side-channel task actions are invisible to the model otherwise —
+ * surfacing them through the main conversation lets the coordinator wait on
+ * the task with TaskOutput(block=true) instead of finalizing without it.
+ */
+function taskCoordinatorNotice(job: RuntimeBackgroundJob, restart: boolean, message: string): string {
+  const label = job.description ? `${job.taskId} (${job.description})` : job.taskId;
+  const lead = restart
+    ? `Background task ${label} was restarted from the task center with the instruction:`
+    : isActiveBackgroundJob(job)
+      ? `Guidance was sent to background task ${label}:`
+      : `Background task ${label} was resumed from the task center with the instruction:`;
+  return [
+    lead,
+    `"${message}"`,
+    "If your current work depends on this task, call TaskOutput with block=true to wait for its result before giving your final answer; otherwise continue and its completion notification will arrive automatically."
+  ].join("\n");
+}
+
+function backgroundCancellationFailure(value: unknown): string | undefined {
+  if (isRecord(value) && value.cancelled === true) return undefined;
+  if (!isRecord(value)) return "cancellation was not confirmed";
+  const reason = asString(value.reason)?.replaceAll("_", " ");
+  const status = asString(value.status)?.replaceAll("_", " ");
+  return [reason, status ? `status ${status}` : undefined].filter(Boolean).join(" · ")
+    || "cancellation was not confirmed";
 }
 
 function backgroundToolPartIds(parts: readonly RestoredPart[]): Set<string> {
@@ -598,6 +629,7 @@ class ZCodeTui {
   private unsubscribeWorkflow?: () => void;
   private unsubscribeSession?: () => void;
   private readonly backgroundTaskEvents = new BackgroundTaskEventStore();
+  private readonly restoredNoticeSeen = new Set<string>();
   private readonly turnWork = new TurnWorkTracker();
   private readonly backgroundCoordinatorMessageIds = new Set<string>();
   private workflowPanel?: Record<string, unknown>;
@@ -1427,9 +1459,9 @@ class ZCodeTui {
     });
   }
 
-  private async submit(rawInput: string, queuedSubmission?: QueuedSubmission): Promise<void> {
+  private async submit(rawInput: string, queuedSubmission?: QueuedSubmission): Promise<boolean | undefined> {
     const input = (queuedSubmission?.input ?? rawInput).trim();
-    if (!input || this.stopped) return;
+    if (!input || this.stopped) return false;
     const submission = queuedSubmission ?? protectSubmission(input);
     if (submission.recordHistory) {
       this.rememberEditorHistory(input);
@@ -1565,12 +1597,12 @@ class ZCodeTui {
     const steering = this.primaryTurnActive;
     if (!steering && this.activeSubmissions > 0) {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
-      return;
+      return true;
     }
     if (!steering && this.backgroundTaskEvents.hasActiveHandoffs()) {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
       this.interruptBackgroundHandoffForInput();
-      return;
+      return true;
     }
     if (!steering && !input.startsWith("/") && !this.sessionTitleEmitted) {
       const sessionTitle = sessionTitleFromFirstMessage(submission.displayInput);
@@ -1583,12 +1615,12 @@ class ZCodeTui {
     const turnEpoch = steering ? this.activeTurnEpoch : ++this.turnEpoch;
     if (turnEpoch === undefined) {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
-      return;
+      return true;
     }
     const attachments = !steering && !input.startsWith("/") ? [...this.pendingAttachments] : [];
     if (steering && !this.options.sendInput) {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
-      return;
+      return true;
     }
     if (attachments.length > 0) this.clearPendingAttachments(false);
 
@@ -1644,7 +1676,8 @@ class ZCodeTui {
       this.steerAbortControllers.add(abortController);
     }
     if (!steering || submission.status) this.updateActivity(submission.status ?? "working…");
-    const notificationEligible = !steering && !input.startsWith("/");
+    const notificationEligible = !steering && !input.startsWith("/")
+      && queuedSubmission?.suppressCompletionNotification !== true;
     if (notificationEligible) this.pendingTurnNotification = "completed";
 
     let accepted = false;
@@ -1667,9 +1700,9 @@ class ZCodeTui {
               callOptions
             )
           : await this.options.sendInput(preparedInput, callOptions);
-        if (steering && this.activeTurnEpoch !== turnEpoch) return;
+        if (steering && this.activeTurnEpoch !== turnEpoch) return false;
         const disposition = await this.handleSendOutcome(outcome);
-        if (steering && this.activeTurnEpoch !== turnEpoch) return;
+        if (steering && this.activeTurnEpoch !== turnEpoch) return false;
         if (steering && disposition.targetTurnId) this.activeTurnId = disposition.targetTurnId;
         if (pendingSteer && disposition.pendingInputId) {
           this.inputQueue.associateSteer(
@@ -1744,6 +1777,7 @@ class ZCodeTui {
       void this.refreshSessionUsage();
     }
     if (nextCommand) await this.submit(nextCommand.input, nextCommand);
+    return accepted;
   }
 
   private finishPrimaryTurnSubmission(
@@ -1841,6 +1875,7 @@ class ZCodeTui {
     this.pendingSteerInterrupt = undefined;
     this.foregroundTurnInterrupt = abortController;
     this.updateActivity("cancelling…");
+    this.cancelActiveBackgroundAgentTasks();
     const interruptTurn = this.options.interruptTurn;
     if (!interruptTurn) {
       abortController.abort();
@@ -1854,6 +1889,70 @@ class ZCodeTui {
         abortController.abort();
       }
     });
+  }
+
+  /**
+   * Backgrounded agents owned by the interrupted turn are detached from its
+   * abort signal, so cancel those explicitly. Older agents and non-agent tasks
+   * remain independent and continue running.
+   */
+  private cancelActiveBackgroundAgentTasks(): void {
+    const cancelBackgroundTask = this.options.cancelBackgroundTask;
+    if (!cancelBackgroundTask) return;
+    const jobs = this.runtimeProjection?.backgroundJobs ?? [];
+    const active = jobs.filter((job) => isActiveBackgroundJob(job)
+      && job.taskKind === "local_agent"
+      && job.cancellable !== false
+      && (this.turnWork.ownsTask(job.taskId)
+        || Boolean(this.activeTurnId && job.turnId === this.activeTurnId)));
+    const activeIds = new Set(active.map((job) => job.taskId));
+    const surviving = jobs.filter((job) => isActiveBackgroundJob(job) && !activeIds.has(job.taskId));
+    if (active.length === 0 && surviving.length === 0) return;
+    void (async () => {
+      const stopped: string[] = [];
+      const failed: Array<{ detail: string; taskId: string }> = [];
+      for (const job of active) {
+        try {
+          const result = await cancelBackgroundTask(job.taskId);
+          const failure = backgroundCancellationFailure(result);
+          if (failure) {
+            failed.push({ detail: failure, taskId: job.taskId });
+            this.backgroundTaskEvents.recordSystemMessage(
+              job.taskId,
+              `Task was not cancelled: ${failure}.`,
+              true
+            );
+            continue;
+          }
+          stopped.push(job.taskId);
+          this.backgroundTaskEvents.recordSystemMessage(job.taskId, "Task cancelled by Esc interrupt.");
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          failed.push({ detail, taskId: job.taskId });
+          this.backgroundTaskEvents.recordSystemMessage(job.taskId, detail, true);
+        }
+      }
+      if (stopped.length > 0) {
+        this.addNotice(
+          `Esc also stopped background task${stopped.length > 1 ? "s" : ""}: ${stopped.join(", ")}.`,
+          "muted"
+        );
+      }
+      for (const failure of failed) {
+        this.addNotice(
+          `Esc could not stop background task ${failure.taskId}: ${failure.detail}.`,
+          "warning"
+        );
+      }
+      if (surviving.length > 0) {
+        const ids = surviving.map((job) => job.taskId).join(", ");
+        this.addNotice(
+          `Background task${surviving.length > 1 ? "s" : ""} ${ids} keep${surviving.length > 1 ? "" : "s"} running — /tasks stop <task-id> to stop.`,
+          "muted"
+        );
+      }
+      if (active.length > 0) await this.refreshRuntimeState();
+    })();
   }
 
   private isPendingSteerInterrupt(
@@ -4642,11 +4741,26 @@ class ZCodeTui {
       const canMessage = job.taskKind === "local_agent" && Boolean(this.options.sendBackgroundTaskMessage);
       const canStop = active && job.cancellable !== false && Boolean(this.options.cancelBackgroundTask);
       const items: ChoiceItem[] = [
-        ...(canMessage ? [{
-          value: "message",
-          label: active ? "Message agent" : "Resume agent",
-          description: active ? "Send guidance to this task" : "Continue from the saved child session"
-        }] : []),
+        ...(canMessage
+          ? active
+            ? [{
+              value: "message",
+              label: "Message agent",
+              description: "Send guidance to this task"
+            }]
+            : [
+              {
+                value: "resume",
+                label: "Resume agent",
+                description: "Continue from the saved child session"
+              },
+              {
+                value: "resume-with-instructions",
+                label: "Resume with instructions",
+                description: "Continue the saved child session with custom guidance"
+              }
+            ]
+          : []),
         ...(canMessage && active ? [{
           value: "restart",
           label: "Restart agent",
@@ -4683,15 +4797,22 @@ class ZCodeTui {
         await this.stopBackgroundTask(job.taskId);
         continue;
       }
-      if (action.value === "message" || action.value === "restart") {
+      if (action.value === "resume" && !active) {
+        await this.messageBackgroundTask(job, defaultBackgroundResumeMessage);
+        continue;
+      }
+      if (action.value === "message" || action.value === "resume-with-instructions" || action.value === "restart") {
         const restart = action.value === "restart";
+        const customResume = action.value === "resume-with-instructions";
         const message = await this.showTextPrompt({
-          title: restart ? "Restart background agent" : active ? "Message background agent" : "Resume background agent",
+          title: restart
+            ? "Restart background agent"
+            : customResume ? "Resume background agent with instructions" : "Message background agent",
           prompt: restart
             ? `Describe what ${job.agentId ?? job.taskId} should continue or repair after restart.`
-            : active
-            ? `Send guidance to ${job.agentId ?? job.taskId}.`
-            : `Describe what ${job.agentId ?? job.taskId} should continue or repair.`
+            : customResume
+            ? `Describe what ${job.agentId ?? job.taskId} should continue or repair.`
+            : `Send guidance to ${job.agentId ?? job.taskId}.`
         });
         if (message?.trim()) await this.messageBackgroundTask(job, message.trim(), restart);
         continue;
@@ -4806,9 +4927,7 @@ class ZCodeTui {
       this.addNotice(`No background task found with ID ${taskId}.`, "warning");
       return;
     }
-    const message = suppliedMessage || (resume
-      ? "Continue the assigned task from the last completed step. Re-check the current workspace state and finish the remaining work."
-      : "");
+    const message = suppliedMessage || (resume ? defaultBackgroundResumeMessage : "");
     if (!message) {
       this.addNotice(`Usage: /tasks message ${taskId} <message>`, "muted");
       return;
@@ -4848,6 +4967,10 @@ class ZCodeTui {
       if (status === "failed") throw new Error(asString(record?.error) ?? detail);
       this.backgroundTaskEvents.recordSystemMessage(job.taskId, detail);
       this.addNotice(detail, "muted");
+      // Surface the side-channel action to the coordinator through the main
+      // conversation (steer while a turn is running, new input otherwise) so
+      // the model can wait on the task instead of finalizing without it.
+      await this.notifyTaskCoordinator(job, restart, message);
       await this.refreshRuntimeState();
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -4856,6 +4979,29 @@ class ZCodeTui {
     } finally {
       this.updateActivity(undefined);
     }
+  }
+
+  private async notifyTaskCoordinator(
+    job: RuntimeBackgroundJob,
+    restart: boolean,
+    message: string
+  ): Promise<void> {
+    const coordinatorNotice = taskCoordinatorNotice(job, restart, message);
+    let failure: string | undefined;
+    try {
+      const accepted = await this.submit(coordinatorNotice, {
+        ...protectSubmission(coordinatorNotice),
+        recordHistory: false,
+        suppressCompletionNotification: true
+      });
+      if (accepted === true) return;
+      failure = "the coordinator notice was not accepted";
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    const detail = `Task action succeeded, but ${failure}.`;
+    this.backgroundTaskEvents.recordSystemMessage(job.taskId, detail, true);
+    this.addNotice(detail, "warning");
   }
 
   private async stopBackgroundTask(taskId: string): Promise<void> {
@@ -5156,6 +5302,7 @@ class ZCodeTui {
   private applyRuntimeProjection(projection: RuntimeProjectionSnapshot | undefined): void {
     if (!projection) return;
     this.runtimeProjection = projection;
+    this.noticeRestoredBackgroundTasks(projection);
     this.reconcileTurnTiming(projection);
     if (projection.sessionId) this.sessionId = projection.sessionId;
     this.sessionMetrics = mergeProjectionMetrics(
@@ -5169,6 +5316,40 @@ class ZCodeTui {
       Boolean(this.options.readSessionUsage)
     );
     this.updateRuntimeActivity(false);
+  }
+
+  /**
+   * Surface tasks the persisted background-agent restore bridge re-registered.
+   * Tasks that completed or failed while ZCode was closed never produce a
+   * completion notification, so without this notice they are silent — the
+   * model-facing task_status attachment alone does not reach the user.
+   */
+  private noticeRestoredBackgroundTasks(projection: RuntimeProjectionSnapshot): void {
+    for (const job of projection.restoredBackgroundTasks ?? []) {
+      const seenKey = `${projection.sessionId ?? ""}/${job.taskId}`;
+      if (this.restoredNoticeSeen.has(seenKey)) continue;
+      this.restoredNoticeSeen.add(seenKey);
+      const label = job.description ? `${job.taskId} (${job.description})` : job.taskId;
+      if (job.status === "completed") {
+        this.addSystemEvent({
+          tone: "muted",
+          title: "Background task completed while ZCode was closed",
+          detail: `${label} finished before this session was resumed. Collect its result with TaskOutput or open /tasks.`
+        });
+      } else if (job.status === "failed") {
+        this.addSystemEvent({
+          tone: "error",
+          title: "Background task failed while ZCode was closed",
+          detail: `${label} failed before this session was resumed. Resume it from /tasks to continue.`
+        });
+      } else {
+        this.addSystemEvent({
+          tone: "warning",
+          title: "Background task restored from this session",
+          detail: `${label} was interrupted before ZCode closed. Resume it from /tasks when needed.`
+        });
+      }
+    }
   }
 
   private updateRuntimeActivity(requestRender = true): void {

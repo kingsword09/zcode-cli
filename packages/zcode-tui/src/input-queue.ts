@@ -5,6 +5,8 @@ export interface QueuedSubmission extends ProtectedSubmission {
   externalLogin?: boolean;
   pendingInputReservationId?: string;
   pendingInputIds?: string[];
+  /** System-initiated submissions (task-center coordinator notices) never ping. */
+  suppressCompletionNotification?: boolean;
 }
 
 export interface PendingSteerSubmission {

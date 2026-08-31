@@ -71,6 +71,7 @@ describe("runtime projection normalization", () => {
         parentSessionId: "session-1",
         turnId: "turn-1",
         prompt: "Audit the task flow",
+        status: "running",
         error: "Provider unavailable"
       }]
     });
@@ -82,7 +83,113 @@ describe("runtime projection normalization", () => {
       agentType: "reviewer",
       childSessionId: "child-1",
       prompt: "Audit the task flow",
+      status: "running",
       error: "Provider unavailable"
+    });
+  });
+
+  test("keeps restored background agents whose registry status is stopped", () => {
+    // Restored tasks re-register with status "stopped" (or completed/failed read
+    // from task metadata.json); "stopped" is a runtime-native terminal status
+    // and must survive normalization instead of being dropped from /tasks.
+    // The readRuntimeProjection bridge pushes registry rows into backgroundTasks
+    // and repeats them as backgroundTaskDetails, so normalize sees both.
+    const restoredJob = {
+      taskId: "agent-2",
+      taskKind: "local_agent",
+      agentId: "agent-2",
+      agentType: "general-purpose",
+      childSessionId: "child-2",
+      parentSessionId: "session-1",
+      status: "stopped",
+      description: "Restored background agent"
+    };
+    const snapshot = normalizeRuntimeProjection({
+      sessionId: "session-1",
+      activeToolCalls: [],
+      backgroundTasks: [restoredJob],
+      backgroundTaskDetails: [restoredJob]
+    });
+
+    expect(snapshot?.backgroundJobs[0]).toMatchObject({
+      taskId: "agent-2",
+      taskKind: "local_agent",
+      agentId: "agent-2",
+      status: "stopped",
+      childSessionId: "child-2"
+    });
+  });
+
+  test("normalizes the restoration log carried by the projection", () => {
+    const snapshot = normalizeRuntimeProjection({
+      sessionId: "session-1",
+      activeToolCalls: [],
+      backgroundTasks: [],
+      restoredBackgroundTasks: [{
+        taskId: "agent-3",
+        taskKind: "local_agent",
+        agentId: "agent-3",
+        status: "completed",
+        description: "Finished while ZCode was closed"
+      }]
+    });
+
+    expect(snapshot?.restoredBackgroundTasks).toHaveLength(1);
+    expect(snapshot?.restoredBackgroundTasks?.[0]).toMatchObject({
+      taskId: "agent-3",
+      status: "completed"
+    });
+    expect(normalizeRuntimeProjection({
+      sessionId: "session-1",
+      activeToolCalls: [],
+      backgroundJobs: []
+    })?.restoredBackgroundTasks).toEqual([]);
+  });
+
+  test("does not let undefined registry fields erase persisted task fields", () => {
+    const snapshot = normalizeRuntimeProjection({
+      sessionId: "session-1",
+      activeToolCalls: [],
+      backgroundTasks: [{
+        taskId: "agent-3",
+        taskKind: "local_agent",
+        status: "failed",
+        childSessionId: "child-3",
+        description: "Persisted task"
+      }],
+      backgroundTaskDetails: [{
+        taskId: "agent-3",
+        taskKind: "local_agent",
+        status: "running",
+        childSessionId: undefined
+      }]
+    });
+
+    expect(snapshot?.backgroundJobs[0]).toMatchObject({
+      taskId: "agent-3",
+      status: "running",
+      childSessionId: "child-3",
+      description: "Persisted task"
+    });
+  });
+
+  test("keeps the runtime killed status visible after an agent stop", () => {
+    const snapshot = normalizeRuntimeProjection({
+      sessionId: "session-1",
+      activeToolCalls: [],
+      backgroundTasks: [{
+        taskId: "agent-killed",
+        taskKind: "local_agent",
+        status: "killed",
+        childSessionId: "child-killed"
+      }]
+    });
+
+    expect(snapshot?.backgroundJobs[0]).toMatchObject({
+      taskId: "agent-killed",
+      taskKind: "local_agent",
+      status: "killed",
+      childSessionId: "child-killed"
     });
   });
 

@@ -152,6 +152,18 @@ describe("background task event store", () => {
     });
   });
 
+  test("treats the runtime killed status as a terminal task update", () => {
+    const store = new BackgroundTaskEventStore();
+    const update = store.handle(event({
+      id: "agent-killed-update",
+      type: "background_task_updated",
+      payload: { taskId: "agent-killed", taskKind: "local_agent", status: "killed" }
+    }));
+
+    expect(update.changed).toBeTrue();
+    expect(update.notices).toEqual([]);
+  });
+
   test("scopes Agent tool trees and their descendants to the task center", () => {
     const store = new BackgroundTaskEventStore();
     const agent = event({
@@ -203,6 +215,28 @@ describe("background task event store", () => {
     expect(store.isBackgroundToolScoped(agent)).toBe(true);
     expect(store.isTaskScoped(child)).toBe(true);
     expect(store.isTaskScoped(unrelated)).toBe(false);
+  });
+
+  test("treats the Task compatibility alias as an Agent dispatch", () => {
+    const store = new BackgroundTaskEventStore();
+    const task = event({
+      id: "task-alias-part",
+      type: "part.started",
+      payload: {
+        part: {
+          type: "tool",
+          partId: "part-task-alias",
+          callId: "call-task-alias",
+          tool: "Task",
+          state: {
+            status: "running",
+            input: { description: "Review aliases", run_in_background: true }
+          }
+        }
+      }
+    });
+    store.handle(task);
+    expect(store.isBackgroundToolScoped(task)).toBe(true);
   });
 
   test("keeps synchronous agents in the foreground until the runtime backgrounds them", () => {

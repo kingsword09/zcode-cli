@@ -61,6 +61,7 @@ export const officialToolNames = [
   "AskUserQuestion",
   "SendMessage",
   "TaskStop",
+  "TaskOutput",
   "Agent",
   "Task",
   "Skill",

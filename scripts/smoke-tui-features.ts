@@ -334,14 +334,15 @@ try {
     "agent task detail",
     /Agent \(reviewer\) task · agent_feature[\s\S]*Background agent reply stored in task activity\.[\s\S]*Background result failed visibly\./i
   );
-  const resumePromptStart = await sendAndWait("\r", "resume agent prompt", /Resume background agent/i);
-  if (/alpha\/model/i.test(plainText(output.slice(resumePromptStart)))) {
-    throw new Error("The main composer remained visible beneath the background agent prompt.");
-  }
-  await sendAndWait(
-    "Fix the recovery issue and rerun the focused test.\r",
-    "resumed agent task",
-    /Status: running[\s\S]*You: Fix the recovery issue and rerun the focused test\.[\s\S]*Agent "agent_feature" resumed in the background\./i
+  const resumedAgentStart = await sendAndWait(
+    "\r",
+    "resume agent directly",
+    /Agent "agent_feature" resumed in the background\./i
+  );
+  await waitFor(
+    "resumed agent status",
+    /Status: running[\s\S]*You:\s*Continue the assigned task from the last completed step\.\s*Re-check the current workspace state and\s*finish the remaining work\./i,
+    resumedAgentStart
   );
   await sendAndWait("\x1b[B\r", "restart active agent prompt", /Restart background agent/i);
   await sendAndWait(
@@ -351,6 +352,31 @@ try {
   );
   await sendAndWait("\x1b", "return to task list after resume", /Background tasks/i);
   await sendAndSettle("\x1b");
+  const escOwnershipStart = await sendAndWait(
+    "verify Esc task ownership\r",
+    "Esc task ownership turn",
+    /Esc ownership turn running\./i
+  );
+  await waitFor(
+    "Esc task projection",
+    /Activity · 5 in background/i,
+    escOwnershipStart
+  );
+  terminal.write("\x1b");
+  await waitFor(
+    "Esc owned task cancellation",
+    /Esc also stopped background task: esc_owned\./i,
+    escOwnershipStart
+  );
+  await waitFor(
+    "Esc declined cancellation warning",
+    /Esc could not stop background task esc_declined.*background task not running/i,
+    escOwnershipStart
+  );
+  const escOwnershipOutput = plainText(output.slice(escOwnershipStart));
+  if (/Esc also stopped background tasks?:[^\n]*(?:agent_feature|esc_unrelated|esc_declined)/i.test(escOwnershipOutput)) {
+    throw new Error("Esc stopped or reported an unrelated/declined background agent.");
+  }
   const timerTurnStart = output.length;
   terminal.write("verify aggregate timer\r");
   await waitFor(
@@ -435,9 +461,10 @@ for (const [label, pattern] of [
   ["background task summary", /Feature background audit · bg_feature/i],
   ["Bash task dialog", /Bash task · bg_feature/i],
   ["agent task dialog", /Agent \(reviewer\) task · agent_feature/i],
+  ["separate resume actions", /Resume agent[\s\S]*Resume with instructions/i],
   ["task-scoped agent output", /Task activity[\s\S]*Background agent reply stored in task activity\./i],
   ["task-scoped handoff failure", /Task activity[\s\S]*Background result failed visibly\./i],
-  ["resumed agent conversation", /You: Fix the recovery issue and rerun the focused test\.[\s\S]*Agent "agent_feature" resumed in the background\./i],
+  ["resumed agent conversation", /(?=[\s\S]*You:\s*Continue the assigned task from the last completed step\.\s*Re-check the current workspace state and\s*finish the remaining work\.)(?=[\s\S]*Agent "agent_feature" resumed in the background\.)/i],
   ["restarted active agent", /Agent "agent_feature" restarted in the background\./i],
   ["paused goal footer", /Goal: Paused \(\/goal resume\)/i],
   ["model picker", /Select model/i],
@@ -511,6 +538,10 @@ if (/(?:^|\n)[ \t]*(?:ready|switching(?:…|\.\.\.)?)[ \t]*(?:\n|$)/imu.test(pla
 
 if (/Wait for the active turn or press Ctrl\+C before running a slash command/i.test(plain)) {
   throw new Error(`Resume selection was blocked by the active submission.\n${plain.slice(-6_000)}`);
+}
+
+if (/Feature smoke prompt did not include the selected file, skill and image attachment/i.test(plain)) {
+  throw new Error(`Coordinator task notices were rejected by the fixture.\n${plain.slice(-6_000)}`);
 }
 
 if (plain.includes("feature-secret-api-key") || plain.includes("override-fixture-key")) {

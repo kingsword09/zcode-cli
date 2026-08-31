@@ -9,6 +9,7 @@ const terminalStatuses = new Set([
   "failed",
   "timed_out",
   "cancelled",
+  "killed",
   "spawn_error",
   "lost",
   "stopped"

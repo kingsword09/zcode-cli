@@ -1,4 +1,5 @@
 import type { StreamEvent } from "./events.ts";
+import { isAgentDispatchTool } from "./tool-renderers/registry.ts";
 
 export type TaskActivityKind = "assistant" | "error" | "system" | "user";
 
@@ -48,6 +49,7 @@ function terminalTaskStatus(status: string | undefined): boolean {
     || status === "failed"
     || status === "timed_out"
     || status === "cancelled"
+    || status === "killed"
     || status === "spawn_error"
     || status === "lost"
     || status === "stopped";
@@ -64,11 +66,6 @@ function bounded(value: string): string {
   return value.length <= maximumEntryCharacters
     ? value
     : value.slice(0, maximumEntryCharacters) + "\n[truncated]";
-}
-
-function backgroundAgentToolName(name: string | undefined): boolean {
-  const normalized = name?.trim().toLowerCase();
-  return normalized === "agent" || normalized === "subagent";
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -235,7 +232,7 @@ export class BackgroundTaskEventStore {
   isBackgroundToolScoped(event: StreamEvent): boolean {
     const scope = toolScope(event);
     const part = event.part?.type === "tool" ? event.part : undefined;
-    return Boolean(backgroundAgentToolName(scope.name)
+    return Boolean(isAgentDispatchTool(scope.name)
         && (explicitlyBackgroundAgentInput(event.input ?? part?.input)
           || asyncAgentResult(event.result ?? part?.output)))
       || Boolean(scope.id && this.scopedTool(scope.id))
@@ -316,12 +313,12 @@ export class BackgroundTaskEventStore {
     const part = event.part?.type === "tool" ? event.part : undefined;
     const backgroundLifecycleParent = (event.type === "background_task_started"
       || event.type === "background_task_updated")
-      && (event.taskKind === "local_agent" || event.toolName === "Agent")
+      && (event.taskKind === "local_agent" || isAgentDispatchTool(event.toolName))
       ? event.progress?.parentToolCallId
       : undefined;
     if (backgroundLifecycleParent) this.rememberScopedToolCall(backgroundLifecycleParent);
     if (!scope.id) return;
-    if ((backgroundAgentToolName(scope.name)
+    if ((isAgentDispatchTool(scope.name)
         && (explicitlyBackgroundAgentInput(event.input ?? part?.input)
           || asyncAgentResult(event.result ?? part?.output)))
       || Boolean(scope.parentId && this.scopedTool(scope.parentId))) {

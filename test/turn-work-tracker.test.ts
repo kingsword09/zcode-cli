@@ -50,7 +50,7 @@ describe("turn work tracker", () => {
   });
 
   test("treats failure terminal statuses as settled and ignores older running jobs", () => {
-    for (const status of ["failed", "timed_out", "cancelled", "spawn_error", "lost"] as const) {
+    for (const status of ["failed", "timed_out", "cancelled", "killed", "spawn_error", "lost"] as const) {
       const tracker = new TurnWorkTracker();
       tracker.begin();
       tracker.bindTurn("turn-current");

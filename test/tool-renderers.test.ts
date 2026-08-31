@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 import {
   canonicalToolName,
+  isAgentDispatchTool,
   officialToolNames
 } from "../packages/zcode-tui/src/tool-renderers.ts";
 import { ToolExecutionView, toolCard } from "../packages/zcode-tui/src/tool-view.ts";
@@ -20,6 +21,10 @@ describe("official tool renderer registry", () => {
     expect(canonicalToolName("KillShell")).toBe("TaskStop");
     expect(canonicalToolName("mcp__docs__lookup")).toBe("MCP");
     expect(canonicalToolName("TaskStop")).toBe("TaskStop");
+    expect(isAgentDispatchTool("Agent")).toBeTrue();
+    expect(isAgentDispatchTool("Subagent")).toBeTrue();
+    expect(isAgentDispatchTool("Task")).toBeTrue();
+    expect(isAgentDispatchTool("TaskOutput")).toBeFalse();
     expect(canonicalToolName("TaskCreate")).toBeUndefined();
     expect(canonicalToolName("not-a-real-task-tool")).toBeUndefined();
   });
@@ -177,6 +182,216 @@ describe("official tool renderer registry", () => {
     expect(stopped).toContain("✓ Stop task bg_1 · shell");
     expect(stopped).toContain("bun test · stopped");
     expect(stopped).not.toContain("Agent");
+  });
+
+  test("maps TaskOutput and renders only the compact runtime display", () => {
+    expect(canonicalToolName("TaskOutput")).toBe("TaskOutput");
+    expect(canonicalToolName("task_output")).toBe("TaskOutput");
+
+    const transcript = Array.from({ length: 40 }, (_, index) => `tool_use ${index}: Bash → ls -la /src`).join("\n");
+    const display = {
+      kind: "task_output",
+      retrievalStatus: "success",
+      taskStatus: "completed",
+      output: "Subagent final answer: renderer fixed.",
+      truncated: true
+    };
+
+    const live = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_1" },
+      result: {
+        success: true,
+        content: `<retrieval_status>success</retrieval_status>\n<output>\n${transcript}\n</output>`,
+        display
+      }
+    });
+    expect(live).toContain("✓ TaskOutput task bg_1");
+    expect(live).toContain("retrieved · completed · output truncated");
+    expect(live).toContain("Subagent final answer: renderer fixed.");
+    expect(live).not.toContain("tool_use 0");
+    expect(live).not.toContain('"success"');
+
+    const restored = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_1" },
+      result: {
+        output: `<retrieval_status>success</retrieval_status>\n<task_id>bg_1</task_id>\n<output>\n${transcript}\n</output>`,
+        display
+      }
+    });
+    expect(restored).toContain("Subagent final answer: renderer fixed.");
+    expect(restored).not.toContain("tool_use 0");
+  });
+
+  test("renders TaskOutput from persisted fallbacks without display metadata", () => {
+    const serialized = JSON.stringify({
+      retrieval_status: "success",
+      task: {
+        task_id: "bg_2",
+        task_type: "local_agent",
+        status: "failed",
+        output: "Agent failed: boom",
+        error: "boom"
+      }
+    });
+    const serializedCard = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_2" },
+      result: { output: serialized }
+    });
+    expect(serializedCard).toContain("✓ TaskOutput task bg_2");
+    expect(serializedCard).toContain("failed");
+    expect(serializedCard).toContain("Task output is available in /tasks.");
+    expect(serializedCard).not.toContain("Agent failed: boom");
+    expect(serializedCard).not.toContain('"retrieval_status"');
+
+    const modelContent = "<retrieval_status>timeout</retrieval_status>\n<output>\npartial transcript tail\n</output>";
+    const timeoutCard = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_3" },
+      result: { output: modelContent }
+    });
+    expect(timeoutCard).toContain("timed out waiting");
+    expect(timeoutCard).toContain("No output yet");
+    expect(timeoutCard).not.toContain("partial transcript tail");
+
+    const notReady = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_4" },
+      result: {
+        success: true,
+        content: "<retrieval_status>not_ready</retrieval_status>",
+        display: { kind: "task_output", retrievalStatus: "not_ready" }
+      }
+    });
+    expect(notReady).toContain("not ready yet");
+    expect(notReady).toContain("No output yet");
+  });
+
+  test("renders TaskOutput when the restored part passes the raw output string through", () => {
+    // upsertProtocolPart builds result = part.output (a bare string) when the
+    // persisted part carries no resultDisplay metadata at all. There is no
+    // compact display left to recover, so the renderer consumes the string and
+    // keeps the raw output in /tasks instead of making it expandable here.
+    const transcript = Array.from({ length: 30 }, (_, index) => `tool_use ${index}: Bash → ls /src`).join("\n");
+    const modelContent = `<retrieval_status>success</retrieval_status>\n<task_id>bg_5</task_id>\n<output>\n${transcript}\n</output>`;
+    const card = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_5" },
+      result: modelContent
+    });
+    expect(card).toContain("✓ TaskOutput task bg_5");
+    expect(card).toContain("retrieved");
+    expect(card).toContain("Task output is available in /tasks.");
+    expect(card).not.toContain("tool_use 0");
+    expect(card).not.toContain("<retrieval_status>");
+    expect(card).not.toContain("<task_id>");
+    expect(card).not.toContain("</output>");
+    expect(expandedCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_5" },
+      result: modelContent
+    })).not.toContain("tool_use 29");
+
+    const liveWithoutDisplay = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_5" },
+      result: { success: true, content: modelContent }
+    });
+    expect(liveWithoutDisplay).toContain("retrieved");
+    expect(liveWithoutDisplay).not.toContain("tool_use 0");
+    expect(liveWithoutDisplay).not.toContain('"content"');
+
+    const serialized = JSON.stringify({
+      retrieval_status: "timeout",
+      task: null
+    });
+    const timeoutCard = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_6" },
+      result: serialized
+    });
+    expect(timeoutCard).toContain("timed out waiting");
+    expect(timeoutCard).toContain("No output yet");
+    expect(timeoutCard).not.toContain('"retrieval_status"');
+  });
+
+  test("preserves serialized TaskOutput failures from restored parts", () => {
+    const failure = JSON.stringify({
+      result: false,
+      errorCode: 2,
+      message: "No task found with ID: bg_missing"
+    });
+    for (const result of [failure, { output: failure }]) {
+      const card = toolCard({
+        name: "TaskOutput",
+        state: "complete",
+        input: { task_id: "bg_missing" },
+        result
+      });
+      expect(card).toContain("No task found with ID: bg_missing");
+      expect(card).not.toContain("Task output is available in /tasks.");
+      expect(card).not.toContain('"errorCode"');
+    }
+  });
+
+  test("keeps terminal control sequences out of every TaskOutput path", () => {
+    const injection = `<retrieval_status>success</retrieval_status>\n<output>\nprefix \x1b]52;c;aGVsbG8=\x1b\\ suffix\n</output>`;
+    const fallbackCard = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_7" },
+      result: injection
+    });
+    expect(fallbackCard).toContain("retrieved");
+    expect(fallbackCard).not.toContain("prefix");
+    expect(fallbackCard).not.toContain("suffix");
+    expect(fallbackCard).not.toContain("\x1b");
+
+    const displayCard = toolCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_7" },
+      result: {
+        display: {
+          kind: "task_output",
+          retrievalStatus: "success",
+          output: "prefix \x1b]52;c;aGVsbG8=\x1b\\ suffix"
+        }
+      }
+    });
+    expect(displayCard).toContain("prefix");
+    expect(displayCard).toContain("suffix");
+    expect(displayCard).not.toContain("\x1b]52");
+    expect(displayCard).not.toContain("\x1b");
+  });
+
+  test("hard-bounds trusted TaskOutput display metadata", () => {
+    const card = expandedCard({
+      name: "TaskOutput",
+      state: "complete",
+      input: { task_id: "bg_8" },
+      result: {
+        display: {
+          kind: "task_output",
+          retrievalStatus: "success",
+          output: `${"x".repeat(2_500)}END`
+        }
+      }
+    });
+    expect(card).toContain("output truncated");
+    expect(card).not.toContain("END");
+    expect(card.length).toBeLessThan(2_200);
   });
 
   test("renders Agent content arrays and background launch metadata", () => {

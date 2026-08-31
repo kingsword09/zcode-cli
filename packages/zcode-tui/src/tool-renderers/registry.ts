@@ -32,6 +32,7 @@ const canonicalAliases = new Map<string, OfficialToolName>([
   ["taskstop", "TaskStop"],
   ["killshell", "TaskStop"],
   ["killbash", "TaskStop"],
+  ["taskoutput", "TaskOutput"],
   ["agent", "Agent"],
   ["subagent", "Agent"],
   ["task", "Task"],
@@ -51,6 +52,12 @@ export function canonicalToolName(name: string): CanonicalToolName | undefined {
 
 export function isKnownTool(name: string): boolean {
   return canonicalToolName(name) !== undefined;
+}
+
+export function isAgentDispatchTool(name: string | undefined): boolean {
+  if (!name) return false;
+  const canonical = canonicalToolName(name);
+  return canonical === "Agent" || canonical === "Task";
 }
 
 export function isGroupedInformationTool(name: string): boolean {

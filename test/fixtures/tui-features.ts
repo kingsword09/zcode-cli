@@ -27,6 +27,11 @@ let timerTaskStatus: "failed" | "running" | undefined;
 let turnCompleted = false;
 let featureTurnActive = false;
 let stuckBackgroundHandoff = false;
+let escOwnedStatus: "cancelled" | "running" | undefined;
+let escDeclinedStatus: "completed" | "running" | undefined;
+let escUnrelatedStatus: "completed" | "running" | undefined;
+const backgroundCancellationAttempts: string[] = [];
+let coordinatorNoticeCount = 0;
 let sessionEventListener: ((event: unknown) => void | Promise<void>) | undefined;
 let featureSteerInput: string | undefined;
 let featurePendingInputId: string | undefined;
@@ -288,6 +293,30 @@ await runTui({
         status: timerTaskStatus,
         cancellable: timerTaskStatus === "running",
         startedAt: Date.now() - 1_000
+      }] : []),
+      ...(escOwnedStatus ? [{
+        taskId: "esc_owned",
+        toolName: "Agent",
+        description: "Current turn background agent",
+        status: escOwnedStatus,
+        cancellable: escOwnedStatus === "running",
+        startedAt: Date.now() - 800
+      }] : []),
+      ...(escDeclinedStatus ? [{
+        taskId: "esc_declined",
+        toolName: "Agent",
+        description: "Already settled background agent",
+        status: escDeclinedStatus,
+        cancellable: escDeclinedStatus === "running",
+        startedAt: Date.now() - 700
+      }] : []),
+      ...(escUnrelatedStatus ? [{
+        taskId: "esc_unrelated",
+        toolName: "Agent",
+        description: "Unrelated background agent",
+        status: escUnrelatedStatus,
+        cancellable: escUnrelatedStatus === "running",
+        startedAt: Date.now() - 600
       }] : [])
     ],
     backgroundTaskDetails: [
@@ -314,19 +343,65 @@ await runTui({
         prompt: "Verify aggregate task timing.",
         error: timerTaskStatus === "failed" ? "Expected timer fixture failure." : undefined,
         status: timerTaskStatus
+      }] : []),
+      ...(escOwnedStatus ? [{
+        taskId: "esc_owned",
+        taskKind: "local_agent",
+        agentId: "esc_owned",
+        agentType: "reviewer",
+        childSessionId: "child_esc_owned",
+        parentSessionId: "feature-session",
+        turnId: "turn_esc_ownership",
+        status: escOwnedStatus
+      }] : []),
+      ...(escDeclinedStatus ? [{
+        taskId: "esc_declined",
+        taskKind: "local_agent",
+        agentId: "esc_declined",
+        agentType: "reviewer",
+        childSessionId: "child_esc_declined",
+        parentSessionId: "feature-session",
+        turnId: "turn_esc_ownership",
+        status: escDeclinedStatus
+      }] : []),
+      ...(escUnrelatedStatus ? [{
+        taskId: "esc_unrelated",
+        taskKind: "local_agent",
+        agentId: "esc_unrelated",
+        agentType: "reviewer",
+        childSessionId: "child_esc_unrelated",
+        parentSessionId: "feature-session",
+        turnId: "turn_older_unrelated",
+        status: escUnrelatedStatus
       }] : [])
     ]
   }),
   cancelBackgroundTask: async (taskId) => {
-    if (taskId !== "bg_feature") throw new Error(`Unexpected background task: ${taskId}`);
-    backgroundStatus = "cancelled";
-    return { cancelled: true, status: backgroundStatus, taskId };
+    backgroundCancellationAttempts.push(taskId);
+    if (taskId === "bg_feature") {
+      backgroundStatus = "cancelled";
+      return { cancelled: true, status: backgroundStatus, taskId };
+    }
+    if (taskId === "esc_owned") {
+      escOwnedStatus = "cancelled";
+      return { cancelled: true, status: escOwnedStatus, taskId };
+    }
+    if (taskId === "esc_declined") {
+      escDeclinedStatus = "completed";
+      return {
+        cancelled: false,
+        reason: "background_task_not_running",
+        status: escDeclinedStatus,
+        taskId
+      };
+    }
+    throw new Error(`Unexpected background task: ${taskId}`);
   },
   sendBackgroundTaskMessage: async ({ taskId, message, summary, restart }) => {
     if (taskId !== "agent_feature") throw new Error(`Unexpected agent task: ${taskId}`);
     agentMessageCount += 1;
     const expectedMessage = agentMessageCount === 1
-      ? "Fix the recovery issue and rerun the focused test."
+      ? "Continue the assigned task from the last completed step. Re-check the current workspace state and finish the remaining work."
       : "Restart from the saved state and finish the remaining verification.";
     if (message !== expectedMessage) throw new Error(`Unexpected agent message: ${message}`);
     if (summary !== message) throw new Error(`Unexpected agent summary: ${summary}`);
@@ -344,6 +419,12 @@ await runTui({
     };
   },
   interruptTurn: async ({ pendingInputIds, reason, reservationId, waitForIdle }) => {
+    if (reason === "TUI interrupted the active foreground turn.") {
+      if (pendingInputIds !== undefined || reservationId !== undefined || waitForIdle !== undefined) {
+        throw new Error("Foreground interrupt carried background-handoff options.");
+      }
+      return { kind: "stopped", foregroundExecutionId: "fixture-esc-ownership" };
+    }
     if (!stuckBackgroundHandoff) throw new Error("Unexpected background handoff interrupt.");
     if (pendingInputIds?.length !== 0
       || reason !== "User input preempted background result processing."
@@ -436,7 +517,52 @@ await runTui({
     if (options.delivery !== "start_turn") {
       throw new Error(`Idle input used unexpected delivery mode: ${String(options.delivery)}`);
     }
+    if (typeof promptText === "string" && promptText.startsWith("Background task agent_feature")) {
+      const expectedLead = coordinatorNoticeCount === 0
+        ? "Background task agent_feature (Review task recovery) was resumed from the task center"
+        : "Background task agent_feature (Review task recovery) was restarted from the task center";
+      const expectedInstruction = coordinatorNoticeCount === 0
+        ? "Continue the assigned task from the last completed step. Re-check the current workspace state and finish the remaining work."
+        : "Restart from the saved state and finish the remaining verification.";
+      if (!promptText.startsWith(expectedLead)
+        || !promptText.includes(`\"${expectedInstruction}\"`)
+        || !promptText.includes("TaskOutput with block=true")) {
+        throw new Error(`Unexpected coordinator notice: ${promptText}`);
+      }
+      coordinatorNoticeCount += 1;
+      return {
+        kind: "started_turn",
+        result: { turnId: `turn_task_coordinator_${coordinatorNoticeCount}` }
+      };
+    }
+    if (promptText === "verify Esc task ownership") {
+      escOwnedStatus = "running";
+      escDeclinedStatus = "running";
+      escUnrelatedStatus = "running";
+      await emitRuntime(options, "turn_started", {
+        inputId: options.inputId,
+        turnId: "turn_esc_ownership"
+      });
+      for (const taskId of ["esc_owned", "esc_declined"]) {
+        await emitRuntime(options, "background_task_started", {
+          taskId,
+          taskKind: "local_agent",
+          status: "running",
+          turnId: "turn_esc_ownership"
+        });
+      }
+      await emit(options, {
+        kind: "text_delta",
+        delta: "Esc ownership turn running.\n"
+      });
+      await new Promise<never>((_resolve, reject) => {
+        const abort = () => reject(options.abortSignal?.reason ?? new DOMException("Aborted", "AbortError"));
+        if (options.abortSignal?.aborted) abort();
+        else options.abortSignal?.addEventListener("abort", abort, { once: true });
+      });
+    }
     if (promptText === "verify aggregate timer") {
+      escUnrelatedStatus = "completed";
       timerTaskStatus = "running";
       await emitRuntime(options, "turn_started", {
         inputId: options.inputId,
@@ -916,3 +1042,10 @@ await runTui({
   },
   setMode: async (nextMode) => ({ mode: nextMode })
 });
+
+if (coordinatorNoticeCount !== 2) {
+  throw new Error(`Expected two coordinator notices, received ${coordinatorNoticeCount}.`);
+}
+if (backgroundCancellationAttempts.join(",") !== "esc_owned,esc_declined") {
+  throw new Error(`Unexpected Esc cancellation attempts: ${backgroundCancellationAttempts.join(",")}`);
+}

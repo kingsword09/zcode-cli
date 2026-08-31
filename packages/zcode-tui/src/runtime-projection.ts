@@ -8,6 +8,8 @@ export type RuntimeBackgroundStatus =
   | "failed"
   | "timed_out"
   | "cancelled"
+  | "killed"
+  | "stopped"
   | "spawn_error"
   | "lost";
 export type RuntimeTaskKind = "local_agent" | "local_bash" | "local_workflow" | "monitor_mcp" | "unknown";
@@ -111,6 +113,8 @@ export interface RuntimeProjectionSnapshot {
   currentTurnId?: string;
   activeToolCalls: RuntimeActiveToolCall[];
   backgroundJobs: RuntimeBackgroundJob[];
+  /** Tasks re-registered by the persisted background-agent restore bridge. */
+  restoredBackgroundTasks?: RuntimeBackgroundJob[];
   contextUsage?: RuntimeContextUsage;
   lastError?: {
     type: string;
@@ -127,6 +131,8 @@ const backgroundStatuses = new Set<RuntimeBackgroundStatus>([
   "failed",
   "timed_out",
   "cancelled",
+  "killed",
+  "stopped",
   "spawn_error",
   "lost"
 ]);
@@ -347,11 +353,18 @@ export function normalizeRuntimeProjection(value: unknown): RuntimeProjectionSna
     }),
     backgroundJobs: records(rawBackgroundJobs).flatMap((item): RuntimeBackgroundJob[] => {
       const taskId = stringField(item, "taskId", "taskID", "id");
-      const job = backgroundJobFrom(taskId && taskDetails.has(taskId)
-        ? { ...taskDetails.get(taskId), ...item }
-        : item);
+      const details = taskId ? taskDetails.get(taskId) : undefined;
+      const definedDetails = details
+        ? Object.fromEntries(Object.entries(details).filter(([, field]) => field !== undefined))
+        : undefined;
+      const job = backgroundJobFrom(definedDetails ? { ...item, ...definedDetails } : item);
       return job ? [job] : [];
     }),
+    restoredBackgroundTasks: records(projection.restoredBackgroundTasks ?? value.restoredBackgroundTasks)
+      .flatMap((item): RuntimeBackgroundJob[] => {
+        const job = backgroundJobFrom(item);
+        return job ? [job] : [];
+      }),
     contextUsage: contextUsageFrom(runtime?.contextUsage ?? value.contextUsage, projection),
     lastError: lastErrorType && lastErrorMessage ? {
       type: lastErrorType,

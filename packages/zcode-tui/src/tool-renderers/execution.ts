@@ -1,7 +1,8 @@
-import { sanitizeTerminalText } from "../terminal-text.ts";
+import { sanitizeTerminalText, truncateGraphemes } from "../terminal-text.ts";
 import { isRecord } from "../types.ts";
 import type { SpecializedToolRenderOptions, SpecializedToolRenderResult } from "./types.ts";
 import {
+  booleanField,
   compactStatusLine,
   directText,
   formatBytes,
@@ -121,5 +122,152 @@ export function taskStopRender(options: SpecializedToolRenderOptions): Specializ
     summary: taskId ? `${taskId}${taskType ? ` · ${taskType}` : ""}` : toolSummary(options.name, options.input),
     body: [command && `${oneLine(command, 160)} · stopped`, !command && message ? message : undefined].filter(Boolean).join("\n") || undefined,
     consumesResult: Boolean(record)
+  };
+}
+
+interface TaskOutputDisplay {
+  retrievalStatus?: string;
+  taskStatus?: string;
+  output?: string;
+  truncated?: boolean;
+  source: "display" | "fallback";
+}
+
+const taskOutputDisplayLimit = 2_000;
+
+const retrievalStatusLabels: Record<string, string> = {
+  success: "retrieved",
+  not_ready: "not ready yet",
+  timeout: "timed out waiting"
+};
+
+function taskOutputDisplayFromTask(record: Record<string, unknown>): TaskOutputDisplay | undefined {
+  const task = isRecord(record.task) ? record.task : undefined;
+  const retrievalStatus = recordString(record, ["retrieval_status", "retrievalStatus"]);
+  if (!task && !retrievalStatus) return undefined;
+  return {
+    retrievalStatus,
+    taskStatus: recordString(task, ["status"]),
+    source: "fallback"
+  };
+}
+
+function taskOutputDisplayFromString(value: string): TaskOutputDisplay | undefined {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      const fromJson = isRecord(parsed) ? taskOutputDisplayFromTask(parsed) : undefined;
+      if (fromJson) return fromJson;
+    } catch {
+      // Not a serialized runtime result; fall through to the model-content shape.
+    }
+  }
+  if (value.includes("<retrieval_status>")) {
+    const status = /<retrieval_status>([^<]+)<\/retrieval_status>/u.exec(value)?.[1];
+    const taskStatus = /<status>([^<]+)<\/status>/u.exec(value)?.[1];
+    if (status || taskStatus) {
+      return {
+        retrievalStatus: status ? sanitizeTerminalText(status.trim(), { preserveSgr: false }) : undefined,
+        taskStatus: taskStatus ? sanitizeTerminalText(taskStatus.trim(), { preserveSgr: false }) : undefined,
+        source: "fallback"
+      };
+    }
+  }
+  return undefined;
+}
+
+function compactTaskOutput(value: unknown): { output?: string; truncated: boolean } {
+  const raw = directText(value)?.trimEnd();
+  if (!raw) return { truncated: false };
+  const output = truncateGraphemes(raw, taskOutputDisplayLimit, "");
+  return { output, truncated: output !== raw };
+}
+
+function taskOutputFailureMessage(result: unknown, depth = 0): string | undefined {
+  if (depth > 3) return undefined;
+  if (typeof result === "string") {
+    const trimmed = result.trim();
+    if (!trimmed.startsWith("{")) return undefined;
+    try {
+      return taskOutputFailureMessage(JSON.parse(trimmed), depth + 1);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!isRecord(result)) return undefined;
+  const failed = result.success === false || result.result === false;
+  if (failed) {
+    const message = recordString(result, ["message", "error"]);
+    if (message) return oneLine(message, 240);
+  }
+  for (const candidate of [result.output, result.content, result.result]) {
+    if (candidate === result || typeof candidate === "boolean") continue;
+    const nested = taskOutputFailureMessage(candidate, depth + 1);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+/**
+ * Prefer the runtime's compact `display` metadata; fall back to the raw
+ * `{retrieval_status, task}` result or the persisted model-content string.
+ * Restored parts arrive as `{output, display}` and live results as
+ * `{success, content, display}` — in both the raw field can embed a full
+ * subagent transcript, so it must never be rendered directly. When a restored
+ * part carries no display metadata at all, `upsertProtocolPart` passes the
+ * persisted `state.output` string through as the whole result.
+ */
+export function taskOutputDisplay(result: unknown): TaskOutputDisplay | undefined {
+  if (typeof result === "string") return taskOutputDisplayFromString(result);
+  const record = isRecord(result) ? result : undefined;
+  if (!record) return undefined;
+  const display = isRecord(record.display)
+    ? record.display
+    : isRecord(record.resultDisplay) ? record.resultDisplay : undefined;
+  if (display && (recordString(display, ["kind"]) === "task_output" || recordString(display, ["retrievalStatus", "retrieval_status"]))) {
+    const compact = compactTaskOutput(display.output);
+    return {
+      retrievalStatus: recordString(display, ["retrievalStatus", "retrieval_status"]),
+      taskStatus: recordString(display, ["taskStatus", "task_status", "status"]),
+      output: compact.output,
+      truncated: booleanField(display, ["truncated"]) === true || compact.truncated,
+      source: "display"
+    };
+  }
+  const nested = taskOutputDisplayFromTask(record);
+  if (nested) return nested;
+  for (const candidate of [record.output, record.content]) {
+    if (typeof candidate !== "string") continue;
+    const fallback = taskOutputDisplayFromString(candidate);
+    if (fallback) return fallback;
+  }
+  return undefined;
+}
+
+export function taskOutputRender(options: SpecializedToolRenderOptions): SpecializedToolRenderResult {
+  const input = isRecord(options.input) ? options.input : undefined;
+  const taskId = recordString(input, ["task_id", "taskId", "taskID"]);
+  const display = taskOutputDisplay(options.result);
+  const body: string[] = [];
+  const status = display ? compactStatusLine([
+    display.retrievalStatus ? retrievalStatusLabels[display.retrievalStatus] ?? display.retrievalStatus.replaceAll("_", " ") : undefined,
+    display.taskStatus && display.taskStatus !== display.retrievalStatus ? display.taskStatus.replaceAll("_", " ") : undefined,
+    display.truncated ? "output truncated" : undefined
+  ], options.theme) : undefined;
+  if (status) body.push(status);
+  if (display?.source === "display" && display.output?.trim()) {
+    body.push(display.output.trimEnd());
+  } else if (display?.retrievalStatus === "not_ready" || display?.retrievalStatus === "timeout") {
+    body.push(options.theme.muted("No output yet — check again with TaskOutput or /tasks."));
+  } else {
+    const failureMessage = taskOutputFailureMessage(options.result);
+    body.push(failureMessage ?? options.theme.muted("Task output is available in /tasks."));
+  }
+  return {
+    displayName: "TaskOutput",
+    summary: taskId ? `task ${taskId}` : toolSummary(options.name, options.input),
+    body: body.join("\n") || undefined,
+    consumesResult: true
   };
 }

@@ -141,6 +141,10 @@ export function toolSummary(name: string, input: unknown): string | undefined {
       const task = recordString(record, ["task_id", "taskId", "shell_id", "shellId"]);
       return task ? `task ${task}` : undefined;
     }
+    case "TaskOutput": {
+      const task = recordString(record, ["task_id", "taskId"]);
+      return task ? `task ${task}` : undefined;
+    }
     case "Agent":
     case "Task":
       return recordString(record, ["description", "task", "prompt", "subagent_type"]);

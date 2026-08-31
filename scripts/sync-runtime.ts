@@ -494,6 +494,19 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const taskMessageBridgePattern = /\.sendBackgroundTaskMessage=async [A-Za-z_$][\w$]*=>/u;
   const taskMessageOptionPattern = /sendBackgroundTaskMessage:[A-Za-z_$][\w$]*\.sendBackgroundTaskMessage/u;
   const taskMessageRestartMarker = "e?.restart===!0";
+  const backgroundRestoreMarker = ".$zRestorePersistedBackgroundTasks=async $zApp=>";
+  const backgroundTasksMergeMarker = "for(let $zDetail of r)";
+  const backgroundRestoreSourceMarker = "$zApp.loadSessionTranscript?.()";
+  const backgroundRestoreRetryMarker = "catch{$zApp.$zRestoredBackgroundTasksSession=void 0}";
+  const backgroundRestoreLogMarker = ".$zRestoredBackgroundTasksLog=[]";
+  const backgroundTasksRestoredFieldMarker = "restoredBackgroundTasks:Array.isArray(";
+  const backgroundRestoreModelTextMarker = 'childSessionId:"sess_subagent_"+$zAgentId';
+  const backgroundRestoreAsyncModelTextMarker = '$zOutput.includes("Async agent launched successfully.")';
+  const backgroundRestoreReminderMarker = '.addAttachment?.("task_status"';
+  const backgroundRestoreMetadataErrorMarker = "error:typeof $zMetadata.error";
+  const backgroundRestoreBeforeSendMarker = ".$zSendInputWithoutBackgroundRestore=";
+  const backgroundTasksReplaceMarker = "s[$zIndex]={...s[$zIndex]";
+  const taskMessageRestoreMarker = ".$zRestorePersistedBackgroundTasks?.(t)";
   const interruptTurnMarker = ".interruptTurn=async e=>";
   const interruptWaitForIdleMarker = "e?.waitForIdle===!0";
   const queuedInputPromotionMarker = "r?.pendingInputReservationId??r?.queryId??";
@@ -544,6 +557,19 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && taskMessageOptionPattern.test(runtime)
     && runtime.includes(taskMessageRestartMarker)
     && runtime.includes(projectionBridgeMarker)
+    && runtime.includes(backgroundRestoreMarker)
+    && runtime.includes(backgroundTasksMergeMarker)
+    && runtime.includes(backgroundRestoreSourceMarker)
+    && runtime.includes(backgroundRestoreRetryMarker)
+    && runtime.includes(backgroundRestoreLogMarker)
+    && runtime.includes(backgroundTasksRestoredFieldMarker)
+    && runtime.includes(backgroundRestoreModelTextMarker)
+    && runtime.includes(backgroundRestoreAsyncModelTextMarker)
+    && runtime.includes(backgroundRestoreReminderMarker)
+    && runtime.includes(backgroundRestoreMetadataErrorMarker)
+    && runtime.includes(backgroundRestoreBeforeSendMarker)
+    && runtime.includes(backgroundTasksReplaceMarker)
+    && runtime.includes(taskMessageRestoreMarker)
     && runtime.includes(".loadSessionContextMessages=async()=>await(await")
     && /loadSessionContextMessages:[A-Za-z_$][\w$]*\.loadSessionContextMessages/u.test(runtime);
   if (alreadyPatched) return runtime;
@@ -632,8 +658,19 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 
   const [recallAssignment, bridge, , getApp] = assignment;
   const assignments: string[] = [];
-  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ${getApp}(),t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;let r=Object.values($zRuntimeProjectionBridge.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.completedAt}));return{...t,backgroundTaskDetails:r}}`;
-  const taskMessageAssignment = `${bridge}.sendBackgroundTaskMessage=async e=>{let t=await ${getApp}(),r=t.runtime,o=r?.runtimeTaskRegistry?.get?.(e?.taskId);if(!r?.subagentPort?.sendMessage)throw new Error("Background agent messaging is unavailable in this runtime.");if(!o||(o.type??o.taskType)!=="local_agent")throw new Error("The selected task is not a local agent.");if(typeof e?.message!=="string"||!e.message.trim())throw new Error("Enter a message for the background agent.");let n=e.message.trim().slice(0,2e4),i=(typeof e.summary==="string"?e.summary:n).replace(/\\s+/g," ").trim().slice(0,200);if(e?.restart===!0&&o.status==="running"){if(!r.subagentPort.stopTask)throw new Error("Background agent restart is unavailable in this runtime.");await r.subagentPort.stopTask(e.taskId),o=r.runtimeTaskRegistry?.get?.(e.taskId);if(!o)throw new Error("The background agent stopped but could not be restored.")}return await r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.(),turnId:o.turnId??"tui-task-message",parentToolCallId:o.parentToolCallId??"tui-task-message",to:o.agentId??e.taskId,summary:i,message:n,workingDirectory:o.workingDirectory??r.workingDirectory,workspaceRoot:o.workspaceRoot??r.workingDirectory,trace:o.traceContext??r.rootTraceContext})}`;
+  // Persisted background-agent restore: after a CLI restart + session resume the
+  // in-memory runtimeTaskRegistry is empty, so /tasks lists nothing and
+  // sendBackgroundTaskMessage cannot find the task. The runtime already ships a
+  // resume-from-child-session path (sendMessage on a stopped local_agent task),
+  // so re-registering spawn records from the already active-branch-filtered
+  // transcript is enough to make /tasks and /tasks resume work again.
+  const backgroundRestoreAssignment = `${bridge}.$zRestorePersistedBackgroundTasks=async $zApp=>{let $zRuntime=$zApp?.runtime,$zRegistry=$zRuntime?.runtimeTaskRegistry;if(!$zRegistry?.register||typeof $zApp?.sessionId!="string"||$zApp.sessionId===$zApp.$zRestoredBackgroundTasksSession)return;$zApp.$zRestoredBackgroundTasksSession=$zApp.sessionId,$zApp.$zRestoredBackgroundTasksLog=[];try{let $zMessages=await $zApp.loadSessionTranscript?.()??[],$zRestored=[];for(let $zMessage of $zMessages){let $zParts=Array.isArray($zMessage?.parts)?$zMessage.parts:[];for(let $zPart of $zParts){if($zPart?.type!=="tool")continue;let $zToolName=typeof $zPart.toolName==="string"?$zPart.toolName:typeof $zPart.tool==="string"?$zPart.tool:"";$zToolName=$zToolName.trim().toLowerCase();if($zToolName!=="agent"&&$zToolName!=="subagent"&&$zToolName!=="task")continue;let $zInput=$zPart.input??$zPart.state?.input,$zOutput=typeof $zPart.output==="string"?$zPart.output:$zPart.state?.output;if(typeof $zOutput!=="string"||$zOutput.trim().length===0)continue;let $zSpawn;try{$zSpawn=JSON.parse($zOutput)}catch{}if(!$zSpawn||typeof $zSpawn!=="object"||Array.isArray($zSpawn)){let $zAgentId=/(?:^|\\n)agentId:\\s*([^\\s(]+)/u.exec($zOutput)?.[1],$zOutputFile=/(?:^|\\n)output_file:\\s*([^\\r\\n]+)/u.exec($zOutput)?.[1]?.trim();if(typeof $zAgentId!=="string"||$zAgentId.length===0)continue;$zSpawn={status:"async_launched",agentId:$zAgentId,agentType:typeof $zInput?.subagent_type==="string"&&$zInput.subagent_type.length>0?$zInput.subagent_type:typeof $zInput?.agentType==="string"&&$zInput.agentType.length>0?$zInput.agentType:void 0,childSessionId:"sess_subagent_"+$zAgentId,description:typeof $zInput?.description==="string"&&$zInput.description.length>0?$zInput.description:void 0,prompt:typeof $zInput?.prompt==="string"&&$zInput.prompt.length>0?$zInput.prompt:void 0,...$zOutputFile?{outputFile:$zOutputFile}:{}}}if(($zSpawn.status!=="async_launched"&&$zSpawn.status!=="backgrounded")||typeof $zSpawn.agentId!=="string"||$zSpawn.agentId.length===0)continue;let $zMetadata;if(typeof $zSpawn.outputFile==="string"&&$zSpawn.outputFile.length>0)try{let $zBuiltin=process.getBuiltinModule;if(typeof $zBuiltin==="function"){let $zFs=$zBuiltin.call(process,"node:fs"),$zPath=$zBuiltin.call(process,"node:path");$zMetadata=JSON.parse($zFs.readFileSync($zPath.join($zPath.dirname($zSpawn.outputFile),"metadata.json"),"utf8"))}}catch{}if($zMetadata&&typeof $zMetadata==="object"&&!Array.isArray($zMetadata)&&(typeof $zMetadata.agentId!=="string"||$zMetadata.agentId===$zSpawn.agentId)&&(typeof $zMetadata.parentSessionId!=="string"||$zMetadata.parentSessionId===$zApp.sessionId))$zSpawn={...$zSpawn,agentType:typeof $zMetadata.profileId==="string"&&$zMetadata.profileId.length>0?$zMetadata.profileId:$zSpawn.agentType,childSessionId:typeof $zMetadata.childSessionId==="string"&&$zMetadata.childSessionId.length>0?$zMetadata.childSessionId:$zSpawn.childSessionId,description:typeof $zMetadata.description==="string"&&$zMetadata.description.length>0?$zMetadata.description:$zSpawn.description,outputFile:typeof $zMetadata.outputFile==="string"&&$zMetadata.outputFile.length>0?$zMetadata.outputFile:$zSpawn.outputFile,prompt:typeof $zMetadata.prompt==="string"&&$zMetadata.prompt.length>0?$zMetadata.prompt:$zSpawn.prompt,error:typeof $zMetadata.error==="string"&&$zMetadata.error.length>0?$zMetadata.error:$zSpawn.error};if(typeof $zSpawn.childSessionId!=="string"||$zSpawn.childSessionId.length===0)$zSpawn.childSessionId="sess_subagent_"+$zSpawn.agentId;if($zRegistry.get?.($zSpawn.agentId))continue;let $zStatus="stopped";if($zMetadata?.status==="completed")$zStatus="completed";else if($zMetadata?.status==="failed")$zStatus="failed";let $zTask={taskId:$zSpawn.agentId,agentId:$zSpawn.agentId,agentType:typeof $zSpawn.agentType==="string"&&$zSpawn.agentType.length>0?$zSpawn.agentType:"general-purpose",childSessionId:$zSpawn.childSessionId,description:typeof $zSpawn.description==="string"&&$zSpawn.description.length>0?$zSpawn.description:void 0,error:typeof $zSpawn.error==="string"&&$zSpawn.error.length>0?$zSpawn.error:void 0,isBackgrounded:!0,outputFile:typeof $zSpawn.outputFile==="string"&&$zSpawn.outputFile.length>0?$zSpawn.outputFile:void 0,parentToolCallId:typeof $zPart.toolCallId==="string"&&$zPart.toolCallId.length>0?$zPart.toolCallId:typeof $zPart.callID==="string"&&$zPart.callID.length>0?$zPart.callID:void 0,parentSessionId:$zApp.sessionId,prompt:typeof $zSpawn.prompt==="string"&&$zSpawn.prompt.length>0?$zSpawn.prompt:void 0,startedAt:$zPart.state?.time?.start,status:$zStatus,taskType:"local_agent",type:"local_agent"};$zRegistry.register($zTask),$zRestored.push($zTask)}}if($zRestored.length>0){let $zTaskIds=$zRestored.slice(-32).map($zTask=>"- "+$zTask.taskId+" ("+$zTask.status+")").join("\\n").slice(0,4e3);$zRuntime?.messageHistory?.addAttachment?.("task_status","Background agent tasks from this resumed session have been restored and are available again.\\nEarlier TaskOutput errors saying \\"No task found\\" occurred before restoration and are stale.\\nUse TaskOutput to collect results or SendMessage to continue a task. Do not assume these tasks were lost.\\nRestored task IDs:\\n"+$zTaskIds),$zApp.$zRestoredBackgroundTasksLog=[...($zApp.$zRestoredBackgroundTasksLog??[]),...$zRestored].slice(-64)}}catch{$zApp.$zRestoredBackgroundTasksSession=void 0}}`;
+  const guardedBackgroundRestoreAssignment = backgroundRestoreAssignment.replace(
+    'if(!$zSpawn||typeof $zSpawn!=="object"||Array.isArray($zSpawn)){let $zAgentId=',
+    'if(!$zSpawn||typeof $zSpawn!=="object"||Array.isArray($zSpawn)){if(!$zOutput.includes("Async agent launched successfully."))continue;let $zAgentId='
+  );
+  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ${getApp}();await ${bridge}.$zRestorePersistedBackgroundTasks?.($zRuntimeProjectionBridge);let t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;let r=Object.values($zRuntimeProjectionBridge.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.status==="running"?null:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.status==="running"?null:o.completedAt,cancelRequestedAt:o.status==="running"?null:o.cancelRequestedAt,blocked:o.status==="running"?null:o.blocked,blockedReason:o.status==="running"?null:o.blockedReason,cancellable:(o.taskType??o.type)==="local_agent"?o.status==="running":o.cancellable}));let s=Array.isArray(t.backgroundTasks)?t.backgroundTasks.slice():[];for(let $zDetail of r){let $zIndex=s.findIndex($zExisting=>$zExisting.taskId===$zDetail.taskId);if($zIndex<0)s.push($zDetail);else s[$zIndex]={...s[$zIndex],...Object.fromEntries(Object.entries($zDetail).filter(([,v])=>v!==void 0))}}return{...t,backgroundTasks:s,backgroundTaskDetails:r,restoredBackgroundTasks:Array.isArray($zRuntimeProjectionBridge.$zRestoredBackgroundTasksLog)?$zRuntimeProjectionBridge.$zRestoredBackgroundTasksLog:[]}}`;
+  const taskMessageAssignment = `${bridge}.sendBackgroundTaskMessage=async e=>{let t=await ${getApp}();await ${bridge}.$zRestorePersistedBackgroundTasks?.(t);let r=t.runtime,o=r?.runtimeTaskRegistry?.get?.(e?.taskId);if(!o&&typeof t.sessionId==="string"){t.$zRestoredBackgroundTasksSession=void 0;await ${bridge}.$zRestorePersistedBackgroundTasks?.(t);o=r?.runtimeTaskRegistry?.get?.(e?.taskId)}if(!r?.subagentPort?.sendMessage)throw new Error("Background agent messaging is unavailable in this runtime.");if(!o||(o.type??o.taskType)!=="local_agent")throw new Error("The selected task is not a local agent.");if(typeof e?.message!=="string"||!e.message.trim())throw new Error("Enter a message for the background agent.");let n=e.message.trim().slice(0,2e4),i=(typeof e.summary==="string"?e.summary:n).replace(/\\s+/g," ").trim().slice(0,200);if(e?.restart===!0&&o.status==="running"){if(!r.subagentPort.stopTask)throw new Error("Background agent restart is unavailable in this runtime.");await r.subagentPort.stopTask(e.taskId),o=r.runtimeTaskRegistry?.get?.(e.taskId);if(!o)throw new Error("The background agent stopped but could not be restored.")}return await r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.(),turnId:o.turnId??"tui-task-message",parentToolCallId:o.parentToolCallId??"tui-task-message",to:o.agentId??e.taskId,summary:i,message:n,workingDirectory:o.workingDirectory??r.workingDirectory,workspaceRoot:o.workspaceRoot??r.workingDirectory,trace:o.traceContext??r.rootTraceContext})}`;
   if (!listSkillsBridgePattern.test(patched)) {
     const listSkillsFactory = /listSkills:[A-Za-z_$][\w$]*\(\(\)=>([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),"listSkills"\)/u
       .exec(patched);
@@ -656,7 +693,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".readTodos=async()=>await(await")) {
     assignments.push(`${bridge}.readTodos=async()=>await(await ${getApp}()).readTodos?.()??[]`);
   }
-  if (!patched.includes(projectionBridgeMarker)) {
+  if (!patched.includes(projectionBridgeMarker) || !patched.includes(backgroundRestoreMarker)
+    || !patched.includes(backgroundTasksMergeMarker) || !patched.includes(backgroundTasksReplaceMarker)
+    || !patched.includes(backgroundTasksRestoredFieldMarker)) {
     const existingProjectionStart = `${bridge}.readRuntimeProjection=async()=>`;
     const existingProjectionIndex = patched.indexOf(existingProjectionStart);
     if (existingProjectionIndex >= 0) {
@@ -667,6 +706,23 @@ export function patchRuntimeTuiBridge(runtime: string): string {
       patched = `${patched.slice(0, existingProjectionIndex)}${projectionAssignment}${patched.slice(existingProjectionEnd)}`;
     } else {
       assignments.push(projectionAssignment);
+    }
+  }
+  if (!patched.includes(backgroundRestoreMarker) || !patched.includes(backgroundRestoreSourceMarker)
+    || !patched.includes(backgroundRestoreRetryMarker) || !patched.includes(backgroundRestoreLogMarker)
+    || !patched.includes(backgroundRestoreModelTextMarker)
+    || !patched.includes(backgroundRestoreAsyncModelTextMarker)
+    || !patched.includes(backgroundRestoreReminderMarker)
+    || !patched.includes(backgroundRestoreMetadataErrorMarker)) {
+    const existingRestoreStart = patched.indexOf(`${bridge}.$zRestorePersistedBackgroundTasks=async $zApp=>`);
+    if (existingRestoreStart >= 0) {
+      const existingRestoreEnd = patched.indexOf(`,${bridge}.`, existingRestoreStart);
+      if (existingRestoreEnd < 0) {
+        throw new Error("ZCode runtime is incompatible with the TUI bridge (background restore boundary missing).");
+      }
+      patched = `${patched.slice(0, existingRestoreStart)}${guardedBackgroundRestoreAssignment}${patched.slice(existingRestoreEnd)}`;
+    } else {
+      assignments.push(guardedBackgroundRestoreAssignment);
     }
   }
   if (!patched.includes(".readSessionUsage=async()=>await(await")) {
@@ -695,7 +751,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!taskMessageBridgePattern.test(patched)) {
     assignments.push(taskMessageAssignment);
-  } else if (!patched.includes(taskMessageRestartMarker)) {
+  } else if (!patched.includes(taskMessageRestartMarker) || !patched.includes(taskMessageRestoreMarker)) {
     const existingTaskMessageStart = patched.indexOf(`${bridge}.sendBackgroundTaskMessage=async e=>`);
     const existingTaskMessageEnd = existingTaskMessageStart < 0
       ? -1
@@ -728,6 +784,11 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     } else {
       assignments.push(promotionAssignment);
     }
+  }
+  if (!patched.includes(backgroundRestoreBeforeSendMarker)) {
+    assignments.push(
+      `${bridge}.$zSendInputWithoutBackgroundRestore=${bridge}.sendInput,${bridge}.sendInput=async(...$zArgs)=>{let $zApp=await ${getApp}();await ${bridge}.$zRestorePersistedBackgroundTasks?.($zApp);return await ${bridge}.$zSendInputWithoutBackgroundRestore.apply(${bridge},$zArgs)}`
+    );
   }
   if (assignments.length > 0) {
     patched = patched.replace(recallAssignment, `${assignments.join(",")},${recallAssignment}`);

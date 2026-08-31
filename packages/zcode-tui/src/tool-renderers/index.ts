@@ -7,7 +7,7 @@ import type {
 import { canonicalToolName } from "./registry.ts";
 import { toolSummary } from "./helpers.ts";
 import { mutationRender, readRender, searchRender } from "./filesystem.ts";
-import { agentRender, bashRender, taskStopRender } from "./execution.ts";
+import { agentRender, bashRender, taskOutputRender, taskStopRender } from "./execution.ts";
 import { goalReadRender, planModeRender, sessionContextRender, todoReadRender } from "./workflow.ts";
 import { questionRender, sendMessageRender, skillRender } from "./interaction.ts";
 import { mcpRender, webFetchRender, webSearchRender } from "./web.ts";
@@ -24,6 +24,7 @@ export { officialToolNames } from "./types.ts";
 export {
   normalizeToolName,
   canonicalToolName,
+  isAgentDispatchTool,
   isKnownTool,
   isGroupedInformationTool,
   toolGroupKind
@@ -47,6 +48,7 @@ const rendererRegistry: Record<OfficialToolName, ToolRenderer> = {
   AskUserQuestion: questionRender,
   SendMessage: sendMessageRender,
   TaskStop: taskStopRender,
+  TaskOutput: taskOutputRender,
   Agent: agentRender,
   Task: agentRender,
   Skill: skillRender,
