@@ -133,6 +133,84 @@ describe("TUI choice dialog", () => {
     expect(host.children).toHaveLength(0);
   });
 
+  test("ignores decoded and raw Kitty functional-key text in choice filters", async () => {
+    const root = new Container();
+    const host = new Container();
+    const focusState: { current: Component | null } = { current: null };
+    const ui = {
+      terminal: { rows: 24 },
+      requestRender() {},
+      setFocus(component: Component | null) {
+        focusState.current = component;
+      }
+    } as unknown as TUI;
+    root.addChild(host);
+
+    const pending = choose(ui, host, createTheme(false), {
+      title: "Select model",
+      prompt: "Current model: local/GLM-5.2.",
+      items: [
+        { value: "alpha", label: "Alpha" },
+        { value: "beta", label: "Beta" },
+        { value: "1-model", label: "1 Numpad model" }
+      ]
+    });
+
+    for (const sequence of [
+      "\x1b[57361u", // PrintScreen press
+      "\x1b[57361:51;2u", // PrintScreen with shifted alternate key "3"
+      "\x1b[57362;1:1u", // Pause press with event type
+      "\x1b[57363;1:2u", // Menu repeat
+      "\x1b[57361;1:3u", // PrintScreen release (defensive direct dispatch)
+      "\x1b[101;1:3u", // Letter "e" release must not type (issue #109)
+      "\uE011", // Raw Kitty PrintScreen functional codepoint
+      "\uF72E" // Raw macOS NSPrintScreenFunctionKey codepoint
+    ]) {
+      focusState.current?.handleInput?.(sequence);
+      const output = root.render(80).join("\n");
+      expect(output).toContain("Filter: type to search");
+      expect(output).not.toContain("No matching commands");
+      expect(output).toContain("Alpha");
+      expect(output).toContain("Beta");
+    }
+
+    focusState.current?.handleInput?.("\x1b[57400u");
+    const keypadFiltered = root.render(80).join("\n");
+    expect(keypadFiltered).toContain("Filter: 1");
+    expect(keypadFiltered).toContain("1 Numpad model");
+    expect(keypadFiltered).not.toContain("No matching commands");
+
+    // Nerd Font glyphs sit outside the reserved key ranges and stay typeable.
+    for (const glyph of [
+      "\uE0A0", // Powerline branch
+      "\uE0B0", // Powerline separator
+      "\uE5FA", // Seti
+      "\uF07C", // Font Awesome folder
+      "\uE06F" // Just past Kitty's reserved block (57455)
+    ]) {
+      focusState.current?.handleInput?.("\x15");
+      focusState.current?.handleInput?.(glyph);
+      expect(root.render(80).join("\n")).toContain(`Filter: ${glyph}`);
+    }
+
+    // Held text keys must still repeat; only functional keys and releases are dropped.
+    focusState.current?.handleInput?.("\x15");
+    focusState.current?.handleInput?.("\x1b[98u");
+    focusState.current?.handleInput?.("\x1b[98;1:2u");
+    expect(root.render(80).join("\n")).toContain("Filter: bb");
+
+    focusState.current?.handleInput?.("\x15");
+    focusState.current?.handleInput?.("\x1b[97u");
+    const filtered = root.render(80).join("\n");
+    expect(filtered).toContain("Filter: a");
+    expect(filtered).toContain("Alpha");
+    expect(filtered).not.toContain("Beta");
+
+    focusState.current?.handleInput?.("\x1b");
+    expect(await pending).toBeNull();
+    expect(host.children).toHaveLength(0);
+  });
+
   test("masked prompts return the secret without rendering it", async () => {
     const root = new Container();
     const host = new Container();

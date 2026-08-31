@@ -3,6 +3,7 @@ import {
   Editor,
   getKeybindings,
   Input,
+  isKeyRelease,
   matchesKey,
   SelectList,
   truncateToWidth,
@@ -28,6 +29,78 @@ export interface ChoiceItem extends SelectItem {
 }
 
 const fullscreenDialogContentMaxWidth = 100;
+/** Leading numeric parameter of a Kitty CSI-u sequence: the base key code. */
+const kittyCsiUBaseCodepointPattern = /^\x1b\[(\d+)(?=[:;u])/u;
+const controlCharacterPattern = /[\u0000-\u001f\u007f-\u009f]/u;
+
+/**
+ * Codepoint ranges inside the Unicode private use area that terminals reserve
+ * for keys rather than glyphs:
+ *
+ * - Kitty's keyboard protocol encodes functional keys (F1-F35, PrintScreen,
+ *   CapsLock, media keys, IME process keys, modifiers, …) in 57344-57454.
+ * - macOS/AppKit reports its own function keys as 0xF700-0xF8FF (NSUpArrow­
+ *   FunctionKey … NSModeSwitchFunctionKey), which some terminals pass through
+ *   raw.
+ *
+ * Everything else in the private use area is a real glyph — Nerd Font icons
+ * live just above Kitty's block (Powerline starts at 0xE0A0, Seti at 0xE5FA,
+ * Font Awesome at 0xF000) — so it must stay typeable and pasteable.
+ */
+const functionalKeyRanges = [
+  { start: 57344, end: 57454 },
+  { start: 0xf700, end: 0xf8ff }
+] as const;
+
+function isFunctionalKeyCharacter(character: string): boolean {
+  const codepoint = character.codePointAt(0);
+  if (codepoint === undefined) return false;
+  return functionalKeyRanges.some(({ start, end }) => codepoint >= start && codepoint <= end);
+}
+
+function containsFunctionalKeyCharacter(value: string): boolean {
+  return [...value].some(isFunctionalKeyCharacter);
+}
+
+/**
+ * True when a Kitty CSI-u sequence describes a functional key with no text
+ * equivalent.
+ *
+ * Rather than duplicating pi-tui's functional-key mapping table (which would
+ * silently drift as that table grows), this asks pi-tui to decode the *base*
+ * key code on its own. Numpad keys and friends normalize to real text; anything
+ * that still decodes to a reserved key codepoint has no text equivalent. Testing
+ * the base code also ignores the shifted/alternate fields, which must never
+ * turn a functional key into text.
+ */
+function isTextlessFunctionalKey(data: string): boolean {
+  const match = kittyCsiUBaseCodepointPattern.exec(data);
+  if (!match) return false;
+  const decodedBase = decodeKittyPrintable(`\x1b[${match[1]}u`);
+  return decodedBase === undefined || containsFunctionalKeyCharacter(decodedBase);
+}
+
+/**
+ * Resolve the text a key press should append to the filter, or undefined when
+ * the input is not text and should fall through to list navigation.
+ */
+function decodeFilterText(data: string): string | undefined {
+  if (data.length === 0) return undefined;
+  // Releases never produce text. pi-tui's central dispatch already drops them
+  // for components that do not opt in, but guard here too so direct callers
+  // (and any future opt-in) cannot poison the filter.
+  if (isKeyRelease(data)) return undefined;
+  if (isTextlessFunctionalKey(data)) return undefined;
+  const printable = decodeKittyPrintable(data);
+  if (printable !== undefined) {
+    return containsFunctionalKeyCharacter(printable) ? undefined : printable;
+  }
+  // Legacy/raw input. Some terminals (notably macOS) deliver functional keys as
+  // bare reserved-range characters, so screen those out as well. Ordinary
+  // private-use glyphs (Nerd Font icons) fall through as text.
+  if (controlCharacterPattern.test(data) || containsFunctionalKeyCharacter(data)) return undefined;
+  return data;
+}
 
 class FullscreenDialogSurface implements Component {
   focused = false;
@@ -243,10 +316,9 @@ class ChoiceDialog implements Component {
       return;
     }
 
-    const printable = decodeKittyPrintable(data)
-      ?? (data.length > 0 && !/[\u0000-\u001f\u007f-\u009f]/u.test(data) ? data : undefined);
-    if (printable !== undefined) {
-      this.updateFilter(this.filter + printable);
+    const text = decodeFilterText(data);
+    if (text !== undefined) {
+      this.updateFilter(this.filter + text);
       return;
     }
 
