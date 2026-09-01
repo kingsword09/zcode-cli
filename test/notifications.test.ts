@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,7 @@ import {
   writeNotificationSettings,
   type NativeNotificationSender
 } from "../packages/zcode-tui/src/notifications.ts";
+import { watchStreamErrors } from "../packages/zcode-tui/src/stream-error-guard.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -251,6 +253,76 @@ describe("TUI turn notifications", () => {
     expect(await notifier.notify("failed", "Build failed")).toBe(true);
     expect(calls).toEqual([["linux", "ZCode · Task failed", "Build failed"]]);
     expect(writes).toEqual([]);
+  });
+
+  test("treats synchronous terminal write failures as sticky", async () => {
+    const writes: string[] = [];
+    let failing = false;
+    const notifier = new TurnNotifier({
+      settings: { method: "auto", condition: "always" },
+      writeTerminal: (data) => {
+        if (failing) {
+          const error = new Error("write EIO") as NodeJS.ErrnoException;
+          error.code = "EIO";
+          throw error;
+        }
+        writes.push(data);
+      }
+    });
+
+    notifier.start();
+    expect(await notifier.notify("completed", "Done")).toBe(true);
+    expect(writes).toEqual(["\x07"]);
+
+    failing = true;
+    expect(await notifier.notify("completed", "Done")).toBe(false);
+    failing = false;
+    // The failure is sticky: writes stay suppressed even after the underlying
+    // stream would accept data again.
+    expect(await notifier.notify("completed", "Done")).toBe(false);
+    expect(writes).toEqual(["\x07"]);
+
+    notifier.stop();
+    expect(writes).toEqual(["\x07"]);
+  });
+
+  test("stops terminal writes after an asynchronous stream error", async () => {
+    const writes: string[] = [];
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const ignoreError = () => {};
+    stdout.on("error", ignoreError);
+    stderr.on("error", ignoreError);
+    const notifier = new TurnNotifier({
+      settings: { method: "auto", condition: "always" },
+      writeTerminal: (data) => writes.push(data)
+    });
+    let handledErrors = 0;
+    const dispose = watchStreamErrors([stdout, stderr], () => {
+      handledErrors += 1;
+      notifier.markTerminalUnavailable();
+    });
+
+    notifier.start();
+    expect(await notifier.notify("completed", "Done")).toBe(true);
+    await new Promise<void>((resolve) => {
+      setImmediate(() => {
+        stdout.emit("error", Object.assign(new Error("write EIO"), { code: "EIO" }));
+        resolve();
+      });
+    });
+
+    expect(handledErrors).toBe(1);
+    expect(await notifier.notify("completed", "Done")).toBe(false);
+    notifier.stop();
+    expect(writes).toEqual(["\x07"]);
+
+    dispose();
+    dispose();
+    expect(stdout.listenerCount("error")).toBe(1);
+    expect(stderr.listenerCount("error")).toBe(1);
+    stderr.emit("error", new Error("detached"));
+    expect(handledErrors).toBe(1);
   });
 
   test("uses BEL for automatic SSH notifications and supports disabling notifications", async () => {

@@ -277,6 +277,7 @@ export class TurnNotifier {
   private active = false;
   private focusReporting = false;
   private terminalFocus: TerminalFocusState = "unknown";
+  private terminalUnavailable = false;
 
   constructor(private readonly options: TurnNotifierOptions) {
     this.env = options.env ?? process.env;
@@ -359,11 +360,25 @@ export class TurnNotifier {
     }
   }
 
+  /**
+   * Marks the terminal as unusable after an async stream failure (EIO/EPIPE).
+   * writeTerminal's synchronous try/catch cannot observe those; the stream
+   * error handler calls this so later writes are dropped instead of racing
+   * another doomed write against the dying stream.
+   */
+  markTerminalUnavailable(): void {
+    this.terminalUnavailable = true;
+    this.focusReporting = false;
+    this.terminalFocus = "unknown";
+  }
+
   private writeTerminal(data: string): boolean {
+    if (this.terminalUnavailable) return false;
     try {
       this.options.writeTerminal(data);
       return true;
     } catch {
+      this.terminalUnavailable = true;
       return false;
     }
   }

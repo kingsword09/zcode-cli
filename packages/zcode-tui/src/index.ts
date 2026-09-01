@@ -134,6 +134,7 @@ import {
   type NotificationSettings,
   type TurnNotificationKind
 } from "./notifications.ts";
+import { watchStreamErrors } from "./stream-error-guard.ts";
 import {
   readTuiMode,
   resolveTuiMode,
@@ -671,6 +672,7 @@ class ZCodeTui {
   private backgroundHandoffInterruptInFlight = false;
   private updateCheckAbortController?: AbortController;
   private loginRequired: boolean;
+  private removeStreamErrorGuards?: () => void;
 
   constructor(private readonly options: TuiOptions) {
     this.animateTurnTimer = turnTimerAnimationEnabled();
@@ -794,6 +796,7 @@ class ZCodeTui {
     const onSigint = () => this.handleSignal("SIGINT");
     const onSigterm = () => this.handleSignal("SIGTERM");
     const onSighup = () => this.handleSignal("SIGHUP");
+    this.installStreamErrorGuards();
     process.once("SIGINT", onSigint);
     process.once("SIGTERM", onSigterm);
     if (process.platform !== "win32") process.once("SIGHUP", onSighup);
@@ -856,9 +859,17 @@ class ZCodeTui {
       process.off("SIGINT", onSigint);
       process.off("SIGTERM", onSigterm);
       if (process.platform !== "win32") process.off("SIGHUP", onSighup);
-      if (startAttempted && !this.stopped) {
-        this.stop();
-        await this.done;
+      try {
+        if (startAttempted && !this.stopped) {
+          this.stop();
+          await this.done;
+        }
+      } finally {
+        // Leave the guards installed through the I/O turn containing the final
+        // terminal restore writes, which can report stream errors asynchronously.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        this.removeStreamErrorGuards?.();
+        this.removeStreamErrorGuards = undefined;
       }
     }
   }
@@ -866,6 +877,26 @@ class ZCodeTui {
   private handleSignal(signal: NodeJS.Signals): void {
     process.exitCode = signalExitCode(signal);
     if (!this.stopped) this.stop();
+  }
+
+  /**
+   * process.stdout/stderr stream errors (EIO when the pty is gone, EPIPE when
+   * the reader disconnected) are emitted asynchronously, so the synchronous
+   * try/catch around every terminal write cannot observe them. Without a
+   * listener Node rethrows them and kills the process — a doomed notification
+   * write after the pane closes would crash the whole TUI. Absorb stream
+   * death here, stop notification writes, and let the run loop unwind through
+   * the normal stop path.
+   */
+  private installStreamErrorGuards(): void {
+    if (this.removeStreamErrorGuards) return;
+    this.removeStreamErrorGuards = watchStreamErrors([process.stdout, process.stderr], () => {
+      this.notifications.markTerminalUnavailable();
+      if (!this.stopped) {
+        process.exitCode = 1;
+        this.stop();
+      }
+    });
   }
 
   private async resolveTerminalColorScheme(): Promise<void> {
