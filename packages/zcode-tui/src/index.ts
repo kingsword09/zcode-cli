@@ -1070,7 +1070,10 @@ class ZCodeTui {
         follow: "end",
         primary: true,
         overscroll: "chain",
-        scrollbar: "always"
+        // Keep the chrome quiet until the transcript actually overflows and
+        // the user scrolls. This is the default behavior used by pi-agent.
+        scrollbar: "auto",
+        scrollbarStyle: this.theme.scrollbarThumb
       });
       this.fullscreenLayout ??= new VStack([
         { component: this.fullscreenHeader, basis: 1, shrink: 0, minSize: 1 },
@@ -3908,7 +3911,7 @@ class ZCodeTui {
             {
               value: "fullscreen",
               label: "Fullscreen",
-              description: "Alternate screen with scrollable transcript and scrollbars"
+              description: "Alternate screen with a fixed composer and transient themed scrollbar"
             }
           ],
           selectedIndex: this.tuiMode === "fullscreen" ? 1 : 0

@@ -28,6 +28,7 @@ interface ThemePalette {
   quote: string;
   toolPendingSurface: string;
   toolErrorSurface: string;
+  scrollbarThumb: string;
   diffAddedLine: string;
   diffRemovedLine: string;
   diffHunkLine: string;
@@ -47,6 +48,7 @@ const palettes: Record<ZCodeColorScheme, ThemePalette> = {
     quote: "38;5;109",
     toolPendingSurface: "38;5;252;48;5;236",
     toolErrorSurface: "38;5;252;48;5;52",
+    scrollbarThumb: "48;5;238",
     diffAddedLine: "38;5;120;48;5;22",
     diffRemovedLine: "38;5;210;48;5;52",
     diffHunkLine: "38;5;159;48;5;24",
@@ -64,6 +66,7 @@ const palettes: Record<ZCodeColorScheme, ThemePalette> = {
     quote: "38;5;24",
     toolPendingSurface: "38;5;58;48;5;230",
     toolErrorSurface: "38;5;236;48;5;224",
+    scrollbarThumb: "48;5;252",
     diffAddedLine: "38;5;22;48;5;194",
     diffRemovedLine: "38;5;88;48;5;224",
     diffHunkLine: "38;5;24;48;5;189",
@@ -91,6 +94,7 @@ export interface ZCodeTheme {
   bold: (text: string) => string;
   toolPendingBackground: (text: string) => string;
   toolErrorBackground: (text: string) => string;
+  scrollbarThumb: (text: string) => string;
   diffAddedLine: (text: string) => string;
   diffRemovedLine: (text: string) => string;
   diffHunkLine: (text: string) => string;
@@ -120,6 +124,7 @@ export function createTheme(enabled: boolean, initialColorScheme: ZCodeColorSche
   const quote = paletteStyle(state, "quote", enabled);
   const toolPendingBackground = paletteStyle(state, "toolPendingSurface", enabled);
   const toolErrorBackground = paletteStyle(state, "toolErrorSurface", enabled);
+  const scrollbarThumb = paletteStyle(state, "scrollbarThumb", enabled);
   const diffAddedLine = paletteStyle(state, "diffAddedLine", enabled);
   const diffRemovedLine = paletteStyle(state, "diffRemovedLine", enabled);
   const diffHunkLine = paletteStyle(state, "diffHunkLine", enabled);
@@ -154,6 +159,7 @@ export function createTheme(enabled: boolean, initialColorScheme: ZCodeColorSche
     bold,
     toolPendingBackground,
     toolErrorBackground,
+    scrollbarThumb,
     diffAddedLine,
     diffRemovedLine,
     diffHunkLine,

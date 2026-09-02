@@ -342,7 +342,8 @@ The interactive TUI uses regular scrollback output by default. Set
 `ui.tuiMode` to `"fullscreen"` to use the terminal's alternate screen with an
 independently scrollable transcript, a fixed composer, and mouse-wheel/
 scrollbar navigation. The composer remains available while older transcript
-content is being reviewed.
+content is being reviewed. The scrollbar is hidden when the transcript fits,
+then appears briefly while scrolling and follows the active dark/light theme.
 
 ```json
 {

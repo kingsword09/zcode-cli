@@ -100,6 +100,16 @@ describe("TUI terminal theme", () => {
     expect(theme.select.selectedText("selected")).toContain("\x1b[38;5;25m");
   });
 
+  test("keeps fullscreen scrollbar thumbs aligned with the active theme", () => {
+    const theme = createTheme(true, "dark");
+    expect(theme.scrollbarThumb(" ")).toStartWith("\x1b[48;5;238m");
+
+    theme.setColorScheme("light");
+    expect(theme.scrollbarThumb(" ")).toStartWith("\x1b[48;5;252m");
+
+    expect(createTheme(false).scrollbarThumb(" ")).toBe(" ");
+  });
+
   test("never relies on the terminal default foreground for strong text", () => {
     const theme = createTheme(true, "dark");
     expect(theme.bold("strong")).toStartWith("\x1b[1;38;5;252m");

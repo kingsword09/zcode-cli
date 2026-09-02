@@ -75,8 +75,12 @@ async function runPhase(options: { copyOnSelect: boolean }): Promise<void> {
   const timeout = setTimeout(() => child.kill("SIGKILL"), 20_000);
   let failure: unknown;
   try {
+    const startupOutputStart = output.length;
     await waitFor(/alpha\/model/i);
     const startupRows = screenRows();
+    if (/\x1b\[(?:100|48;5;(?:238|252))m/u.test(output.slice(startupOutputStart))) {
+      throw new Error(`Fullscreen startup rendered a scrollbar thumb before scrolling.\n${startupRows.join("\n")}`);
+    }
     if (startupRows.some((row) => row.includes("SYSTEM INITIATED"))) {
       throw new Error(`Fullscreen header used the wide banner unexpectedly.\n${startupRows.join("\n")}`);
     }
@@ -126,9 +130,13 @@ async function runPhase(options: { copyOnSelect: boolean }): Promise<void> {
       terminal.write("long transcript\r");
       await waitFor(/transcript line 80/i, turnStart);
       const beforeRows = screenRows();
+      const scrollOutputStart = output.length;
       terminal.write("\x1b[5~");
       await Bun.sleep(100);
       const rows = screenRows();
+      if (!process.env.NO_COLOR && !/\x1b\[48;5;(?:238|252)m/u.test(output.slice(scrollOutputStart))) {
+        throw new Error(`Fullscreen transcript scroll did not render the themed scrollbar thumb.\n${rows.join("\n")}`);
+      }
       const firstTranscript = (lines: string[]): number => {
         const line = lines.find((value) => /^ transcript line \d+$/u.test(value));
         return line ? Number(line.match(/\d+/u)?.[0] ?? 0) : 0;
