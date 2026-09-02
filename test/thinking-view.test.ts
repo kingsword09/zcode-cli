@@ -60,4 +60,36 @@ describe("TUI thinking view", () => {
     view.append("Inspecting the runtime.");
     expect(view.render(60).join("\n")).not.toContain("\x1b[48;5;");
   });
+
+  test("bounds the active stream while retaining the complete trace for search and expansion", () => {
+    const view = new ThinkingView(createTheme(false));
+    for (let index = 0; index < 40; index += 1) {
+      view.append(`reasoning line ${index}\n`);
+    }
+
+    const active = view.render(80).join("\n");
+    expect(active).not.toContain("reasoning line 0");
+    expect(active).toContain("reasoning line 39");
+    expect(view.getSearchText()).toContain("reasoning line 0");
+    expect(view.getSearchText()).toContain("reasoning line 39");
+
+    view.complete();
+    expect(view.render(80).join("\n")).not.toContain("reasoning line 0");
+
+    view.setExpanded(true);
+    const expanded = view.render(80).join("\n");
+    expect(expanded).toContain("reasoning line 0");
+    expect(expanded).toContain("reasoning line 39");
+  });
+
+  test("does not split a surrogate pair at the live-tail boundary", () => {
+    const view = new ThinkingView(createTheme(false));
+    view.append("prefix ".repeat(3_000));
+    view.append("tail 👋");
+
+    const active = view.render(80).join("\n");
+    expect(active).toContain("tail 👋");
+    expect(active).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(active).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+  });
 });
