@@ -43,6 +43,7 @@
     "build:tui": "tsdown --filter tui",
     "bench:tui-memory": "bun --expose-gc scripts/bench-tui-memory.ts",
     "bench:tui-stream": "bun scripts/bench-tui-stream.ts",
+    "bench:tui-thinking": "bun scripts/bench-tui-thinking.ts",
     "dev": "bun run sync:local && ZCODE_NODE=node bun bin/zcode.ts",
     "sync": "bun run build && bun scripts/sync-runtime.ts",
     "sync:locked": "bun run build && bun scripts/sync-runtime.ts --lock zcode-runtime.lock.json",
