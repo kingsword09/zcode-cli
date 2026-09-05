@@ -62,6 +62,12 @@ export class InputQueue {
     return submission;
   }
 
+  restoreFollowUp(submission: QueuedSubmission): void {
+    this.queuedFollowUps.unshift(submission);
+    this.autoSendEnabled = false;
+    this.syncView();
+  }
+
   editLatestFollowUp(): QueuedSubmission | undefined {
     const submission = this.queuedFollowUps.pop();
     if (submission) this.syncView();

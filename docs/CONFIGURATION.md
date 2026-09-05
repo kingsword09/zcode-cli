@@ -1,5 +1,20 @@
 # Configuration
 
+## Prompt Access Preflight
+
+Ordinary TUI input and new headless `--prompt`, `--print`, `-p`, and `--target`
+requests diagnose a clearly keyless Z.AI/BigModel Coding Plan configuration
+before starting a model turn. The TUI restores rejected input to an empty editor,
+or retains it in the follow-up queue without replacing a newer draft. Rejected
+queued input keeps its position and metadata; auto-send pauses until user action.
+Headless commands exit unsuccessfully with setup instructions.
+
+This is deliberately not a general credentials validator. Custom endpoints,
+environment authentication/model overrides, ancestor project configurations,
+dotenv files, and resumed headless sessions remain the runtime's responsibility.
+Login, setup, help, and other management commands remain available. No credentials
+are printed, changed, or tested over the network by this check.
+
 This document covers the detailed model-access configuration for
 zcode-app-cli. For installation and basic usage, see the
 [main README](../README.md).

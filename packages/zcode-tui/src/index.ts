@@ -3,6 +3,8 @@ import { appendFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { basename } from "node:path";
 
+import { missingCodingPlanKey } from "../../../src/prompt-preflight.ts";
+import { preflightSubmission } from "./prompt-preflight.ts";
 import {
   clearSetupPending,
   readConfiguredModelAccess,
@@ -1522,6 +1524,24 @@ class ZCodeTui {
     const input = (queuedSubmission?.input ?? rawInput).trim();
     if (!input || this.stopped) return false;
     const submission = queuedSubmission ?? protectSubmission(input);
+    if (!input.startsWith("/") && !this.primaryTurnActive) {
+      const allowed = await preflightSubmission({
+        validate: () => missingCodingPlanKey({
+          model: this.model,
+          workingDirectory: this.options.workspaceDirectory
+        }),
+        isStopped: () => this.stopped,
+        submission,
+        queued: queuedSubmission !== undefined,
+        editor: {
+          getText: () => this.editor.getText(),
+          setText: (text) => this.editor.setText(text)
+        },
+        inputQueue: this.inputQueue,
+        warn: (message) => this.addNotice(message, "warning")
+      });
+      if (!allowed) return false;
+    }
     if (submission.recordHistory) {
       this.rememberEditorHistory(input);
       this.editor.addToHistory(input);

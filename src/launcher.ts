@@ -27,6 +27,7 @@ import {
 } from "./zai-oauth.ts";
 import { requestAppServer } from "./app-server-client.ts";
 import { runPluginCommand } from "./plugin-cli.ts";
+import { missingCodingPlanKey } from "./prompt-preflight.ts";
 import {
   capabilitiesFromExtractionMetadata,
   type RuntimeCliOptionType
@@ -149,6 +150,8 @@ interface RuntimeInvocationInspection {
   explicitBrowserUse: boolean;
   invalid: boolean;
   passthrough: boolean;
+  workingDirectory?: string;
+  resume: boolean;
 }
 
 function inspectRuntimeInvocation(
@@ -161,6 +164,8 @@ function inspectRuntimeInvocation(
   let invalid = false;
   let passthrough = false;
   let presentationSurface = false;
+  let workingDirectory: string | undefined;
+  let resume = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!;
@@ -171,6 +176,9 @@ function inspectRuntimeInvocation(
     if (argument.startsWith("--")) {
       const option = longOptionName(argument);
       const inlineValue = option.length !== argument.length;
+      if (option === "--cwd") workingDirectory = inlineValue
+        ? argument.slice(option.length + 1) : args[index + 1];
+      if (option === "--resume" || option === "--continue") resume = true;
       if (option === "--browser-use") {
         explicitBrowserUse = true;
         if (!inlineValue) {
@@ -230,7 +238,10 @@ function inspectRuntimeInvocation(
         }
         continue;
       }
-      if (argument === "-c" || argument === "-f") continue;
+      if (argument === "-c" || argument === "-f") {
+        if (argument === "-c") resume = true;
+        continue;
+      }
       invalid = true;
       continue;
     }
@@ -242,7 +253,17 @@ function inspectRuntimeInvocation(
     && command !== "app-server"
     && command !== "agent-server") invalid = true;
 
-  return { agentInvocation, command, explicitBrowserUse, invalid, passthrough };
+  return { agentInvocation, command, explicitBrowserUse, invalid, passthrough, workingDirectory, resume };
+}
+
+export async function promptPreflight(
+  args: string[], env: NodeJS.ProcessEnv = process.env
+): Promise<string | undefined> {
+  const invocation = inspectRuntimeInvocation(args, readRuntimeCliOptionTypes());
+  if (!invocation.agentInvocation || invocation.invalid || invocation.passthrough || invocation.resume) {
+    return undefined;
+  }
+  return missingCodingPlanKey({ env, workingDirectory: invocation.workingDirectory });
 }
 
 export function withDefaultBrowserUse(
@@ -540,6 +561,11 @@ export async function main(args: string[]): Promise<number> {
   }
 
   try {
+    const diagnostic = await promptPreflight(login.args);
+    if (diagnostic) {
+      console.error(diagnostic);
+      return 1;
+    }
     const runtimeArgs = withDefaultBrowserUse(login.args);
     return await runRuntime(node, runtimeArgs, firstRunSetupEnv(setupPending, runtimeArgs));
   } catch (error) {
