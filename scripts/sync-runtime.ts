@@ -410,6 +410,26 @@ export function patchRuntimeCliHelpContract(runtime: string): string {
   return patched;
 }
 
+/** Report missing official authentication support without weakening origin checks. */
+export function patchRuntimeOfficialMcpAvailability(runtime: string): string {
+  const marker = "zcode_cli_official_mcp_unavailable";
+  if (runtime.includes(marker)) return runtime;
+  const anchor = /await this\.closeRecord\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)\.enabled===!1\)\{let ([A-Za-z_$][\w$]*)=this\.createStatus\(\2,"disabled"\);/gu;
+  let matches = 0;
+  const patched = runtime.replace(anchor, (_, name: string, config: string, status: string) => {
+    matches += 1;
+    const unavailable = `${config}.type==="http"&&${config}.auth?.type==="zcode_official"`
+      + `&&${config}.auth.provider==="jwt_token"&&${config}.official!==void 0`
+      + "&&!this.officialMcpAuth?.trustedOrigins";
+    return `await this.closeRecord(${name}),${config}.enabled===!1||(${unavailable})){`
+      + `let ${status}=this.createStatus(${config},"disabled",${config}.enabled===!1?void 0:`
+      + `{error:"Official MCP authentication is unavailable in this runtime (${marker}).",`
+      + 'failureKind:"official_auth_unavailable"});';
+  });
+  if (matches !== 1) throw new Error("ZCode runtime is incompatible with the official MCP availability patch.");
+  return patched;
+}
+
 /** Keep short Agent calls inline, but detach long-running agents from the foreground turn. */
 export function patchRuntimeAgentAutoBackground(runtime: string): string {
   const marker = "autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:";
@@ -1303,6 +1323,11 @@ const terminalProjectionMarkers = [
 ] as const;
 
 export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
+  {
+    id: "official-mcp-availability",
+    requirement: "optional",
+    apply: patchRuntimeOfficialMcpAvailability
+  },
   {
     id: "tui-bridge",
     requirement: "required",

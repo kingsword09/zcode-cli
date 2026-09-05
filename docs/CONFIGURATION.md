@@ -441,3 +441,11 @@ export ZCODE_TUI_NOTIFICATION_METHOD=auto       # auto|osc9|bel|native|off
 export ZCODE_TUI_NOTIFICATION_CONDITION=always  # unfocused|always
 zcode
 ```
+
+## Official MCP Availability
+
+When the bundled runtime has no official MCP trusted-origin registry, official
+HTTP MCP services are reported as disabled with an `official_auth_unavailable`
+diagnostic. Other plugin components remain available. This does not disable
+certificate, origin, or permission checks, and does not suppress services when
+the runtime provides the required registry. No user configuration is rewritten.

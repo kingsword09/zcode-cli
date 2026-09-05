@@ -18,6 +18,7 @@ import {
   patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
   patchRuntimeNetworkRetryClassification,
+  patchRuntimeOfficialMcpAvailability,
   patchRuntimeStreamEofFinishGuard,
   parseRuntimePatchReports,
   runtimePatchPlan,
@@ -70,6 +71,7 @@ if (!metadataCapabilities
   throw new Error("The extracted runtime capability manifest is missing or stale; run `bun run sync` again.");
 }
 if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
+  || (patchEnabled("official-mcp-availability") && patchRuntimeOfficialMcpAvailability(runtimeSource) !== runtimeSource)
   || (patchEnabled("goal-failure-pause") && patchRuntimeGoalFailurePause(runtimeSource) !== runtimeSource)
   || patchRuntimeHttpNoContent(runtimeSource) !== runtimeSource
   || !hasRuntimeHttpNoContentGuard(runtimeSource)
