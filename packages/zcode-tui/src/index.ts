@@ -307,6 +307,7 @@ const runtimeCommandSummaries = new Map([
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
 const fullscreenWelcomeTransitionMs = 180;
+const terminalFocusIn = "\x1b[I";
 const updateAvailableBlockId = "update_available";
 const modelRetryBlockIdPrefix = "model_retry_status";
 const questionBackValue = "__back__";
@@ -523,6 +524,16 @@ class ZCodeAltScreen extends TuiAltScreen {
     this.currentInput = data;
   }
 
+  /**
+   * The terminal can lose visible rows while this process is unfocused even
+   * though pi-tui's logical frame remains unchanged. Invalidate its
+   * differential cache so the next frame repaints every row.
+   */
+  forceFullRedraw(): void {
+    // Resetting also clears the layout used by mouse events in this input batch.
+    process.nextTick(() => this.requestRender(true));
+  }
+
   protected override isOverlayFocused(): boolean {
     if (super.isOverlayFocused()) return true;
     return this.viewportInputDeferral?.(this.currentInput ?? "") === true;
@@ -533,7 +544,9 @@ class ZCodeAltScreen extends TuiAltScreen {
 class NotifyingProcessTerminal extends ProcessTerminal {
   constructor(
     private readonly beforeInput: (data: string) => void,
-    private readonly afterInput?: () => void
+    private readonly afterInput?: () => void,
+    private readonly onFocusIn?: () => void,
+    private readonly onTerminalResize?: () => void
   ) {
     super();
   }
@@ -545,8 +558,12 @@ class NotifyingProcessTerminal extends ProcessTerminal {
         onInput(data);
       } finally {
         this.afterInput?.();
+        if (data === terminalFocusIn) this.onFocusIn?.();
       }
-    }, onResize);
+    }, () => {
+      onResize();
+      this.onTerminalResize?.();
+    });
   }
 }
 
@@ -708,7 +725,8 @@ class ZCodeTui {
     this.tuiMode = resolveTuiMode(process.env, { ui: { tuiMode: options.initialTuiMode } });
     this.ui = this.createTui(this.tuiMode);
     this.notifications = new TurnNotifier({
-      writeTerminal: (data) => this.ui.terminal.write(data)
+      writeTerminal: (data) => this.ui.terminal.write(data),
+      focusReportingRequired: this.tuiMode === "fullscreen"
     });
     this.status = new StatusLine();
     this.turnStatus = new FooterBar();
@@ -783,6 +801,7 @@ class ZCodeTui {
       if (effective !== this.tuiMode) {
         this.ui = this.createTui(effective);
         this.tuiMode = effective;
+        this.notifications.setFocusReportingRequired(effective === "fullscreen");
         this.editor = this.createEditor(this.ui);
       }
     } catch {
@@ -928,7 +947,9 @@ class ZCodeTui {
     const terminal = new NotifyingProcessTerminal((data) => {
       fullscreenTui?.setCurrentInput(data);
       this.notifications?.handleInput(data);
-    }, () => fullscreenTui?.setCurrentInput(undefined));
+    }, () => fullscreenTui?.setCurrentInput(undefined),
+    () => fullscreenTui?.forceFullRedraw(),
+    () => fullscreenTui?.forceFullRedraw());
     if (mode !== "fullscreen") return new TuiMainScreen(terminal, true);
 
     const tui = new ZCodeAltScreen(terminal, true, undefined, {
@@ -1139,6 +1160,7 @@ class ZCodeTui {
       this.ui.stop({ preserveScreen: true });
       this.ui = this.createTui(next);
       this.tuiMode = next;
+      this.notifications.setFocusReportingRequired(next === "fullscreen");
       this.sessionHasContent = hadSessionContent;
       this.fullscreenWelcomeVisible = !hadSessionContent;
       this.fullscreenHeader.setPhase(hadSessionContent ? "rail" : "welcome");
@@ -1168,6 +1190,7 @@ class ZCodeTui {
         }
         this.ui = previousUi;
         this.tuiMode = previousMode;
+        this.notifications.setFocusReportingRequired(previousMode === "fullscreen");
         this.sessionHasContent = hadSessionContent;
         this.fullscreenWelcomeVisible = previousMode === "fullscreen" ? !hadSessionContent : true;
         this.fullscreenHeader.setPhase(hadSessionContent ? "rail" : "welcome");

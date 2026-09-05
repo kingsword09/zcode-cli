@@ -98,9 +98,13 @@ async function runPhase(options: { copyOnSelect: boolean }): Promise<void> {
     if (copyRow < 0 || copyColumn < 0) {
       throw new Error(`Could not locate fullscreen text for mouse-copy verification.\n${startupRows.join("\n")}`);
     }
-    terminal.write(`\x1b[<0;${copyColumn + 1};${copyRow + 1}M`);
-    terminal.write(`\x1b[<32;${copyColumn + 4};${copyRow + 1}M`);
-    terminal.write(`\x1b[<0;${copyColumn + 4};${copyRow + 1}m`);
+    // Focus and the first mouse gesture can arrive in a single input batch.
+    terminal.write(
+      "\x1b[O\x1b[I"
+      + `\x1b[<0;${copyColumn + 1};${copyRow + 1}M`
+      + `\x1b[<32;${copyColumn + 4};${copyRow + 1}M`
+      + `\x1b[<0;${copyColumn + 4};${copyRow + 1}m`
+    );
     if (options.copyOnSelect) {
       await waitFor(/Copied!/i);
       const copiedText = await Bun.file(clipboardPath).text();

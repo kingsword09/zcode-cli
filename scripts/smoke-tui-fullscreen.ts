@@ -36,7 +36,8 @@ const child = Bun.spawn([process.execPath, fixture], {
     TERM: "xterm-256color",
     TERM_PROGRAM: "iTerm.app",
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,
-    ZCODE_APP_CLI_ENTRY: fixture
+    ZCODE_APP_CLI_ENTRY: fixture,
+    ZCODE_TUI_NOTIFICATION_METHOD: "off"
   },
   terminal
 });
@@ -75,8 +76,15 @@ let interactionError: unknown;
 try {
   // P1-1: config-persisted fullscreen mode takes effect on startup.
   await waitFor("alternate screen enter (config-driven)", /\x1b\[\?1049h/);
+  await waitFor("fullscreen focus reporting", /\x1b\[\?1004h/);
   await waitForPlain("welcome banner", /ZCode/i);
   await waitForPlain("interactive editor", /alpha\/model/i);
+  // Terminal tabs can lose visible rows without changing the logical frame or
+  // geometry. Focus-in must invalidate pi-tui's differential cache so the
+  // complete fullscreen frame is painted again.
+  const focusRecoveryStart = output.length;
+  terminal.write("\x1b[O\x1b[I");
+  await waitFor("fullscreen focus recovery repaint", /\x1b\[\?2026h\x1b\[2J[\s\S]*alpha\/model/i, focusRecoveryStart);
   // The editor must be constructed against the config-selected fullscreen TUI,
   // so delayed autocomplete repaints without a follow-up key.
   const completionStart = output.length;

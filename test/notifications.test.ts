@@ -200,6 +200,22 @@ describe("TUI turn notifications", () => {
     expect(writes).toEqual(["\x1b[?1004h", "\x1b[?1004l", "\x1b[?1004h"]);
   });
 
+  test("keeps focus reporting for fullscreen redraws when notifications are off", () => {
+    const writes: string[] = [];
+    const notifier = new TurnNotifier({
+      settings: { method: "off", condition: "always" },
+      focusReportingRequired: true,
+      writeTerminal: (data) => writes.push(data)
+    });
+
+    notifier.start();
+    notifier.setSettings({ method: "off", condition: "unfocused" });
+    expect(writes).toEqual(["\x1b[?1004h"]);
+
+    notifier.setFocusReportingRequired(false);
+    expect(writes).toEqual(["\x1b[?1004h", "\x1b[?1004l"]);
+  });
+
   test("uses Codex-style BEL fallback in Apple Terminal without requiring focus support", async () => {
     let nativeCalls = 0;
     const writes: string[] = [];
