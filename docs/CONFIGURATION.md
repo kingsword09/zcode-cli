@@ -194,18 +194,14 @@ PDF, or video input:
 
 | Field | Type | Purpose |
 | --- | --- | --- |
-| `attachment` | boolean | When `true`, the model accepts file/image attachments. This is the flag the bundled catalog uses for vision models such as `glm-5v-turbo`. |
-| `supportsImages` | boolean | Explicit image-input gate. The runtime drops image blocks for models where this resolves to `false`. |
-| `supportsPdf` | boolean | PDF input gate. |
-| `supportsVideo` | boolean | Video input gate. |
-| `modalities.input` | string[] | Enumerated input modalities: `text`, `audio`, `image`, `video`, `pdf`. |
+| `modalities.input` | string[] | Enumerated input modalities: `text`, `audio`, `image`, `video`, `pdf`. Image, PDF, and video support are derived from this list. |
 | `modalities.output` | string[] | Enumerated output modalities (usually `["text"]`). |
 | `limit.context` | number | Context window in tokens. |
 | `limit.output` | number | Max output tokens. |
 
-Any one of `attachment: true`, `supportsImages: true`, or listing `"image"`
-under `modalities.input` is sufficient — they are equivalent paths the
-runtime checks. Declaring all three is the safest, most readable form.
+Listing `"image"` under `modalities.input` is all that is needed to enable
+image attachments — the runtime derives the capability gates from the input
+list, so no separate capability flags are required.
 
 To add `glm-5.3-flash` as a multimodal model under the `zai` provider:
 
@@ -223,12 +219,8 @@ To add `glm-5.3-flash` as a multimodal model under the `zai` provider:
       "models": {
         "glm-5.3-flash": {
           "name": "GLM-5.3-Flash",
-          "attachment": true,
-          "supportsImages": true,
-          "supportsPdf": true,
-          "supportsVideo": true,
           "modalities": {
-            "input": ["text", "image", "video", "pdf"],
+            "input": ["text", "image", "video"],
             "output": ["text"]
           },
           "limit": { "context": 1000000, "output": 128000 }
@@ -256,9 +248,9 @@ After saving, verify the picker sees the capability:
 
 Attach an image from the clipboard with `Ctrl+V` or `/paste-image`; pending
 images appear as `[Image #N]` tokens above the editor and are sent with the
-next prompt. The runtime silently drops image blocks for models that resolve
-`supportsImages` to `false`, so a vision model is required to actually send
-the attachment upstream.
+next prompt. The runtime silently drops image blocks for models whose
+`modalities.input` does not include `image`, so a vision model is required to
+actually send the attachment upstream.
 
 ### Using the custom provider
 
