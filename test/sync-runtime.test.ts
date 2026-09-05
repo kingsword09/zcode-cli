@@ -12,6 +12,7 @@ import {
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
+  hasRuntimeStreamEofFinishGuard,
   manifestUrl,
   parseArgs,
   parseRuntimePatchReports,
@@ -24,6 +25,7 @@ import {
   patchRuntimeLoginModelDefaults,
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOAuthHttpErrors,
+  patchRuntimeStreamEofFinishGuard,
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge,
   patchRuntimeZaiDesktopOAuth,
@@ -1417,5 +1419,73 @@ describe("runtime synchronization", () => {
     expect(statuses).toEqual(["paused"]);
     expect(patchRuntimeGoalFailurePause(patched)).toBe(patched);
     expect(() => patchRuntimeGoalFailurePause("incompatible runtime")).toThrow(/incompatible/);
+  });
+
+  test("reclassifies a graceful mid-stream EOF without a finish reason as retryable", () => {
+    const runtime = [
+      "function detectFallback(e){return}",
+      "function findProviderError(e){return}",
+      "function isSuspicious(e){return!1}",
+      "function logStream(e){return}",
+      "function publishFailure(e){return}",
+      "function classifyFailure(e){return}",
+      "class TerminalStreamError extends Error{}",
+      "async function*got_no_content;"
+    ].join("");
+    const runner = [
+      "async function*streamRunner(e){let retryState=createRetryState({maxAttempts:e.retry.maxAttempts});",
+      // the runStreamText completion branch: suspicious-empty retry -> success tail
+      "if(isSuspicious(x)){let le=findProviderError({providerId:String(k.model.providerId),providerKind:k.providerKind,source:x.lastErrorChunk??x.lastFinishChunk});",
+      "if(le){throw new TerminalStreamError(String(le))}",
+      "if(e.request.preserveProviderStreamBoundaries!==!0&&XX({finishReason:x.finishReason,reasoningLength:x.reasoningDeltaChars,textLength:x.textDeltaChars,toolCallCount:x.toolCallCount,usage:x.usage})&&tee({abortSignal:e.request.abortSignal,attempt:u,maxAttempts:e.retry.maxAttempts,retryCount:s})){let fe=await fhr(W),ue=Date.now();logStream({attempt:u,diagnostics:x,durationMs:ue-c,emittedError:h,emittedEvent:p,logger:e.logger,outboundHeaders:H.headers,statusContext:k}),s+=1,await g2e({abortSignal:e.request.abortSignal,attempt:u,completedAt:ue,errorPhase:\"stream\",logger:e.logger,requestHeaders:F,requestStatusSink:e.request.statusSink,responseHeaders:fe,retry:e.retry,retryBudgetAttempt:l,startedAt:c,statusContext:k,statusSink:e.statusSink,streamOutputCommitted:!1});continue}}}",
+      "if(logStream({attempt:u,diagnostics:x,durationMs:Date.now()-c,emittedError:h,emittedEvent:p,logger:e.logger,outboundHeaders:H.headers,statusContext:k}),!h){let de=Date.now(),le=await fhr(W);",
+      "await Ac({...k,attempt:u,durationMs:de-c,requestHeaderCount:U,requestHeaders:F,responseHeaderCount:Object.keys(le).length,responseHeaders:le,providerRequestId:m2e(le),finishReason:x.finishReason,usage:x.usage,timeToFirstProviderEventMs:Z,timeToFirstContentMs:J,timeToFirstTextMs:Q,streamMaxIdleMs:X||void 0,streamStallCount:V,streamOutputCommitted:z,timestamp:new Date(de).toISOString(),type:\"model_request_completed\"},_A(e)),O=!0}",
+      "r&&P&&await Yrt({modelIoFullRetentionEnabled:e.modelIoFullRetentionEnabled,attempt:u,debugDir:e.debugDir,isDev:n,normalizedToolCalls:S.snapshotNormalizedToolCalls(),options:P,recordModelIO:r,request:b,requestId:k.requestId,resolved:H,result:W,startedAt:c});return}"
+    ].join("");
+    const source = `${runtime}${runner}`;
+
+    expect(hasRuntimeStreamEofFinishGuard(source)).toBe(false);
+    const patched = patchRuntimeStreamEofFinishGuard(source);
+
+    expect(patched).toContain("function $zStreamEofFinishGuard(e){");
+    expect(patched).toContain("e.rawFinishReason==null");
+    expect(patched).toContain('name:"ModelStreamIdleTimeoutError",code:"MODEL_STREAM_IDLE_TIMEOUT"');
+    expect(patched).toContain('continue}}}if($zStreamEofFinishGuard(x)&&!h)throw Object.assign');
+    expect(patched).not.toContain("$zStreamEofFinishGuard(z)");
+    expect(patched).toContain('if(logStream({attempt:u,diagnostics:x');
+    expect(hasRuntimeStreamEofFinishGuard(patched)).toBe(true);
+    expect(hasRuntimeStreamEofFinishGuard(
+      patched.replace("e.textDeltaChars>0", "e.textDeltaChars>=0")
+    )).toBe(false);
+    expect(patchRuntimeStreamEofFinishGuard(patched)).toBe(patched);
+    expect(() => patchRuntimeStreamEofFinishGuard("incompatible runtime")).toThrow(
+      /stream EOF guard patch/
+    );
+
+    // The guard must classify the SDK's synthetic "other" finish (null
+    // finish_reason) and a missing reason as EOF, while trusting a provider
+    // supplied raw finish reason.
+    const guardSource = patched.slice(
+      patched.indexOf("function $zStreamEofFinishGuard(e){"),
+      patched.indexOf("async function*streamRunner(e){")
+    );
+    const guard = new Function(`${guardSource};return $zStreamEofFinishGuard;`)() as (
+      diagnostics: Record<string, unknown>
+    ) => boolean;
+    expect(guard({ finishReason: void 0, textDeltaChars: 3, toolCallCount: 0, reasoningDeltaChars: 0 })).toBe(true);
+    expect(guard({ finishReason: "other", rawFinishReason: void 0, textDeltaChars: 3, toolCallCount: 0, reasoningDeltaChars: 0 })).toBe(true);
+    expect(guard({ finishReason: "other", rawFinishReason: "other", textDeltaChars: 3, toolCallCount: 0, reasoningDeltaChars: 0 })).toBe(false);
+    expect(guard({ finishReason: "other", rawFinishReason: "provider_done", textDeltaChars: 3, toolCallCount: 0, reasoningDeltaChars: 0 })).toBe(false);
+    expect(guard({ finishReason: "stop", rawFinishReason: "stop", textDeltaChars: 3, toolCallCount: 0, reasoningDeltaChars: 0 })).toBe(false);
+    expect(guard({ finishReason: "other", rawFinishReason: void 0, textDeltaChars: 0, toolCallCount: 0, reasoningDeltaChars: 0 })).toBe(false);
+    expect(guard({ finishReason: void 0, textDeltaChars: 0, toolCallCount: 0, reasoningDeltaChars: 0 })).toBe(false);
+    expect(guard({
+      finishReason: "other",
+      rawFinishReason: void 0,
+      textDeltaChars: 0,
+      toolCallCount: 0,
+      reasoningDeltaChars: 0,
+      chunkCounts: { "tool-input-start": 1 }
+    })).toBe(true);
   });
 });

@@ -1053,6 +1053,94 @@ export function patchRuntimeNetworkRetryClassification(runtime: string): string 
   return patched;
 }
 
+const runtimeStreamEofFinishGuard = [
+  "function $zStreamEofFinishGuard(e){return(e.finishReason===void 0||e.finishReason===\"other\")&&",
+  "e.rawFinishReason==null&&(e.textDeltaChars>0||e.toolCallCount>0||e.reasoningDeltaChars>0||",
+  "(e.chunkCounts?.[\"tool-input-start\"]??0)>0||(e.chunkCounts?.[\"tool-input-delta\"]??0)>0||",
+  "(e.chunkCounts?.[\"tool-input-end\"]??0)>0)}"
+].join("");
+
+/** Detect the EOF finish guard that downgrades silent stream truncation to retryable failures. */
+export function hasRuntimeStreamEofFinishGuard(runtime: string): boolean {
+  return runtime.includes(runtimeStreamEofFinishGuard)
+    && /if\(\$zStreamEofFinishGuard\([A-Za-z_$][\w$]*\)&&![A-Za-z_$][\w$]*\)throw Object\.assign\(new Error\("Model stream ended before a finish reason \(EOF\)\."\),\{name:"ModelStreamIdleTimeoutError",code:"MODEL_STREAM_IDLE_TIMEOUT",idleMs:0,timeoutMs:0\}\);if\([A-Za-z_$][\w$]*\(\{/u.test(runtime);
+}
+
+/**
+ * A provider stream that ends without a finish reason after emitting partial
+ * content (graceful FIN, no `[DONE]`, no error chunk) settles the turn as a
+ * normal completion and headless runs can exit 0 with an incomplete answer.
+ * Reclassify that EOF as an idle-timeout-shaped stream failure so the existing
+ * model and turn-level recovery machinery discards the incomplete attempt.
+ */
+export function patchRuntimeStreamEofFinishGuard(runtime: string): string {
+  if (hasRuntimeStreamEofFinishGuard(runtime)) return runtime;
+
+  const completionGatePattern = /if\(([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{providerId:String\(([A-Za-z_$][\w$]*)\.model\.providerId\),providerKind:\5\.providerKind,source:\2\.lastErrorChunk/u;
+
+  const completionGate = completionGatePattern.exec(runtime);
+  if (!completionGate) {
+    throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (empty-completion gate anchor missing).");
+  }
+  const completionDiagnosticsName = completionGate[2]!;
+  if (countRegExpMatches(runtime, completionGatePattern) !== 1) {
+    throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (empty-completion gate is not unique).");
+  }
+
+  const completionTailPattern = new RegExp(
+    `streamOutputCommitted:!1\\}\\);continue\\}\\}\\}if\\(([A-Za-z_$][\\w$]*)\\(\\{attempt:([A-Za-z_$][\\w$]*),diagnostics:${escapeRegExpName(completionDiagnosticsName)},durationMs:Date\\.now\\(\\)-([A-Za-z_$][\\w$]*),emittedError:([A-Za-z_$][\\w$]*)`,
+    "u"
+  );
+  const completionTail = completionTailPattern.exec(runtime);
+  if (!completionTail || completionTail.index < completionGate.index) {
+    throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (completion success anchor missing).");
+  }
+  if (countRegExpMatches(runtime, completionTailPattern) !== 1) {
+    throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (completion success anchor is not unique).");
+  }
+  const diagnosticsName = completionDiagnosticsName;
+  const completionLoggerName = completionTail[1]!;
+  const emittedErrorName = completionTail[4]!;
+
+  // The guard is declared at module scope (before the runStreamText generator)
+  // because the completion-tail call site lives in a sibling block. A
+  // provider-supplied raw finish reason is authoritative; only the SDK's
+  // synthetic `other` finish with no raw reason is treated as EOF.
+  // "async " precedes the generator declaration; anchor on it so the guard
+  // lands before the `async` keyword instead of splitting it.
+  const runStreamTextPattern = /async function\*([A-Za-z_$][\w$]*)\(e\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(/u;
+  const runStreamText = runStreamTextPattern.exec(runtime);
+  if (!runStreamText || countRegExpMatches(runtime, runStreamTextPattern) !== 1) {
+    throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (runStreamText anchor missing).");
+  }
+  const runStreamTextAnchor = runStreamText[0]!;
+  // Providers that die mid-stream (or map a null finish_reason) surface the
+  // AI SDK's "other" finish reason with no raw reason. Only content-bearing
+  // or unfinished tool-input streams are treated as partial output here;
+  // the existing empty-completion path owns truly empty responses.
+  let patched = runtime.replace(
+    runStreamTextAnchor,
+    `${runtimeStreamEofFinishGuard}async function*${runStreamText[1]}(e){let ${runStreamText[2]}=${runStreamText[3]}(`
+  );
+  if (patched === runtime) {
+    throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (runStreamText anchor missing).");
+  }
+
+  // Do not emit `model_request_completed` for an EOF without a provider
+  // finish reason. The idle-timeout-shaped failure is classified by the
+  // runtime's existing retry/recovery machinery, which discards any
+  // already-visible attempt.
+  patched = patched.replace(
+    `streamOutputCommitted:!1});continue}}}if(${completionLoggerName}(`,
+    `streamOutputCommitted:!1});continue}}}if($zStreamEofFinishGuard(${diagnosticsName})&&!${emittedErrorName})throw Object.assign(new Error("Model stream ended before a finish reason (EOF)."),{name:"ModelStreamIdleTimeoutError",code:"MODEL_STREAM_IDLE_TIMEOUT",idleMs:0,timeoutMs:0});if(${completionLoggerName}(`
+  );
+
+  if (!hasRuntimeStreamEofFinishGuard(patched)) {
+    throw new Error("ZCode runtime stream EOF guard patch failed postcondition verification.");
+  }
+  return patched;
+}
+
 export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
   if (runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')) return runtime;
 
@@ -1259,6 +1347,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeNetworkRetryClassification,
     verify: hasRuntimeNetworkRetryGuard
+  },
+  {
+    id: "stream-eof-finish-guard",
+    requirement: "required",
+    apply: patchRuntimeStreamEofFinishGuard,
+    verify: hasRuntimeStreamEofFinishGuard
   },
   {
     id: "oauth-http-errors",

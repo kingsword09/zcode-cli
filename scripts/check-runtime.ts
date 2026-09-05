@@ -13,10 +13,12 @@ import {
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
+  hasRuntimeStreamEofFinishGuard,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
   patchRuntimeNetworkRetryClassification,
+  patchRuntimeStreamEofFinishGuard,
   parseRuntimePatchReports,
   runtimePatchPlan,
   supportsMultiMessageFileRewind
@@ -73,6 +75,8 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeHttpNoContentGuard(runtimeSource)
   || patchRuntimeNetworkRetryClassification(runtimeSource) !== runtimeSource
   || !hasRuntimeNetworkRetryGuard(runtimeSource)
+  || patchRuntimeStreamEofFinishGuard(runtimeSource) !== runtimeSource
+  || !hasRuntimeStreamEofFinishGuard(runtimeSource)
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
   || !runtimeSource.includes('"plugin://"')
