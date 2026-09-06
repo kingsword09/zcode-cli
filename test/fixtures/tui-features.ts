@@ -119,6 +119,76 @@ async function emitSessionEvent(
   await submissionListener?.(event);
 }
 
+async function emitChildSessionActivity(options: PromptCallOptions): Promise<void> {
+  const childSessionId = "session_feature_child";
+  for (const sessionId of [childSessionId, "session_feature_child_two"]) {
+    await emitSessionEvent({
+      type: "model.streaming",
+      sessionId,
+      payload: { kind: "text_delta", delta: "RAW_CHILD_TEXT_129", messageId: `${sessionId}_message` }
+    }, options.onEvent);
+  }
+  await emitSessionEvent({
+    type: "tool_call_started",
+    sessionId: childSessionId,
+    payload: {
+      toolCallId: "raw_child_bash_129",
+      toolName: "Bash",
+      input: { command: "printf RAW_CHILD_TOOL_129" }
+    }
+  }, options.onEvent);
+  await emitSessionEvent({
+    type: "tool_call_result",
+    sessionId: childSessionId,
+    payload: { toolCallId: "raw_child_bash_129", toolName: "Bash", result: "RAW_CHILD_TOOL_129" }
+  }, options.onEvent);
+  await emitSessionEvent({
+    type: "part.started",
+    payload: {
+      part: {
+        type: "text",
+        sessionId: childSessionId,
+        partId: "raw_child_part_129",
+        messageId: "raw_child_message_129",
+        text: "RAW_CHILD_PART_129"
+      }
+    }
+  }, options.onEvent);
+  await emitSessionEvent({
+    type: "background_task_completed",
+    sessionId: childSessionId,
+    payload: { taskId: "RAW_CHILD_NESTED_TASK_129", status: "completed" }
+  }, options.onEvent);
+  await emitSessionEvent({
+    type: "tool_call_started",
+    sessionId: "feature-session",
+    payload: {
+      toolCallId: "call_task_output_129",
+      toolName: "TaskOutput",
+      input: { task_id: "agent_feature", block: true }
+    }
+  }, options.onEvent);
+  await emitSessionEvent({
+    type: "tool_call_result",
+    sessionId: "feature-session",
+    payload: {
+      toolCallId: "call_task_output_129",
+      toolName: "TaskOutput",
+      childSessionId,
+      result: {
+        success: true,
+        display: {
+          kind: "task_output",
+          retrievalStatus: "success",
+          taskStatus: "completed",
+          output: "Compact child result preserved."
+        }
+      }
+    }
+  }, options.onEvent);
+  await Bun.sleep(80);
+}
+
 async function emitBackgroundResultTurn(
   turnId: string,
   eventPrefix: string,
@@ -798,6 +868,7 @@ await runTui({
       childSessionId: "session_feature_child",
       description: "Inspect nested rendering"
     });
+    await emitChildSessionActivity(options);
     const childPart = {
       type: "tool",
       partId: "part_child_fetch",

@@ -295,15 +295,18 @@ try {
     /Background result processing was interrupted; starting your queued input\.[\s\S]*Queued input started after interrupting the stuck background handoff\./i
   );
   const foregroundBeforeTaskCenter = plainText(output.slice(featureTurnStart));
-  if (/Task-scoped agent handoff completed|Coordinator began processing the failed task result|Background-only reasoning|background_fetch|Coordinator dispatching background research|background-research|Inspect nested rendering/i.test(foregroundBeforeTaskCenter)) {
+  if (/Task-scoped agent handoff completed|Coordinator began processing the failed task result|Background-only reasoning|background_fetch|Coordinator dispatching background research|background-research|Inspect nested rendering|RAW_CHILD_/i.test(foregroundBeforeTaskCenter)) {
     throw new Error("Task-scoped background output leaked into the foreground transcript.");
+  }
+  if (!/TaskOutput task agent_feature[\s\S]*Compact child result preserved\./i.test(foregroundBeforeTaskCenter)) {
+    throw new Error("Session event filtering hid the parent TaskOutput result.");
   }
   if (/Turn cancelled\./i.test(foregroundBeforeTaskCenter)) {
     throw new Error("Esc cancelled the foreground submission while a background handoff was active.");
   }
   const expandedForegroundStart = await sendAndWait("\x0f", "expanded foreground tool transcript", /source text/i);
   const expandedForeground = plainText(output.slice(expandedForegroundStart));
-  if (/Coordinator dispatching background research|background-research|Inspect nested rendering|Nested rendering inspected/i.test(expandedForeground)) {
+  if (/Coordinator dispatching background research|background-research|Inspect nested rendering|Nested rendering inspected|RAW_CHILD_/i.test(expandedForeground)) {
     throw new Error("Expanding foreground tools exposed a background Agent tree.");
   }
   await sendAndWait("/diff\r", "diff source picker", /Select current workspace changes or a completed turn/i);

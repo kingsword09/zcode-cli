@@ -8,6 +8,7 @@ export interface StreamEvent {
   field?: "text" | "reasoning" | "input" | "output";
   messageId?: string;
   partId?: string;
+  sessionId?: string;
   turnId?: string;
   eventId?: string;
   inputSource?: string;
@@ -123,6 +124,11 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
       ?? asString(body.assistantMessageId)
       ?? part?.messageId,
     partId: asString(body.partId) ?? asString(body.partID) ?? part?.partId,
+    sessionId: asString(value.sessionId) ?? asString(value.sessionID)
+      ?? asString(params?.sessionId) ?? asString(params?.sessionID)
+      ?? asString(payload?.sessionId) ?? asString(payload?.sessionID)
+      ?? asString(body.sessionId) ?? asString(body.sessionID)
+      ?? part?.sessionId,
     turnId: envelopeString("turnId") ?? envelopeString("turnID"),
     eventId: asString(value.eventId)
       ?? (params && asString(params.eventId))
