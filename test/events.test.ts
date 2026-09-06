@@ -122,6 +122,34 @@ describe("ZCode event adapter", () => {
     });
   });
 
+  test.each([
+    { type: "model.streaming", sessionId: "session_child", payload: { kind: "text_delta", delta: "child" } },
+    { method: "session/event", params: { type: "model.streaming", sessionID: "session_child", payload: { kind: "text_delta", delta: "child" } } },
+    { type: "model.streaming", payload: { sessionId: "session_child", event: { kind: "text_delta", delta: "child" } } },
+    { type: "model.streaming", payload: { event: { sessionID: "session_child", kind: "text_delta", delta: "child" } } },
+    { type: "part.upserted", payload: { part: { type: "text", sessionId: "session_child", text: "child" } } }
+  ])("preserves the owning session across event envelopes: %j", (value) => {
+    expect(normalizeEvent(value)?.sessionId).toBe("session_child");
+  });
+
+  test("keeps parent event ownership separate from child-session metadata", () => {
+    expect(normalizeEvent({
+      type: "part.started",
+      sessionId: "session_parent",
+      payload: {
+        childSessionId: "session_child",
+        part: { type: "text", sessionId: "session_child", text: "mirrored" }
+      }
+    })).toMatchObject({
+      sessionId: "session_parent",
+      childSessionId: "session_child"
+    });
+    expect(normalizeEvent({
+      type: "subagent_spawned",
+      payload: { childSessionId: "session_child" }
+    })?.sessionId).toBeUndefined();
+  });
+
   test("normalizes raw autonomous turn lifecycle metadata and failures", () => {
     expect(normalizeEvent({
       id: "event_background_start",

@@ -10,6 +10,41 @@ function event(value: unknown) {
 }
 
 describe("background task event store", () => {
+  test("scopes subagent execution without starting a foreground result handoff", () => {
+    const store = new BackgroundTaskEventStore();
+    const started = event({
+      type: "turn_started",
+      turnId: "child-turn",
+      payload: { inputSource: "subagent" }
+    });
+    store.handle(started);
+
+    expect(store.isTaskScoped(started)).toBe(true);
+    expect(store.hasActiveHandoffs()).toBe(false);
+    expect(store.isTaskScoped(event({
+      type: "model.streaming",
+      turnId: "child-turn",
+      payload: { kind: "text_delta", delta: "Child final answer." }
+    }))).toBe(true);
+    expect(store.isTaskScoped(event({
+      type: "tool_call_started",
+      turnId: "child-turn",
+      payload: { toolCallId: "child-bash", toolName: "Bash" }
+    }))).toBe(true);
+    expect(store.isTaskScoped(event({
+      type: "model.streaming",
+      payload: { inputSource: "subagent", kind: "text_delta", delta: "Unscoped child text." }
+    }))).toBe(true);
+    expect(store.isTaskScoped(event({
+      type: "model.streaming",
+      turnId: "parent-turn",
+      payload: { kind: "text_delta", delta: "Parent final answer." }
+    }))).toBe(false);
+    expect(store.handle(event({
+      type: "turn_complete", turnId: "child-turn", payload: {}
+    })).handoffSettled).toBe(false);
+  });
+
   test("routes autonomous output to its task without treating handoff completion as task completion", () => {
     const store = new BackgroundTaskEventStore();
     const completed = store.handle(event({

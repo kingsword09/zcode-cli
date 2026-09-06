@@ -36,8 +36,12 @@ const maximumEntryCharacters = 20_000;
 const maximumScopedTurnIds = 256;
 const maximumScopedToolCallIds = 512;
 
-function autonomousInputSource(source: string | undefined): source is HandoffTurn["source"] {
+function handoffInputSource(source: string | undefined): source is HandoffTurn["source"] {
   return source === "background_task" || source === "subagent_message";
+}
+
+function autonomousInputSource(source: string | undefined): boolean {
+  return source === "subagent" || handoffInputSource(source);
 }
 
 function taskIdFor(event: StreamEvent): string | undefined {
@@ -169,7 +173,7 @@ export class BackgroundTaskEventStore {
     const started = event.type === "turn_started" || event.type === "turn.started";
     if (started
       && event.turnId
-      && autonomousInputSource(event.inputSource)) {
+      && handoffInputSource(event.inputSource)) {
       const pending = event.inputSource === "background_task"
         ? this.pendingBackgroundTasks
         : this.pendingSubagentMessages;

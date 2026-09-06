@@ -2144,7 +2144,7 @@ class ZCodeTui {
     this.debugEvent("session", value);
     if (turnEpoch !== undefined && turnEpoch !== this.activeTurnEpoch) return;
     const event = normalizeEvent(value);
-    if (!event) return;
+    if (!event || this.isForeignSessionEvent(event)) return;
     const taskScoped = this.backgroundTaskEvents.isTaskScoped(event);
     this.applyBackgroundTaskEvent(event);
     if (!taskScoped && event.kind && toolLifecycleEventKinds.has(event.kind)) this.turnHadWorkActivity = true;
@@ -2319,8 +2319,12 @@ class ZCodeTui {
   private onSessionEvent(value: unknown): void {
     this.debugEvent("session-subscription", value);
     const event = normalizeEvent(value);
-    if (!event) return;
+    if (!event || this.isForeignSessionEvent(event)) return;
     this.applyBackgroundTaskEvent(event);
+  }
+
+  private isForeignSessionEvent(event: StreamEvent): boolean {
+    return Boolean(this.sessionId && event.sessionId && event.sessionId !== this.sessionId);
   }
 
   private isBackgroundCoordinatorReasoning(event: StreamEvent): boolean {
