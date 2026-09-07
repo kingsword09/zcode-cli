@@ -876,6 +876,27 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   return patched;
 }
 
+export function patchRuntimeModelCatalogReload(runtime: string): string {
+  if (/reloadModelOptions:[A-Za-z_$][\w$]*\.reloadModelOptions/u.test(runtime)
+    && runtime.includes(".reloadModelOptions=async()=>")) return runtime;
+  const list = /([A-Za-z_$][\w$]*)\.listModelOptions=async\(\)=>\(await ([A-Za-z_$][\w$]*)\(\)\)\.listModels\?\.\(\)\?\?\[\]/u.exec(runtime);
+  const createConfig = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"createConfig"\)/u.exec(runtime)?.[1];
+  const factoryStart = list ? runtime.lastIndexOf("function ", list.index) : -1;
+  const host = factoryStart >= 0 && list
+    ? /^function [A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*)(?:,|\))/u.exec(runtime.slice(factoryStart, list.index))?.[1]
+    : undefined;
+  const option = /listModelOptions:([A-Za-z_$][\w$]*)\.listModelOptions/u.exec(runtime);
+  if (!list || !createConfig || !host || !option || !runtime.includes('"setModelCatalogOverlay"')) {
+    throw new Error("ZCode runtime is incompatible with model catalog reload (config/overlay bridge anchor missing).");
+  }
+  const [, bridge, getApp] = list;
+  // The native loader retains user/project/env precedence and translates provider
+  // metadata. The overlay replaces the registry without replacing the session.
+  const reload = `${bridge}.reloadModelOptions=async()=>{let $zApp=await ${getApp}(),$zConfig=${createConfig}({env:${host}.env??process.env,workingDirectory:(${host}.cwd??process.cwd)(),projectConfigPath:${host}.projectConfigPath,skipUserConfig:${host}.skipUserConfig,userConfigPath:${host}.userConfigPath}).config,$zModel=$zConfig.model;if($zModel&&$zApp.setModelCatalogOverlay)await $zApp.setModelCatalogOverlay({targets:[$zModel.main,...$zModel.lite?[$zModel.lite]:[],...$zModel.available??[]],catalogOverrides:$zConfig.modelCatalog.overrides});return $zApp.listModels?.()??[]}`;
+  return runtime.replace(list[0], `${reload},${list[0]}`)
+    .replace(option[0], `reloadModelOptions:${option[1]}.reloadModelOptions,${option[0]}`);
+}
+
 export function patchRuntimeOAuthHttpErrors(runtime: string): string {
   if (runtime.includes("empty or non-JSON response")) return runtime;
   if (!runtime.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')) return runtime;
@@ -1334,6 +1355,13 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     apply: patchRuntimeTuiBridge,
     verify: (runtime) => runtime.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
       && runtime.includes(".loadSessionContextMessages=async()=>await(await")
+  },
+  {
+    id: "model-catalog-reload",
+    requirement: "required",
+    apply: patchRuntimeModelCatalogReload,
+    verify: (runtime) => /reloadModelOptions:[A-Za-z_$][\w$]*\.reloadModelOptions/u.test(runtime)
+      && runtime.includes(".reloadModelOptions=async()=>")
   },
   {
     id: "goal-failure-pause",

@@ -144,6 +144,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !/setMode:[A-Za-z_$][\w$]*\.setMode/u.test(runtimeSource)
   || !/listSkills:[A-Za-z_$][\w$]*\.listSkills/u.test(runtimeSource)
   || !/listModelOptions:[A-Za-z_$][\w$]*\.listModelOptions/u.test(runtimeSource)
+  || !/reloadModelOptions:[A-Za-z_$][\w$]*\.reloadModelOptions/u.test(runtimeSource)
   || !/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u.test(runtimeSource)
   || !/subscribeSessionEvents:[A-Za-z_$][\w$]*\.subscribeSessionEvents/u.test(runtimeSource)
   || !/sendBackgroundTaskMessage:[A-Za-z_$][\w$]*\.sendBackgroundTaskMessage/u.test(runtimeSource)) {

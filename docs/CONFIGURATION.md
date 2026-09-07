@@ -34,6 +34,37 @@ configured. This lets the official runtime and TUI start cleanly without
 pretending that model access is already configured. Choose one of the
 model-access paths below before sending a prompt.
 
+## Automatic model catalog updates
+
+After the TUI is ready, it downloads the official model catalog in the background
+and caches it for six hours in `~/.zcode/cli/model-catalog.json`. Startup, including
+the first-run wizard, never waits for that request. A first installation starts
+with the bundled model list; failed or slow requests leave that list usable.
+
+Opening `/model`, cycling models, or opening **Settings > Model providers** applies
+any downloaded catalog and reloads the running session's model registry. These
+actions use local data only and never wait for the network. If discovery is still
+running, reopen the picker after it finishes. Providers added during first-run
+login are included on the next model selection. Saved `model.main` and
+`model.lite` are not automatically switched to a new release.
+
+Synchronization only covers existing `anthropic` providers named `zai` or
+`bigmodel` using their official Coding Plan API roots. Custom endpoints and
+protocols are excluded. Existing names, model IDs (including casing), and user
+metadata overrides are preserved. New models include context/output limits,
+modalities, and supported Anthropic reasoning-effort mappings.
+
+The adjacent `model-catalog-managed.json` records automatically added entries.
+After a successful refresh, an entry missing from both official provider lists
+is removed only when it was automatically added, is unchanged, has no catalog
+override, and is not selected by `main`, `lite`, or the current session. Bundled
+and manually added models are retained because their ownership is unknown.
+Offline, invalid, empty, and incomplete responses do not trigger retirement.
+
+Set `ZCODE_DISABLE_MODEL_CATALOG_REFRESH=1` to disable discovery and automatic
+configuration changes. `CI=1` also disables them. Requests honor `ZCODE_BASE_URL`
+and use a five-second timeout; failures do not interrupt the TUI.
+
 ## First-run setup wizard
 
 When the TUI starts while model access has not been set up, a setup wizard

@@ -76,6 +76,7 @@ export interface RuntimeAdapter {
   listPluginReferences?: ListPluginReferences;
   listSkills?: ListSkills;
   listModelOptions?: () => Promise<unknown[]>;
+  reloadModelOptions?: () => Promise<unknown[]>;
   setTransientModel?: (modelId: string) => Promise<unknown>;
   recallPreviousInput?: (skip: number) => Promise<unknown>;
   readGoal?: () => Promise<unknown>;
