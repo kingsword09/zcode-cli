@@ -145,7 +145,9 @@ export async function updateUserConfig(
 ): Promise<string> {
   const configPath = userConfigPath(env);
   const config = await readUserConfig(env);
+  const before = JSON.stringify(config);
   update(config);
+  if (JSON.stringify(config) === before) return configPath;
 
   const temporaryPath = join(
     dirname(configPath),
