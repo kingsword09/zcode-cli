@@ -267,12 +267,11 @@ class ChoiceDialog implements Component {
     }
     // Number shortcut: pressing 1-9 confirms the option at that list position
     // (1 = first item) in a single keystroke. Absolute index, not scroll
-    // position. Availability mirrors the rendered number hints (≤9 items, no
-    // custom help) so the shortcut is never active where it isn't advertised —
-    // on larger or filter-heavy dialogs digits stay filter input. Disabled
-    // while a filter is active for the same reason.
+    // position. The caller explicitly opts into this behavior; when it is not
+    // enabled, digits continue through the filter path below.
     if (
-      this.filter === ""
+      this.numberShortcutCount > 0
+      && this.filter === ""
       && !this.contentExpanded
       && data.length === 1
       && data >= "1"
@@ -425,7 +424,7 @@ export function choose(
     selectedIndex?: number;
     signal?: AbortSignal;
     showSelectedItemDetails?: boolean;
-    /** Prefix labels with 1-9 hints and enable digit quick-select. Default: on only when there are ≤9 items and no custom help (matching the hints) — larger or custom-help dialogs are filter-first, so digits stay filter input. Pass true to force-enable, false to disable. */
+    /** Enable 1-9 label hints and quick-select. Only lists with at most 9 items support it. */
     numberShortcuts?: boolean;
   }
 ): Promise<ChoiceItem | null> {
@@ -434,14 +433,11 @@ export function choose(
   return new Promise((resolve) => {
     const choicesByValue = new Map<string, ChoiceItem>();
     const detailsByValue = new Map<string, Component>();
-    // Shortcut availability mirrors the rendered number hints (≤9 items, no
-    // custom help) so digits never confirm where the shortcut isn't
-    // advertised; explicit true force-enables, explicit false disables.
-    const numberShortcutsEnabled = options.numberShortcuts === false
-      ? false
-      : options.numberShortcuts === true
-        ? true
-        : options.items.length <= 9 && !options.help;
+    // Number shortcuts are opt-in and intentionally limited to 1-9. Generic
+    // choice dialogs remain filter-first unless the caller explicitly enables
+    // this interaction.
+    const numberShortcutsEnabled = options.numberShortcuts === true
+      && options.items.length <= 9;
     const searchableItems = options.items.map((item, index): SelectItem => {
       const safeItem: ChoiceItem = {
         ...item,
@@ -450,9 +446,7 @@ export function choose(
           ? sanitizeTerminalText(item.description, { preserveSgr: false })
           : undefined
       };
-      // Number hint: with ≤9 items and no custom help text, prefix labels so
-      // the 1-9 quick-select shortcut is discoverable. Shortcut availability
-      // in handleInput mirrors this exact condition.
+      // Prefix labels when the caller opted into the 1-9 quick-select mode.
       const showNumberHint = numberShortcutsEnabled;
       const displayLabel = showNumberHint
         ? `${index + 1}. ${safeItem.label}`

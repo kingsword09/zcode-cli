@@ -39,7 +39,12 @@ function items(count: number): ChoiceItem[] {
 describe("choice dialog number shortcuts", () => {
   test("digit '1' confirms the first option in one keystroke", async () => {
     const { host, focusState, ui } = makeHarness();
-    const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      items: items(4),
+      numberShortcuts: true
+    });
     const dialog = focusState.current as Component;
     expect(dialog).toBeTruthy();
     dialog.handleInput!("1");
@@ -49,7 +54,12 @@ describe("choice dialog number shortcuts", () => {
 
   test("digit '3' confirms the third option", async () => {
     const { host, focusState, ui } = makeHarness();
-    const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      items: items(4),
+      numberShortcuts: true
+    });
     (focusState.current as Component).handleInput!("3");
     const result = await promise;
     expect(result?.label).toBe("Option 3");
@@ -57,7 +67,12 @@ describe("choice dialog number shortcuts", () => {
 
   test("digits beyond the item count do nothing", async () => {
     const { host, focusState, ui } = makeHarness();
-    const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      items: items(4),
+      numberShortcuts: true
+    });
     const dialog = focusState.current as Component;
     dialog.handleInput!("9"); // out of range -> no confirm
     // settle the promise via Escape
@@ -68,7 +83,12 @@ describe("choice dialog number shortcuts", () => {
 
   test("digit is filter input when filter is active (no confirm)", async () => {
     const { root, host, focusState, ui } = makeHarness();
-    const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      items: items(4),
+      numberShortcuts: true
+    });
     const dialog = focusState.current as Component;
     dialog.handleInput!("O"); // starts filter with "O"
     dialog.handleInput!("2"); // continues filter, must NOT confirm option 2
@@ -81,12 +101,33 @@ describe("choice dialog number shortcuts", () => {
 
   test("labels carry number hints and the number-selects help by default", async () => {
     const { root, host, focusState, ui } = makeHarness();
-    const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      items: items(4),
+      numberShortcuts: true
+    });
     const output = rendered(root);
     expect(output).toContain("1. Option 1");
     expect(output).toContain("4. Option 4");
     expect(output).not.toContain("5. Option");
     expect(output.replace(/\n/g, " ")).toContain("number selects");
+    focusState.current?.handleInput?.("\x1b");
+    expect(await promise).toBeNull();
+  });
+
+  test("number shortcuts are opt-in for generic choice dialogs", async () => {
+    const { root, host, focusState, ui } = makeHarness();
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      items: items(4)
+    });
+    const output = rendered(root);
+    expect(output).not.toContain("1. Option 1");
+    expect(output).not.toContain("number selects");
+    focusState.current?.handleInput?.("1");
+    expect(rendered(root)).toContain("Filter: 1");
     focusState.current?.handleInput?.("\x1b");
     expect(await promise).toBeNull();
   });
@@ -103,9 +144,9 @@ describe("choice dialog number shortcuts", () => {
     expect(output).not.toContain("1. Option 1");
     expect(output).toContain("Option 1");
     expect(output.replace(/\n/g, " ")).not.toContain("number selects");
-    // The shortcut is off: the digit must NOT confirm (dialog stays open,
-    // settled only by Escape).
+    // The shortcut is off: the digit must remain filter input.
     focusState.current?.handleInput?.("1");
+    expect(rendered(root)).toContain("Filter: 1");
     focusState.current?.handleInput?.("\x1b");
     const result = await promise;
     expect(result).toBeNull();
@@ -113,13 +154,19 @@ describe("choice dialog number shortcuts", () => {
 
   test("more than 9 items: no hints, no shortcut, help line not advertised", async () => {
     const { root, host, focusState, ui } = makeHarness();
-    const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(12) });
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      items: items(12),
+      numberShortcuts: true
+    });
     const output = rendered(root);
     expect(output).not.toContain("1. Option 1");
     expect(output.replace(/\n/g, " ")).not.toContain("number selects");
-    // First digit of would-be filter input like "3.5" must not confirm option 3.
+    // A digit must remain filter input because lists over 9 items never expose
+    // single-key numeric selection.
     focusState.current?.handleInput?.("3");
-    expect(rendered(root)).toContain("T"); // dialog still open — nothing confirmed
+    expect(rendered(root)).toContain("Filter: 3");
     focusState.current?.handleInput?.("\x1b");
     const result = await promise;
     expect(result).toBeNull();
@@ -137,6 +184,7 @@ describe("choice dialog number shortcuts", () => {
     expect(output).toContain("custom help line");
     expect(output).not.toContain("1. Option 1");
     focusState.current?.handleInput?.("1");
+    expect(rendered(root)).toContain("Filter: 1");
     focusState.current?.handleInput?.("\x1b");
     const result = await promise;
     expect(result).toBeNull();
