@@ -6,6 +6,17 @@ export const SESSION_TITLE_PREFIX = "ZC | ";
 
 export const MAX_SESSION_TITLE_CHARS = 50;
 
+export const SESSION_TITLE_SPINNER_FRAME_DURATION_MS = 120;
+
+// Braille frames keep the title width stable while making an active turn visible.
+const sessionTitleSpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+export function sessionTitleSpinnerFrame(elapsedMilliseconds: number, animated = true): string {
+  if (!animated) return sessionTitleSpinnerFrames[0];
+  const frame = Math.floor(Math.max(0, elapsedMilliseconds) / SESSION_TITLE_SPINNER_FRAME_DURATION_MS);
+  return sessionTitleSpinnerFrames[frame % sessionTitleSpinnerFrames.length] ?? sessionTitleSpinnerFrames[0];
+}
+
 export function sessionTitleFromFirstMessage(message: string): string | null {
   const normalized = sanitizeTerminalText(message).replace(/\s+/gu, " ").trim();
   if (!normalized) {

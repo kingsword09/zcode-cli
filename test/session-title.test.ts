@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test";
 import {
   MAX_SESSION_TITLE_CHARS,
   SESSION_TITLE_PREFIX,
+  SESSION_TITLE_SPINNER_FRAME_DURATION_MS,
   emitSessionTerminalTitle,
-  sessionTitleFromFirstMessage
+  sessionTitleFromFirstMessage,
+  sessionTitleSpinnerFrame
 } from "../packages/zcode-tui/src/session-title.ts";
 
 describe("session title from first message", () => {
@@ -84,5 +86,17 @@ describe("terminal title emission", () => {
 
   test("does nothing when no stream is available", () => {
     expect(() => emitSessionTerminalTitle(undefined, "fix the login bug")).not.toThrow();
+  });
+});
+
+describe("terminal title spinner", () => {
+  test("advances through stable-width frames", () => {
+    expect(sessionTitleSpinnerFrame(0)).toBe("⠋");
+    expect(sessionTitleSpinnerFrame(SESSION_TITLE_SPINNER_FRAME_DURATION_MS)).toBe("⠙");
+    expect(sessionTitleSpinnerFrame(10 * SESSION_TITLE_SPINNER_FRAME_DURATION_MS)).toBe("⠋");
+  });
+
+  test("supports a settled frame for reduced motion", () => {
+    expect(sessionTitleSpinnerFrame(5_000, false)).toBe("⠋");
   });
 });

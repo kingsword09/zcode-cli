@@ -190,7 +190,9 @@ import {
 } from "./selection-command.ts";
 import {
   emitSessionTerminalTitle,
-  sessionTitleFromFirstMessage
+  SESSION_TITLE_SPINNER_FRAME_DURATION_MS,
+  sessionTitleFromFirstMessage,
+  sessionTitleSpinnerFrame
 } from "./session-title.ts";
 import { SkillCatalog } from "./skills.ts";
 import {
@@ -670,6 +672,8 @@ class ZCodeTui {
   private turnTimingVisible = false;
   private turnHadWorkActivity = false;
   private turnTimer?: ReturnType<typeof setInterval>;
+  private sessionTitleSpinnerTimer?: ReturnType<typeof setInterval>;
+  private sessionTitleSpinnerStartedAt?: number;
   private pendingTurnNotification?: TurnNotificationKind;
   private pendingTurnNotificationDetail = "";
   private goal?: GoalState;
@@ -678,6 +682,7 @@ class ZCodeTui {
   private sessionId?: string;
   private sessionTitleEmitted = false;
   private sessionTerminalTitle?: string;
+  private emittedSessionTerminalTitle?: string;
   private sessionMetrics: SessionMetrics = {};
   private usageRefreshInFlight = false;
   private usageRefreshPending = false;
@@ -2104,6 +2109,8 @@ class ZCodeTui {
       this.sessionId = undefined;
       this.sessionTitleEmitted = false;
       this.sessionTerminalTitle = undefined;
+      this.stopSessionTitleSpinner();
+      this.emittedSessionTerminalTitle = "";
       emitSessionTerminalTitle(this.options.stdout ?? process.stdout, "");
       this.sessionMetrics = {};
       this.restoreTranscript(restoredMessages(result.restoredMessages));
@@ -5316,17 +5323,49 @@ class ZCodeTui {
     this.updateTurnStatus(requestRender);
   }
 
-  // Keeps the terminal title in sync: "ZC | ⠋ <activity>" while a turn runs,
+  // Keeps the terminal title in sync: "ZC | <spinner> <activity>" while a turn runs,
   // "ZC | <first-message title>" when idle (mirrors opencode's live title).
   private refreshSessionTerminalTitle(): void {
-    if (!this.sessionTerminalTitle) return;
+    if (!this.sessionTerminalTitle) {
+      this.stopSessionTitleSpinner();
+      return;
+    }
+    const now = performance.now();
     const working = this.activeSubmissions > 0 && this.activity
-      ? `⠋ ${this.activity}`
+      ? `${sessionTitleSpinnerFrame(
+        this.sessionTitleSpinnerStartedAt === undefined
+          ? 0
+          : Math.max(0, now - this.sessionTitleSpinnerStartedAt),
+        this.animateTurnTimer
+      )} ${this.activity}`
       : undefined;
+    if (working && this.animateTurnTimer) {
+      if (this.sessionTitleSpinnerStartedAt === undefined) this.sessionTitleSpinnerStartedAt = now;
+      if (!this.sessionTitleSpinnerTimer) {
+        this.sessionTitleSpinnerTimer = setInterval(
+          () => this.refreshSessionTerminalTitle(),
+          SESSION_TITLE_SPINNER_FRAME_DURATION_MS
+        );
+        this.sessionTitleSpinnerTimer.unref?.();
+      }
+    } else {
+      this.stopSessionTitleSpinner();
+    }
+    const nextTitle = working ?? this.sessionTerminalTitle;
+    if (nextTitle === this.emittedSessionTerminalTitle) return;
+    this.emittedSessionTerminalTitle = nextTitle;
     emitSessionTerminalTitle(
       this.options.stdout ?? process.stdout,
-      working ?? this.sessionTerminalTitle
+      nextTitle
     );
+  }
+
+  private stopSessionTitleSpinner(): void {
+    if (this.sessionTitleSpinnerTimer) {
+      clearInterval(this.sessionTitleSpinnerTimer);
+      this.sessionTitleSpinnerTimer = undefined;
+    }
+    this.sessionTitleSpinnerStartedAt = undefined;
   }
 
   private updateTurnStatus(requestRender = true): void {
@@ -5354,6 +5393,7 @@ class ZCodeTui {
     const right = goalText ? goalStyle(`[ Goal: ${goalText} ]`) : undefined;
     const compactRight = goalLabel ? goalStyle(`[ Goal: ${goalLabel} ]`) : undefined;
     this.turnStatus.setContent(left, right, compactRight);
+    this.refreshSessionTerminalTitle();
     this.updateRuntimeActivity(false);
     if (requestRender) this.ui.requestRender();
   }
@@ -5651,6 +5691,7 @@ class ZCodeTui {
     this.updateCheckAbortController?.abort();
     this.modelCatalogRefresh?.stop();
     if (this.turnTimer) clearInterval(this.turnTimer);
+    this.stopSessionTitleSpinner();
     if (this.rewindEscapeTimer) clearTimeout(this.rewindEscapeTimer);
     if (this.fullscreenWelcomeTransitionTimer) clearTimeout(this.fullscreenWelcomeTransitionTimer);
     if (this.runtimeRefreshTimer) clearTimeout(this.runtimeRefreshTimer);
