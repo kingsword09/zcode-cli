@@ -1,48 +1,31 @@
 import { describe, expect, test } from "bun:test";
+import { Container, type Component, type TUI } from "@earendil-works/pi-tui";
 
 import { choose } from "../packages/zcode-tui/src/choice-dialog.ts";
 import type { ChoiceItem } from "../packages/zcode-tui/src/choice-dialog.ts";
-import type { Component, Container, TUI } from "@earendil-works/pi-tui";
+import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
-// Minimal pass-through theme stub.
-const theme = {
-  bold: (t: string) => t,
-  muted: (t: string) => t,
-  accent: (t: string) => t,
-  select: {
-    selectedPrefix: (t: string) => t,
-    selectedText: (t: string) => t,
-    description: (t: string) => t,
-    scrollInfo: (t: string) => t,
-    noMatch: (t: string) => t
-  }
-} as never;
+const theme = createTheme(false);
 
-// Fakes satisfying the slice of TUI/Container used by choose():
-// non-fullscreen mode -> dialog is added to host, input goes to host's focused child.
-function makeFakeUi() {
-  const focused: { current: Component | null } = { current: null };
+// Inline-mode harness matching choice-dialog.test.ts: real pi-tui Container,
+// dialog mounts into `host`, render `root` to assert on actual dialog output.
+function makeHarness() {
+  const root = new Container();
+  const host = new Container();
+  const focusState: { current: Component | null } = { current: null };
   const ui = {
-    mode: "inline",
-    terminal: { rows: 40, columns: 120 },
-    requestRender: () => {},
-    setFocus: (c: Component) => {
-      focused.current = c;
-    },
-    showOverlay: undefined
-  } as unknown as TUI;
-  const host: Container = {
-    children: [] as Component[],
-    addChild(c: Component) {
-      (this as { children: Component[] }).children.push(c);
-    },
-    removeChild(c: Component) {
-      const list = (this as { children: Component[] }).children;
-      const i = list.indexOf(c);
-      if (i >= 0) list.splice(i, 1);
+    terminal: { rows: 24 },
+    requestRender() {},
+    setFocus(component: Component | null) {
+      focusState.current = component;
     }
-  } as unknown as Container;
-  return { ui, host, focused };
+  } as unknown as TUI;
+  root.addChild(host);
+  return { root, host, focusState, ui };
+}
+
+function rendered(root: Container): string {
+  return root.render(80).join("\n");
 }
 
 function items(count: number): ChoiceItem[] {
@@ -55,9 +38,9 @@ function items(count: number): ChoiceItem[] {
 
 describe("choice dialog number shortcuts", () => {
   test("digit '1' confirms the first option in one keystroke", async () => {
-    const { ui, host, focused } = makeFakeUi();
+    const { host, focusState, ui } = makeHarness();
     const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
-    const dialog = focused.current as Component;
+    const dialog = focusState.current as Component;
     expect(dialog).toBeTruthy();
     dialog.handleInput!("1");
     const result = await promise;
@@ -65,17 +48,17 @@ describe("choice dialog number shortcuts", () => {
   });
 
   test("digit '3' confirms the third option", async () => {
-    const { ui, host, focused } = makeFakeUi();
+    const { host, focusState, ui } = makeHarness();
     const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
-    (focused.current as Component).handleInput!("3");
+    (focusState.current as Component).handleInput!("3");
     const result = await promise;
     expect(result?.label).toBe("Option 3");
   });
 
   test("digits beyond the item count do nothing", async () => {
-    const { ui, host, focused } = makeFakeUi();
+    const { host, focusState, ui } = makeHarness();
     const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
-    const dialog = focused.current as Component;
+    const dialog = focusState.current as Component;
     dialog.handleInput!("9"); // out of range -> no confirm
     // settle the promise via Escape
     dialog.handleInput!("\x1b");
@@ -84,35 +67,93 @@ describe("choice dialog number shortcuts", () => {
   });
 
   test("digit is filter input when filter is active (no confirm)", async () => {
-    const { ui, host, focused } = makeFakeUi();
+    const { root, host, focusState, ui } = makeHarness();
     const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
-    const dialog = focused.current as Component;
+    const dialog = focusState.current as Component;
     dialog.handleInput!("O"); // starts filter with "O"
     dialog.handleInput!("2"); // continues filter, must NOT confirm option 2
+    expect(rendered(root)).toContain("Filter: O2");
     // Cancel to settle the promise; result should be null (nothing was confirmed)
     dialog.handleInput!("\x1b");
     const result = await promise;
     expect(result).toBeNull();
   });
 
-  test("labels carry number hints by default and omit them with numberShortcuts: false", async () => {
-    const { ui, host, focused } = makeFakeUi();
-    let seen = "";
+  test("labels carry number hints and the number-selects help by default", async () => {
+    const { root, host, focusState, ui } = makeHarness();
+    const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(4) });
+    const output = rendered(root);
+    expect(output).toContain("1. Option 1");
+    expect(output).toContain("4. Option 4");
+    expect(output).not.toContain("5. Option");
+    expect(output.replace(/\n/g, " ")).toContain("number selects");
+    focusState.current?.handleInput?.("\x1b");
+    expect(await promise).toBeNull();
+  });
+
+  test("numberShortcuts: false omits hints and keeps digits as filter input", async () => {
+    const { root, host, focusState, ui } = makeHarness();
     const promise = choose(ui, host, theme, {
       title: "T",
       prompt: "P",
       items: items(4),
-      signal: (() => {
-        const controller = new AbortController();
-        queueMicrotask(() => {
-          // capture rendered help before aborting
-          seen = JSON.stringify((host as unknown as { children: Component[] }).children.length);
-          controller.abort();
-        });
-        return controller.signal;
-      })()
+      numberShortcuts: false
     });
-    await promise;
-    expect(typeof seen).toBe("string");
+    const output = rendered(root);
+    expect(output).not.toContain("1. Option 1");
+    expect(output).toContain("Option 1");
+    expect(output.replace(/\n/g, " ")).not.toContain("number selects");
+    // The shortcut is off: the digit must NOT confirm (dialog stays open,
+    // settled only by Escape).
+    focusState.current?.handleInput?.("1");
+    focusState.current?.handleInput?.("\x1b");
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  test("more than 9 items: no hints, no shortcut, help line not advertised", async () => {
+    const { root, host, focusState, ui } = makeHarness();
+    const promise = choose(ui, host, theme, { title: "T", prompt: "P", items: items(12) });
+    const output = rendered(root);
+    expect(output).not.toContain("1. Option 1");
+    expect(output.replace(/\n/g, " ")).not.toContain("number selects");
+    // First digit of would-be filter input like "3.5" must not confirm option 3.
+    focusState.current?.handleInput?.("3");
+    expect(rendered(root)).toContain("T"); // dialog still open — nothing confirmed
+    focusState.current?.handleInput?.("\x1b");
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  test("custom help suppresses hints and the shortcut by default", async () => {
+    const { root, host, focusState, ui } = makeHarness();
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      help: "custom help line",
+      items: items(4)
+    });
+    const output = rendered(root);
+    expect(output).toContain("custom help line");
+    expect(output).not.toContain("1. Option 1");
+    focusState.current?.handleInput?.("1");
+    focusState.current?.handleInput?.("\x1b");
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  test("numberShortcuts: true force-enables the shortcut despite custom help", async () => {
+    const { host, focusState, ui } = makeHarness();
+    const promise = choose(ui, host, theme, {
+      title: "T",
+      prompt: "P",
+      help: "custom help line",
+      items: items(4),
+      numberShortcuts: true
+    });
+    const dialog = focusState.current as Component;
+    dialog.handleInput!("2");
+    const result = await promise;
+    expect(result?.label).toBe("Option 2");
   });
 });

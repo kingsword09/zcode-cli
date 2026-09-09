@@ -187,7 +187,7 @@ class ChoiceDialog implements Component {
   private contentOffset = 0;
   private contentLineCount = 0;
   private contentPageSize = 1;
-  /** Upper bound for digit quick-select (1-9 → index 0-8). Set from the item count. */
+  /** Number of quick-selectable items; digits beyond this are ignored. */
   numberShortcutCount = 0;
 
   constructor(
@@ -265,9 +265,12 @@ class ChoiceDialog implements Component {
       this.contentExpanded = !this.contentExpanded;
       return;
     }
-    // Number shortcut: pressing 1-9 selects and confirms the visible option at
-    // that position (1 = first item) in a single keystroke. Disabled while a
-    // filter is active so typing digits keeps working as filter input.
+    // Number shortcut: pressing 1-9 confirms the option at that list position
+    // (1 = first item) in a single keystroke. Absolute index, not scroll
+    // position. Availability mirrors the rendered number hints (≤9 items, no
+    // custom help) so the shortcut is never active where it isn't advertised —
+    // on larger or filter-heavy dialogs digits stay filter input. Disabled
+    // while a filter is active for the same reason.
     if (
       this.filter === ""
       && !this.contentExpanded
@@ -283,8 +286,8 @@ class ChoiceDialog implements Component {
       const item = this.list.getSelectedItem();
       if (item) {
         this.list.onSelect?.(item);
-        return;
       }
+      return;
     }
     const contentInput = (this.content as (Component & {
       handleInput?: (input: string) => boolean;
@@ -422,7 +425,7 @@ export function choose(
     selectedIndex?: number;
     signal?: AbortSignal;
     showSelectedItemDetails?: boolean;
-    /** Prefix labels with 1-9 hints and enable digit quick-select. Default: true when no custom help. */
+    /** Prefix labels with 1-9 hints and enable digit quick-select. Default: on only when there are ≤9 items and no custom help (matching the hints) — larger or custom-help dialogs are filter-first, so digits stay filter input. Pass true to force-enable, false to disable. */
     numberShortcuts?: boolean;
   }
 ): Promise<ChoiceItem | null> {
@@ -431,6 +434,14 @@ export function choose(
   return new Promise((resolve) => {
     const choicesByValue = new Map<string, ChoiceItem>();
     const detailsByValue = new Map<string, Component>();
+    // Shortcut availability mirrors the rendered number hints (≤9 items, no
+    // custom help) so digits never confirm where the shortcut isn't
+    // advertised; explicit true force-enables, explicit false disables.
+    const numberShortcutsEnabled = options.numberShortcuts === false
+      ? false
+      : options.numberShortcuts === true
+        ? true
+        : options.items.length <= 9 && !options.help;
     const searchableItems = options.items.map((item, index): SelectItem => {
       const safeItem: ChoiceItem = {
         ...item,
@@ -440,9 +451,9 @@ export function choose(
           : undefined
       };
       // Number hint: with ≤9 items and no custom help text, prefix labels so
-      // the 1-9 quick-select shortcut is discoverable.
-      const showNumberHint = options.numberShortcuts !== false
-        && options.items.length <= 9 && !options.help;
+      // the 1-9 quick-select shortcut is discoverable. Shortcut availability
+      // in handleInput mirrors this exact condition.
+      const showNumberHint = numberShortcutsEnabled;
       const displayLabel = showNumberHint
         ? `${index + 1}. ${safeItem.label}`
         : safeItem.label;
@@ -472,12 +483,12 @@ export function choose(
       sanitizeTerminalText(options.prompt, { preserveSgr: false }),
       sanitizeTerminalText(
         options.help ?? (hasDetails
-          ? (options.numberShortcuts === false
-            ? "Type to filter · Up/Down choose · Ctrl+O details · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc cancel"
-            : "Type to filter · number selects · Up/Down choose · Ctrl+O details · Enter confirm · Esc cancel")
-          : (options.numberShortcuts === false
-            ? "Type to filter · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear"
-            : "Type to filter · number selects · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear")),
+          ? (numberShortcutsEnabled
+            ? "Type to filter · number selects · Up/Down choose · Ctrl+O details · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc cancel"
+            : "Type to filter · Up/Down choose · Ctrl+O details · ←/→ or PgUp/PgDn scroll · Enter confirm · Esc cancel")
+          : (numberShortcutsEnabled
+            ? "Type to filter · number selects · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear"
+            : "Type to filter · Up/Down choose · Enter confirm · Esc cancel · Ctrl+U clear")),
         { preserveSgr: false }
       ),
       list,
@@ -487,9 +498,7 @@ export function choose(
       maxContentLines,
       maxExpandedContentLines
     );
-    dialog.numberShortcutCount = options.numberShortcuts === false
-      ? 0
-      : options.items.length;
+    dialog.numberShortcutCount = numberShortcutsEnabled ? options.items.length : 0;
     const previewFor = (item: SelectItem | null): Component | undefined => {
       if (!item) return undefined;
       return options.showSelectedItemDetails

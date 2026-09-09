@@ -306,7 +306,7 @@ describe("TUI choice dialog", () => {
     expect(output).toContain("plan line 1");
     expect(output).not.toContain("plan line 30");
     expect(output).toContain("Plan 1–6 of 30");
-    expect(output.replace(/\n/g, " ")).toContain("Ctrl+O");
+    expect(output.replace(/\n/g, " ")).toContain("Ctrl+O details");
 
     focusState.current?.handleInput?.("\x0f");
     output = root.render(60).join("\n");
