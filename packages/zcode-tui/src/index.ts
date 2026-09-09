@@ -57,6 +57,11 @@ import { AssistantStream } from "./assistant-stream.ts";
 import { BackgroundTaskEventStore } from "./background-task-events.ts";
 import { readBackgroundTaskOutput } from "./background-task-output.ts";
 import { BoundedToolText, toolTextValue } from "./bounded-tool-text.ts";
+import {
+  autoPermissionResponse,
+  loadAutoPermissionConfig,
+  shouldAutoClassify
+} from "./auto-permissions.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
 import {
   colorSchemeFromRgb,
@@ -217,12 +222,17 @@ import {
 import {
   appliesToSetting,
   modes,
+  clientModes,
+  nextClientMode,
   nextMode,
+  initialClientMode,
   nextPickerCommand,
   nextPickerValue,
+  normalizedClientMode,
   normalizedMode,
   settingTargetForCommand,
   transcriptPageDirection,
+  type ClientMode,
   type Mode,
   type SettingTarget
 } from "./shortcuts.ts";
@@ -638,7 +648,8 @@ class ZCodeTui {
   private currentToolGroupMessageId?: string;
   private pendingAttachments: PromptImageAttachment[] = [];
   private readonly editorHistory: string[] = [];
-  private mode: Mode;
+  private mode: ClientMode;
+  private autoModeActive = false;
   private model: string;
   private tuiMode: TuiMode;
   private copyOnSelect = true;
@@ -719,7 +730,8 @@ class ZCodeTui {
       (width) => this.fullscreenHeader.identity(width),
       { loginRequired: options.loginRequired === true, includeIdentity: true }
     );
-    this.mode = normalizedMode(options.initialMode);
+    this.mode = initialClientMode(options.initialMode, process.env.ZCODE_CLIENT_MODE);
+    this.autoModeActive = this.mode === "auto";
     this.model = modelLabel(options.initialModel);
     this.thoughtLevel = options.initialThoughtLevel;
     this.modelOptions = [...(options.modelOptions ?? [])];
@@ -2116,7 +2128,16 @@ class ZCodeTui {
       this.recordAssistantText(this.assistantStream.reconcile(response));
     }
     if (appliesToSetting(settingTarget, "mode") && typeof result.mode === "string") {
-      this.mode = normalizedMode(result.mode, this.mode);
+      if (settingTarget === "mode") {
+        // An explicit typed /mode command executed in the runtime: the runtime
+        // owns its enum, so any confirmed value exits the auto overlay.
+        this.autoModeActive = false;
+        this.mode = normalizedClientMode(result.mode, this.mode);
+      } else if (!this.autoModeActive) {
+        // Runtime state echoes while the overlay is active describe the build
+        // mode the overlay forces — they must not clear the overlay.
+        this.mode = normalizedClientMode(result.mode, this.mode);
+      }
     }
     if (appliesToSetting(settingTarget, "model") && result.model !== undefined) {
       this.model = modelLabel(result.model);
@@ -3322,6 +3343,19 @@ class ZCodeTui {
         payload: choice.response
       })));
     }
+    const autoResponse = shouldAutoClassify(this.mode, toolName)
+      ? autoPermissionResponse(
+        { toolName, input: request.input, riskLevel: asString(request.riskLevel) },
+        loadAutoPermissionConfig(process.env.ZCODE_AUTO_PERMISSIONS_CONFIG)
+      )
+      : null;
+    if (autoResponse) {
+      this.addNotice(
+        `auto-permissions · ${autoResponse.decision.toUpperCase()} · ${toolName} · ${autoResponse.reason}`,
+        autoResponse.decision === "deny" ? "warning" : "muted"
+      );
+      return autoResponse;
+    }
     const selected = await this.showChoice({
       title: `Permission · ${toolName}`,
       prompt: asString(request.reason) ?? `${toolName} requests permission to continue.`,
@@ -3649,7 +3683,7 @@ class ZCodeTui {
    * setMode bridge so the runtime owns the exact mode-switching semantics.
    */
   private async showModePicker(): Promise<boolean> {
-    const picker = modePicker(this.mode, modes);
+    const picker = modePicker(this.mode, clientModes);
     if (picker.items.length === 0) return false;
     const selected = await this.showChoice({
       title: "Select mode",
@@ -3661,7 +3695,10 @@ class ZCodeTui {
     const mode = selected?.payload;
     if (typeof mode !== "string") return true;
 
-    await this.applyModeShortcut(normalizedMode(mode));
+    // The picker and Shift+Tab route through the client: "auto" is a
+    // client-side overlay (runtime is held in build); runtime modes apply
+    // through the setMode bridge and clear the overlay.
+    await this.applyModeShortcut(normalizedClientMode(mode));
     return true;
   }
 
@@ -4436,10 +4473,11 @@ class ZCodeTui {
 
   private async switchMode(): Promise<void> {
     if (!this.shortcutAvailable()) return;
-    await this.applyModeShortcut(nextMode(this.mode));
+    // Shift+Tab cycles client-side modes, including the auto overlay.
+    await this.applyModeShortcut(nextClientMode(this.mode));
   }
 
-  private async applyModeShortcut(requestedMode: Mode): Promise<void> {
+  private async applyModeShortcut(requestedMode: Mode | ClientMode): Promise<void> {
     if (this.settingSwitchInFlight) return;
     if (!this.options.setMode) {
       this.addNotice("Mode switching is unavailable in this runtime.", "warning");
@@ -4447,9 +4485,20 @@ class ZCodeTui {
     }
     this.settingSwitchInFlight = true;
     try {
+      if (requestedMode === "auto") {
+        // Client-side overlay: the runtime stays in build (so permission
+        // prompts still reach this client) while the TUI displays auto and
+        // the permission classifier decides prompts.
+        await this.options.setMode("build");
+        this.autoModeActive = true;
+        this.mode = "auto";
+        this.updateMetadata();
+        return;
+      }
+      this.autoModeActive = false;
       const result = await this.options.setMode(requestedMode);
       const returnedMode = isRecord(result) ? asString(result.mode) : asString(result);
-      this.mode = normalizedMode(returnedMode, requestedMode);
+      this.mode = normalizedClientMode(returnedMode, requestedMode);
       this.updateMetadata();
     } catch (error) {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
