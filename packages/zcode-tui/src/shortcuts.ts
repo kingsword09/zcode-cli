@@ -4,7 +4,20 @@ import type { PickerSpec } from "./selectors.ts";
 
 export const modes = ["build", "edit", "yolo", "plan"] as const;
 export type Mode = (typeof modes)[number];
+
+// Client-side modes: adds "auto", a classifier overlay on top of the runtime's
+// build mode. The runtime owns its enum and has no auto mode (its reserved
+// value denies everything), so "auto" is client-side only: entering it forces
+// the runtime to build (prompts still reach the client) while the TUI shows
+// auto and decides prompts through the permission classifier.
+export const clientModes = ["build", "edit", "auto", "yolo", "plan"] as const;
+export type ClientMode = (typeof clientModes)[number];
 export type SettingTarget = "mode" | "model" | "effort";
+
+export function normalizedClientMode(mode?: string, fallback: ClientMode = "build"): ClientMode {
+  const candidate = mode as ClientMode;
+  return clientModes.includes(candidate) ? candidate : fallback;
+}
 
 export function normalizedMode(mode?: string, fallback: Mode = "build"): Mode {
   const candidate = mode as Mode;
@@ -14,6 +27,23 @@ export function normalizedMode(mode?: string, fallback: Mode = "build"): Mode {
 export function nextMode(currentMode?: string): Mode {
   const currentIndex = modes.indexOf(normalizedMode(currentMode));
   return modes[(currentIndex + 1) % modes.length] ?? modes[0];
+}
+
+// Shift+Tab cycles the client-side list (which includes the auto overlay);
+// runtime mode state is always representable because auto rides on build.
+export function nextClientMode(currentMode?: string): ClientMode {
+  const currentIndex = clientModes.indexOf(normalizedClientMode(currentMode));
+  return clientModes[(currentIndex + 1) % clientModes.length] ?? clientModes[0];
+}
+
+// Boot-time selection for one-shot/headless runs: ZCODE_CLIENT_MODE=auto
+// activates the overlay only when the runtime booted in build (its prompt
+// modes are the only ones where client-side classification is meaningful).
+export function initialClientMode(runtimeMode: string | undefined, envClientMode: string | undefined): ClientMode {
+  if (envClientMode === "auto") {
+    return normalizedMode(runtimeMode) === "build" ? "auto" : normalizedMode(runtimeMode)
+  }
+  return normalizedMode(runtimeMode)
 }
 
 export function settingTargetForCommand(input: string): SettingTarget | undefined {
