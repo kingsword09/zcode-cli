@@ -3327,6 +3327,7 @@ class ZCodeTui {
       prompt: asString(request.reason) ?? `${toolName} requests permission to continue.`,
       items,
       signal,
+      numberShortcuts: true,
       content: this.permissionPreview(toolName, request.input, asString(request.riskLevel))
     });
     if (!selected) return { decision: "deny", reason: "Cancelled by user" };
