@@ -1,10 +1,11 @@
 import { ScenarioJournal } from "./scenario-journal.ts";
 import type { ScenarioWorkspace } from "./scenario-workspace.ts";
+import { TerminalScreen, type TerminalScreenSnapshot } from "./terminal-screen.ts";
 
 const defaultWaitMilliseconds = 8_000;
 const renderSettleMilliseconds = 30;
 
-export function terminalPlainText(value: string): string {
+function terminalPlainText(value: string): string {
   return value
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
     .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/g, "")
@@ -26,33 +27,39 @@ export class TerminalSession implements AsyncDisposable {
   readonly #terminal: Bun.Terminal;
   readonly #child: Bun.Subprocess;
   readonly #timeout: ReturnType<typeof setTimeout>;
-  #output = "";
+  readonly #decoder = new TextDecoder();
+  readonly #screen: TerminalScreen;
+  #historyOutput = "";
+  #screenError: unknown;
   #closed = false;
 
   private constructor(
     terminal: Bun.Terminal,
     child: Bun.Subprocess,
     timeout: ReturnType<typeof setTimeout>,
-    journal: ScenarioJournal
+    journal: ScenarioJournal,
+    screen: TerminalScreen
   ) {
     this.#terminal = terminal;
     this.#child = child;
     this.#timeout = timeout;
     this.journal = journal;
+    this.#screen = screen;
   }
 
   static start(options: TerminalSessionOptions): TerminalSession {
-    const decoder = new TextDecoder();
+    const cols = options.cols ?? 110;
+    const rows = options.rows ?? 40;
+    const pendingOutput: Uint8Array[] = [];
     let session: TerminalSession | undefined;
     const terminal = new Bun.Terminal({
-      cols: options.cols ?? 110,
-      rows: options.rows ?? 40,
+      cols,
+      rows,
       name: "xterm-256color",
       data(_terminal, data) {
-        const decoded = decoder.decode(data, { stream: true });
-        if (session) {
-          session.#output += decoded;
-        }
+        const owned = Uint8Array.from(data);
+        if (session) session.consumeOutput(owned);
+        else pendingOutput.push(owned);
       }
     });
     const child = Bun.spawn(options.command, {
@@ -72,17 +79,45 @@ export class TerminalSession implements AsyncDisposable {
       () => child.kill("SIGKILL"),
       options.timeoutMilliseconds ?? 20_000
     );
-    session = new TerminalSession(terminal, child, timeout, options.workspace.journal);
+    session = new TerminalSession(
+      terminal,
+      child,
+      timeout,
+      options.workspace.journal,
+      new TerminalScreen(cols, rows)
+    );
+    for (const data of pendingOutput) session.consumeOutput(data);
     session.journal.record("terminal.start", { command: options.command, pid: child.pid });
     return session;
   }
 
-  checkpoint(): number {
-    return this.#output.length;
+  private consumeOutput(data: Uint8Array): void {
+    this.#historyOutput += this.#decoder.decode(data, { stream: true });
+    void this.#screen.write(data).catch((error) => {
+      this.#screenError ??= error;
+    });
   }
 
-  text(start = 0): string {
-    return terminalPlainText(this.#output.slice(start));
+  historyCheckpoint(): number {
+    return this.#historyOutput.length;
+  }
+
+  historyText(start = 0): string {
+    return terminalPlainText(this.#historyOutput.slice(start));
+  }
+
+  screenText(): string {
+    this.throwScreenError();
+    return this.#screen.screenText();
+  }
+
+  screenSnapshot(): TerminalScreenSnapshot {
+    this.throwScreenError();
+    return this.#screen.snapshot();
+  }
+
+  private throwScreenError(): void {
+    if (this.#screenError) throw new Error("Headless terminal failed to parse PTY output.", { cause: this.#screenError });
   }
 
   send(input: string): void {
@@ -90,11 +125,39 @@ export class TerminalSession implements AsyncDisposable {
     this.#terminal.write(input);
   }
 
-  async settle(): Promise<void> {
-    await Bun.sleep(renderSettleMilliseconds);
+  resize(cols: number, rows: number): void {
+    this.#screen.resize(cols, rows);
+    this.#terminal.resize(cols, rows);
+    this.journal.record("terminal.resize", { cols, rows });
   }
 
-  async waitFor(
+  async settle(): Promise<void> {
+    await Bun.sleep(renderSettleMilliseconds);
+    await this.#screen.settled();
+    this.throwScreenError();
+  }
+
+  async waitForScreen(
+    label: string,
+    pattern: RegExp,
+    timeoutMilliseconds = defaultWaitMilliseconds
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMilliseconds;
+    while (Date.now() < deadline) {
+      await this.#screen.settled();
+      this.throwScreenError();
+      pattern.lastIndex = 0;
+      if (pattern.test(this.screenText())) {
+        this.journal.record("assert.screen.match", { label, pattern: String(pattern) });
+        return;
+      }
+      if (this.#child.exitCode !== null) break;
+      await Bun.sleep(20);
+    }
+    throw this.waitError(label, pattern, "screen");
+  }
+
+  async waitForHistory(
     label: string,
     pattern: RegExp,
     start = 0,
@@ -103,18 +166,25 @@ export class TerminalSession implements AsyncDisposable {
     const deadline = Date.now() + timeoutMilliseconds;
     while (Date.now() < deadline) {
       pattern.lastIndex = 0;
-      if (pattern.test(this.text(start))) {
-        this.journal.record("assert.match", { label, pattern: String(pattern) });
+      if (pattern.test(this.historyText(start))) {
+        this.journal.record("assert.history.match", { label, pattern: String(pattern) });
         return;
       }
       if (this.#child.exitCode !== null) break;
       await Bun.sleep(20);
     }
-    throw new Error([
-      `Timed out waiting for ${label} (${String(pattern)}).`,
+    throw this.waitError(label, pattern, "history");
+  }
+
+  private waitError(label: string, pattern: RegExp, target: "history" | "screen"): Error {
+    return new Error([
+      `Timed out waiting for ${label} in terminal ${target} (${String(pattern)}).`,
       "",
-      "Terminal output:",
-      this.text().slice(-6_000),
+      "Current screen:",
+      this.screenText(),
+      "",
+      "Terminal history:",
+      this.historyText().slice(-6_000),
       "",
       "Scenario journal:",
       this.journal.format()
@@ -126,20 +196,20 @@ export class TerminalSession implements AsyncDisposable {
     label: string,
     pattern: RegExp,
     timeoutMilliseconds?: number
-  ): Promise<number> {
-    const start = this.checkpoint();
+  ): Promise<void> {
     this.send(input);
-    await this.waitFor(label, pattern, start, timeoutMilliseconds);
+    await this.waitForScreen(label, pattern, timeoutMilliseconds);
     await this.settle();
-    return start;
   }
 
-  assertNotVisible(label: string, pattern: RegExp, start = 0): void {
+  async assertScreenExcludes(label: string, pattern: RegExp): Promise<void> {
+    await this.#screen.settled();
+    this.throwScreenError();
     pattern.lastIndex = 0;
-    if (pattern.test(this.text(start))) {
-      throw new Error(`${label} was visible before it should be.\n${this.text(start).slice(-4_000)}`);
+    if (pattern.test(this.screenText())) {
+      throw new Error(`${label} was visible before it should be.\n${this.screenText()}`);
     }
-    this.journal.record("assert.absent", { label, pattern: String(pattern) });
+    this.journal.record("assert.screen.absent", { label, pattern: String(pattern) });
   }
 
   async exit(): Promise<void> {
@@ -163,6 +233,12 @@ export class TerminalSession implements AsyncDisposable {
       await this.#child.exited;
     }
     if (!this.#terminal.closed) this.#terminal.close();
+    try {
+      await this.#screen.settled();
+      this.#historyOutput += this.#decoder.decode();
+    } finally {
+      this.#screen.dispose();
+    }
     this.journal.record("terminal.dispose", { exitCode: this.#child.exitCode });
   }
 

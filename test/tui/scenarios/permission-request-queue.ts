@@ -7,16 +7,15 @@ export const permissionRequestQueueScenario: TuiScenario = {
   description: "Serializes concurrent permission requests, including deny feedback.",
   fixture: join(import.meta.dir, "..", "fixtures", "permission-request-queue.ts"),
   async run(session) {
-    await session.waitFor("scenario instructions", /Type “trigger permissions” to start/i);
-    const turn = session.checkpoint();
+    await session.waitForScreen("scenario instructions", /Type “trigger permissions” to start/i);
     session.send("trigger permissions\r");
-    await session.waitFor("first permission", /FIRST_WRITE_PERMISSION/iu, turn);
+    await session.waitForScreen("first permission", /FIRST_WRITE_PERMISSION/iu);
     await session.sendAndWait(
       "3",
       "first permission feedback prompt",
       /Tell ZCode what should change before retrying\./iu
     );
-    session.assertNotVisible("second permission", /SECOND_BASH_PERMISSION/iu, turn);
+    await session.assertScreenExcludes("second permission", /SECOND_BASH_PERMISSION/iu);
     await session.sendAndWait(
       "Use a temporary output file.\r",
       "second permission",
