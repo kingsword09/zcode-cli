@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
+const root = fileURLToPath(new URL("../..", import.meta.url));
 const fixtureProcesses: ChildProcessWithoutNullStreams[] = [];
 const temporaryDirectories: string[] = [];
 
@@ -112,7 +112,7 @@ async function runNetworkFixture(options: {
   temporaryDirectories.push(home);
   const workspace = join(home, "workspace");
   await mkdir(workspace, { recursive: true });
-  const config = await Bun.file(new URL("../config.example.json", import.meta.url)).json() as {
+  const config = await Bun.file(new URL("../../config.example.json", import.meta.url)).json() as {
     features: Record<string, unknown>;
     logging: Record<string, unknown>;
     mcp: { servers: Record<string, unknown> };

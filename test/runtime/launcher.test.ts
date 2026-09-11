@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readRuntimeVersion } from "../src/launcher.ts";
+import { readRuntimeVersion } from "../../src/launcher.ts";
 
 let home = "";
 const node = Bun.which("node");
-const root = fileURLToPath(new URL("..", import.meta.url));
+const root = fileURLToPath(new URL("../..", import.meta.url));
 
 beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), "zcode-launcher-runtime-"));
