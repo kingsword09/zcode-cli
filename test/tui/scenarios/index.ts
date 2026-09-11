@@ -1,8 +1,10 @@
+import { httpMockScenario } from "./http-mock.ts";
 import { permissionRequestQueueScenario } from "./permission-request-queue.ts";
 import type { TuiScenario } from "./types.ts";
 import { writeAndDiffScenario } from "./write-and-diff.ts";
 
 const scenarios = new Map<string, TuiScenario>([
+  [httpMockScenario.name, httpMockScenario],
   [permissionRequestQueueScenario.name, permissionRequestQueueScenario],
   [writeAndDiffScenario.name, writeAndDiffScenario]
 ]);

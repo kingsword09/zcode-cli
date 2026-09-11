@@ -57,6 +57,7 @@ export interface ScenarioTurn {
 export interface ScenarioRuntimeDefinition {
   turns: readonly ScenarioTurn[];
   workspaceDirectory?: string;
+  journal?: ScenarioRuntimeJournal;
   journalPath?: string;
   unmatchedResponse?: ScenarioValue<string>;
 }
@@ -141,6 +142,9 @@ function workspacePath(workspaceDirectory: string, path: string): string {
 }
 
 function validateDefinition(definition: ScenarioRuntimeDefinition): void {
+  if (definition.journal && definition.journalPath) {
+    throw new Error("Scenario runtime accepts either journal or journalPath, not both.");
+  }
   const ids = new Set<string>();
   for (const turn of definition.turns) {
     if (!turn.id || ids.has(turn.id)) throw new Error(`Scenario turn id must be unique: ${turn.id || "(empty)"}`);
@@ -162,7 +166,7 @@ function validateDefinition(definition: ScenarioRuntimeDefinition): void {
 
 export function createScenarioRuntime(definition: ScenarioRuntimeDefinition): ScenarioRuntimeAdapter {
   validateDefinition(definition);
-  const journal = new ScenarioRuntimeJournal(definition.journalPath);
+  const journal = definition.journal ?? new ScenarioRuntimeJournal(definition.journalPath);
 
   const submitPrompt = async (input: unknown, options: PromptCallOptions): Promise<unknown> => {
     throwIfAborted(options.abortSignal);

@@ -13,13 +13,13 @@ export async function runAutomatedTuiScenario(scenario: TuiScenario): Promise<vo
   });
   try {
     await scenario.run(session, workspace);
+    await session.exit();
   } catch (error) {
     const runtimeJournal = await workspace.readRuntimeJournal();
     if (!runtimeJournal) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`${message}\n\nRuntime journal:\n${runtimeJournal.trimEnd()}`, { cause: error });
   }
-  await session.exit();
 }
 
 export async function runManualTuiScenario(scenario: TuiScenario): Promise<number> {
