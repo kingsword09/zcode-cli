@@ -32,7 +32,7 @@ try {
   await run(["run", "typecheck"]);
   await run(["run", latest ? "sync" : "sync:locked"]);
   latestRuntimeSynced = latest;
-  await run(["test"]);
+  await run(["run", "test:all"]);
   await run(["run", "check"]);
   await run(["run", "check:tui"]);
   await run(["scripts/check-package.ts"]);
