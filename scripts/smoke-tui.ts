@@ -176,6 +176,10 @@ try {
   }
   // The first-run setup wizard opens over the composer; skip it explicitly
   // (Esc) so the rest of the scripted interaction reaches the editor.
+  await waitFor(
+    "first-run setup wizard",
+    /Welcome to ZCode CLI[\s\S]*Set up model access to get started\.[\s\S]*Skip for now/i
+  );
   await sendAndWait("\x1b", "first-run setup wizard skipped", /Setup skipped/i);
   await sendAndWait(
     "@bro",

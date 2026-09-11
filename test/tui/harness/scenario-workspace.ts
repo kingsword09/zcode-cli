@@ -6,7 +6,14 @@ import { ScenarioJournal } from "./scenario-journal.ts";
 
 const gitTimeoutMilliseconds = 10_000;
 
+export interface ScenarioWorkspaceBackend {
+  readonly name: string;
+  dispose(): Promise<void>;
+  mount(directory: string): Promise<void>;
+}
+
 export interface ScenarioWorkspaceOptions {
+  backend?: ScenarioWorkspaceBackend;
   files?: Record<string, string | Uint8Array>;
   journal?: ScenarioJournal;
   prefix?: string;
@@ -25,22 +32,47 @@ export class ScenarioWorkspace implements AsyncDisposable {
   readonly home: string;
   readonly journal: ScenarioJournal;
   readonly runtimeJournalPath: string;
+  readonly backendName: string;
+  readonly #backend?: ScenarioWorkspaceBackend;
+  #disposed = false;
 
-  private constructor(root: string, journal: ScenarioJournal) {
+  private constructor(
+    root: string,
+    journal: ScenarioJournal,
+    backend?: ScenarioWorkspaceBackend
+  ) {
     this.root = root;
     this.directory = join(root, "workspace");
     this.gitDirectory = join(root, "git");
     this.home = join(root, "home");
     this.journal = journal;
     this.runtimeJournalPath = join(root, "runtime.jsonl");
+    this.backendName = backend?.name ?? "disk";
+    this.#backend = backend;
   }
 
   static async create(options: ScenarioWorkspaceOptions = {}): Promise<ScenarioWorkspace> {
     const root = await mkdtemp(join(tmpdir(), options.prefix ?? "zcode-tui-scenario-"));
-    const workspace = new ScenarioWorkspace(root, options.journal ?? new ScenarioJournal());
-    workspace.journal.record("workspace.create", { root });
+    const workspace = new ScenarioWorkspace(
+      root,
+      options.journal ?? new ScenarioJournal(),
+      options.backend
+    );
+    workspace.journal.record("workspace.create", {
+      backend: workspace.backendName,
+      root
+    });
     try {
       await mkdir(workspace.directory, { recursive: true });
+      if (options.backend) {
+        workspace.journal.record("workspace.backend.mount.start", {
+          backend: options.backend.name
+        });
+        await options.backend.mount(workspace.directory);
+        workspace.journal.record("workspace.backend.mount.finish", {
+          backend: options.backend.name
+        });
+      }
       await mkdir(workspace.home, { recursive: true });
       for (const [path, contents] of Object.entries(options.files ?? {})) {
         await workspace.write(path, contents);
@@ -152,8 +184,14 @@ export class ScenarioWorkspace implements AsyncDisposable {
   }
 
   async dispose(): Promise<void> {
-    this.journal.record("workspace.dispose", { root: this.root });
+    if (this.#disposed) return;
+    this.journal.record("workspace.dispose", {
+      backend: this.backendName,
+      root: this.root
+    });
+    await this.#backend?.dispose();
     await rm(this.root, { recursive: true, force: true });
+    this.#disposed = true;
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
