@@ -10,7 +10,7 @@ export const writeAndDiffScenario: TuiScenario = {
     "src/example.ts": "export const value = 1;\n"
   },
   async run(session, workspace) {
-    await session.waitFor("scenario instructions", /Type “modify workspace” to start/i);
+    await session.waitForScreen("scenario instructions", /Type “modify workspace” to start/i);
     await session.sendAndWait(
       "modify workspace\r",
       "mock Write completion",
@@ -34,8 +34,8 @@ export const writeAndDiffScenario: TuiScenario = {
       "real Git diff detail",
       /Diff · src\/example\.ts[\s\S]*Page 1\/\d+/iu
     );
-    if (!/export const value = 2;/u.test(session.text())) {
-      throw new Error(`The TUI did not render the updated line.\n${session.text().slice(-4_000)}`);
+    if (!/export const value = 2;/u.test(session.screenText())) {
+      throw new Error(`The TUI did not render the updated line.\n${session.screenText()}`);
     }
     session.send("\x1b");
     await session.settle();

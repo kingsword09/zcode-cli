@@ -80,6 +80,7 @@
     "playwright-core": "1.59.1"
   },
   "devDependencies": {
+    "@xterm/headless": "6.0.0",
     "beautiful-mermaid": "^1.1.3",
     "bun-types": "^1.3.14",
     "cli-highlight": "^2.1.11",

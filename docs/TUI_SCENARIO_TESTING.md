@@ -53,6 +53,10 @@ Manual mode prints the temporary workspace path before opening the TUI. Enter
 
 - `test/tui/harness/terminal-session.ts` owns the PTY, input, output matching,
   timeouts, and failure diagnostics.
+- `test/tui/harness/terminal-screen.ts` parses PTY bytes into the current
+  visible terminal cells, including cursor movement, erasure, and alternate
+  screen transitions. It uses the pinned experimental `@xterm/headless`
+  buffer API so dependency upgrades must be reviewed explicitly.
 - `test/tui/harness/scenario-workspace.ts` creates an isolated HOME and working
   tree with a separate real Git directory and deterministic configuration.
 - `test/tui/scenarios/` declares user-visible actions and assertions.
@@ -60,8 +64,9 @@ Manual mode prints the temporary workspace path before opening the TUI. Enter
 - `scripts/tui-scenario.ts` exposes automatic and manual execution modes.
 
 A scenario should describe behavior rather than terminal timing. Use
-`waitFor()` or `sendAndWait()` to synchronize on visible state; do not add fixed
-sleeps except for a short render settle.
+`waitForScreen()` or `sendAndWait()` to synchronize on visible state; do not
+add fixed sleeps except for a short render settle. Use `waitForHistory()` only
+for transient output that is intentionally no longer visible.
 
 ## Isolation and Git
 
