@@ -46,7 +46,16 @@ export interface AutoPermissionVerdict {
 
 // Paths that carry credentials. Never auto-approved; denied outright when a
 // hardDeny rule targets them.
-const secretPathPattern = String.raw`(^|[/\\])\.(env|ssh|aws|gnupg|kube|netrc|npmrc)([/\\]|$)|\.pem$|id_rsa|credentials`
+//
+// Boundaries are token-aware because these regexes also run against whole
+// command strings, where the credential path sits mid-token: a dotfile name
+// must not be glued to a preceding name character (`my.env` is a different
+// file, `cat .env` is not), while anything after it that is not a name
+// character ends the token — including shell separators (`;`, `|`, `&`,
+// whitespace, quotes) and another dotted component (`.env.local` is the same
+// credential family). `*.pem` is a suffix convention rather than a dotfile,
+// so only its trailing boundary matters.
+const secretPathPattern = String.raw`(^|[^A-Za-z0-9_.-])\.(env|ssh|aws|gnupg|kube|netrc|npmrc)($|[^A-Za-z0-9_-])|\.pem($|[^A-Za-z0-9_-])|id_rsa|credentials`
 
 function ruleToBuiltin(rule: Omit<AutoPermissionRule, "note">, note: string): AutoPermissionRule {
   return { ...rule, note }
@@ -67,15 +76,25 @@ export function builtinAutoPermissionConfig(): AutoPermissionConfig {
     "wc",
     "rg",
     "grep",
-    "find",
     "which",
     "file",
     "stat"
   ]
+  // `find` is read-only only while it carries no mutating action: -exec,
+  // -execdir, -ok and -okdir run arbitrary programs, and -delete, -fprint*,
+  // -fls write or remove files, so a bare `find` prefix rule would
+  // auto-allow `find . -exec sh ...`. The classifier sees the command as one
+  // string, so the lookahead scans the whole command — bounding it at a
+  // shell separator let `find . ; find . -exec ...` (or a separator inside a
+  // quoted argument) slip past — and the trailing \b keeps quoted flags
+  // covered without blocking -executable. Anything the guard blocks falls
+  // through to the dialog.
+  const findAllow = String.raw`^find\b(?![\s\S]*-(?:execdir|exec|okdir|ok|delete|fprintf|fprint0|fprint|fls)\b)`
   return {
     defaults: { unmatched: "ask" },
     allow: [
       ...readOnlyCommands.map((command) => ruleToBuiltin({ tool: "Bash", commandPrefix: command }, "read-only command")),
+      ruleToBuiltin({ tool: "Bash", commandRegex: findAllow }, "read-only command (find without mutating actions)"),
       ruleToBuiltin({ tool: ["Read", "Glob", "Grep", "TodoRead", "WebSearch"] }, "read-only tool")
     ],
     softDeny: [

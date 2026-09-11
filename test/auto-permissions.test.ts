@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   autoPermissionResponse,
+  builtinAutoPermissionConfig,
   classifyPermissionRequest,
   loadAutoPermissionConfig,
   type AutoPermissionConfig
@@ -103,5 +104,82 @@ describe("auto-permissions classification seam", () => {
       { toolName: "Write", input: { file_path: "/repo/src/app.ts" } },
       makeConfig()
     )).toBeNull();
+  });
+});
+
+describe("built-in credential deny: token boundaries (regression: `cat .env` bypass)", () => {
+  const config = builtinAutoPermissionConfig();
+  const bashBehavior = (command: string) =>
+    classifyPermissionRequest({ toolName: "Bash", input: { command }, riskLevel: "medium" }, config)?.behavior;
+  const pathBehavior = (toolName: string, file_path: string) =>
+    classifyPermissionRequest({ toolName, input: { file_path }, riskLevel: "medium" }, config)?.behavior;
+
+  test("relative credential paths in commands are hard-denied, not auto-allowed", () => {
+    for (const command of [
+      "cat .env",
+      "git diff -- .env",
+      "head -50 .npmrc",
+      "git show HEAD:.env",
+      "cat ~/.ssh/config",
+      // Quoted paths still land on the token boundary.
+      'cat ".env"'
+    ]) {
+      expect(bashBehavior(command)).toBe("deny");
+    }
+  });
+
+  test("credential path followed by a shell separator is hard-denied", () => {
+    expect(bashBehavior(".env;cat /etc/passwd")).toBe("deny");
+    expect(bashBehavior("cat key.pem && echo done")).toBe("deny");
+  });
+
+  test("dotted credential variants are denied for direct file tools", () => {
+    expect(pathBehavior("Read", ".env.local")).toBe("deny");
+    expect(pathBehavior("Read", "/repo/.env.production")).toBe("deny");
+    expect(pathBehavior("Edit", "keys/server.pem.bak")).toBe("deny");
+    expect(pathBehavior("Read", "certs/server.pem")).toBe("deny");
+  });
+
+  test("similarly named non-credential files are not denied (no false-positive widening)", () => {
+    expect(bashBehavior("cat environment")).toBe("allow");
+    expect(bashBehavior("cat .environment")).toBe("allow");
+    expect(bashBehavior("cat notes/.envsample")).toBe("allow");
+    expect(pathBehavior("Read", "src/my.env")).toBe("allow");
+  });
+});
+
+describe("built-in find allowlist: execution actions (regression: `find . -exec sh` auto-allow)", () => {
+  const config = builtinAutoPermissionConfig();
+  const verdictFor = (command: string) =>
+    classifyPermissionRequest({ toolName: "Bash", input: { command }, riskLevel: "high" }, config);
+
+  test("plain find stays auto-allowed", () => {
+    expect(verdictFor("find . -name '*.test.ts'")?.behavior).toBe("allow");
+    expect(verdictFor("find src -type f -newer README.md")?.behavior).toBe("allow");
+    // Only the trailing word boundary keeps -executable distinct from -exec.
+    expect(verdictFor("find . -type f -executable")?.behavior).toBe("allow");
+  });
+
+  test("find with -exec/-execdir/-ok/-okdir falls through to the dialog", () => {
+    expect(verdictFor("find . -exec sh -c 'touch /tmp/pwned' \\;")).toBeNull();
+    expect(verdictFor("find . -type f -execdir chmod 777 {} +")).toBeNull();
+    expect(verdictFor("find . -ok rm {} \\;")).toBeNull();
+    expect(verdictFor("find . -okdir rm {} \\;")).toBeNull();
+    // A quoted flag still reaches find's parser, so the guard must too.
+    expect(verdictFor("find . '-exec' sh -c 'x' \\;")).toBeNull();
+    // Separators must not rescind the guard: the classifier sees one
+    // command string, whether the separator is quoted or compound.
+    expect(verdictFor("find . -name 'a|b' -exec sh -c 'x' \\;")).toBeNull();
+    expect(verdictFor("find . ; find . -exec sh -c 'x' \\;")).toBeNull();
+  });
+
+  test("find's file-mutating actions fall through to the dialog", () => {
+    expect(verdictFor("find . -name '*.log' -delete")).toBeNull();
+    expect(verdictFor("find . -fprintf /tmp/pwned '%p\\n'")).toBeNull();
+    expect(verdictFor("find . -fls /tmp/pwned")).toBeNull();
+  });
+
+  test("file names that merely contain a flag substring fail safe to the dialog", () => {
+    expect(verdictFor("find . -name 'foo-exec'")).toBeNull();
   });
 });
