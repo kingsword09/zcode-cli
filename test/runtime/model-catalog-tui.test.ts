@@ -3,9 +3,9 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ensureUserConfig, userConfigPath } from "../src/model-access.ts";
-import { applyRefreshedModelsToConfig, modelCatalogCachePath, resolveModelCatalogEndpoint } from "../src/model-catalog-refresh.ts";
-import { readDistributionVersion } from "../src/launcher.ts";
+import { ensureUserConfig, userConfigPath } from "../../src/model-access.ts";
+import { applyRefreshedModelsToConfig, modelCatalogCachePath, resolveModelCatalogEndpoint } from "../../src/model-catalog-refresh.ts";
+import { readDistributionVersion } from "../../src/launcher.ts";
 
 function plainText(text: string): string {
   return text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
@@ -54,7 +54,7 @@ test.skipIf(process.platform === "win32").each([false, true])("native TUI starts
   const terminal = new Bun.Terminal({ cols: 110, rows: 36, name: "xterm-256color",
     data(_terminal, data) { output += decoder.decode(data, { stream: true }); }
   });
-  const child = Bun.spawn([node, join(import.meta.dir, "..", "bin", "zcode.js")], {
+  const child = Bun.spawn([node, join(import.meta.dir, "..", "..", "bin", "zcode.js")], {
     cwd: home, terminal,
     env: { ...process.env, ...env, TERM: "xterm-256color", CI: "0",
       ZCODE_BASE_URL: baseUrl, ZCODE_DISABLE_MODEL_CATALOG_REFRESH: "0", ZCODE_DISABLE_UPDATE_CHECK: "1",
