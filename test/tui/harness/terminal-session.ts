@@ -214,14 +214,19 @@ export class TerminalSession implements AsyncDisposable {
 
   async exit(): Promise<void> {
     if (this.#child.exitCode === null) this.send("/exit\r");
-    const exitCode = await Promise.race([
+    let exitCode = await Promise.race([
       this.#child.exited,
       Bun.sleep(2_000).then(() => undefined)
     ]);
     if (exitCode === undefined && this.#child.exitCode === null) {
       this.#child.kill("SIGKILL");
-      await this.#child.exited;
+      exitCode = await this.#child.exited;
+      this.journal.record("terminal.exit", { exitCode, timedOut: true });
+      throw new Error(`TUI fixture did not exit within 2000ms (exit code ${exitCode}).`);
     }
+    exitCode ??= this.#child.exitCode ?? undefined;
+    this.journal.record("terminal.exit", { exitCode, timedOut: false });
+    if (exitCode !== 0) throw new Error(`TUI fixture exited with code ${String(exitCode)}.`);
   }
 
   async dispose(): Promise<void> {

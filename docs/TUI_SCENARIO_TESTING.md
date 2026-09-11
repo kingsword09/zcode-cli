@@ -63,6 +63,8 @@ Manual mode prints the temporary workspace path before opening the TUI. Enter
 - `test/tui/fixtures/` provides typed `RuntimeAdapter` behavior to the real TUI.
 - `test/tui/runtime/scenario-runtime.ts` maps declared prompt routes to typed
   event, delay, permission, file-write, and response steps.
+- `test/tui/runtime/scenario-http.ts` maps declared MSW routes to real fixture
+  `fetch` calls, request assertions, responses, and exact call counts.
 - `scripts/tui-scenario.ts` exposes automatic and manual execution modes.
 
 A scenario should describe behavior rather than terminal timing. Use
@@ -110,12 +112,23 @@ The first backend is intentionally the portable temporary-directory workspace:
 it exercises the actual filesystem and Git without requiring FUSE/NFS setup.
 It is test isolation, not a security boundary.
 
-Future backends should preserve the same scenario contract:
+Network scenarios use `createScenarioHttpMock()` inside the child fixture.
+Routes declare a unique id, HTTP method, URL, response, and optional exact call
+count and request assertion. Responses support JSON, text, empty bodies,
+latency, and network errors. Unhandled requests and failed assertions are
+recorded and cause `assertSatisfied()` to fail. Use one shared
+`ScenarioRuntimeJournal` for the runtime and HTTP mock so diagnostics preserve
+execution order. This intercepts the fixture's real `fetch`; an MSW server in
+the parent test process cannot intercept child-process requests.
+
+Call `httpMock.start()` before `runTui()`, call `httpMock.assertSatisfied()`
+after it exits, and use `using` or `close()` to restore the process network
+state. Do not allow unhandled requests to reach the public network.
+
+Additional backends should preserve the same scenario contract:
 
 - Mountx may provide an optional in-memory mounted workspace for filesystem
   journaling and fault injection. It must not be treated as a sandbox.
-- MSW should be initialized inside each fixture process with unhandled requests
-  configured as errors. Parent-process interception cannot mock child fetches.
 - just-bash may execute allowlisted shell behavior against the scenario
   workspace. It should not expose unrestricted host commands or native Git.
 - Scenarios requiring arbitrary binaries, Git hooks, or untrusted code belong
