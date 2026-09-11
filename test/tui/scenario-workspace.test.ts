@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 
 import { readWorkspaceDiff } from "../../packages/zcode-tui/src/workspace-diff.ts";
-import { ScenarioWorkspace } from "./harness/scenario-workspace.ts";
+import {
+  ScenarioWorkspace,
+  type ScenarioWorkspaceBackend
+} from "./harness/scenario-workspace.ts";
 
 test.skipIf(process.platform === "win32")("scenario workspace exposes real writes to Git and resets them", async () => {
   await using workspace = await ScenarioWorkspace.create({
@@ -30,4 +33,25 @@ test.skipIf(process.platform === "win32")("scenario workspace exposes real write
 test("scenario workspace rejects paths outside its isolated root", async () => {
   await using workspace = await ScenarioWorkspace.create();
   await expect(workspace.write("../escaped.txt", "not allowed\n")).rejects.toThrow("escapes the workspace");
+});
+
+test("scenario workspace mounts and disposes an optional backend exactly once", async () => {
+  let mountedDirectory = "";
+  let disposeCalls = 0;
+  const backend: ScenarioWorkspaceBackend = {
+    name: "fixture-backend",
+    async mount(directory) {
+      mountedDirectory = directory;
+    },
+    async dispose() {
+      disposeCalls += 1;
+    }
+  };
+  const workspace = await ScenarioWorkspace.create({ backend });
+
+  expect(mountedDirectory).toBe(workspace.directory);
+  expect(workspace.backendName).toBe("fixture-backend");
+  await workspace.dispose();
+  await workspace.dispose();
+  expect(disposeCalls).toBe(1);
 });

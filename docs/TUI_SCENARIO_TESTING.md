@@ -44,6 +44,11 @@ bun run test:tui-scenario permission-request-queue
 # Open the same scenario for manual interaction.
 bun run test:tui:manual permission-request-queue
 
+# Exercise an allowlisted shell against the normal temporary workspace.
+bun run test:tui:manual allowlisted-shell
+
+# Opt into a kernel-mounted in-memory workspace when Mountx supports the host.
+bun run test:tui:manual allowlisted-shell --workspace-backend=mountx
 ```
 
 Manual mode prints the temporary workspace path before opening the TUI. Enter
@@ -65,6 +70,10 @@ Manual mode prints the temporary workspace path before opening the TUI. Enter
   event, delay, permission, file-write, and response steps.
 - `test/tui/runtime/scenario-http.ts` maps declared MSW routes to real fixture
   `fetch` calls, request assertions, responses, and exact call counts.
+- `test/tui/runtime/scenario-shell.ts` runs bounded, allowlisted just-bash
+  commands against the selected scenario workspace.
+- `test/tui/harness/mountx-workspace-backend.ts` provides an explicitly
+  requested in-memory kernel mount when the host has a usable transport.
 - `scripts/tui-scenario.ts` exposes automatic and manual execution modes.
 
 A scenario should describe behavior rather than terminal timing. Use
@@ -125,14 +134,41 @@ Call `httpMock.start()` before `runTui()`, call `httpMock.assertSatisfied()`
 after it exits, and use `using` or `close()` to restore the process network
 state. Do not allow unhandled requests to reach the public network.
 
-Additional backends should preserve the same scenario contract:
+Shell scenarios use `createScenarioShell()` with just-bash's hardened execution
+limits, a fixed command allowlist, no network, no JavaScript or Python runtime,
+and a `ReadWriteFs` rooted at the scenario workspace. Writes therefore remain
+visible to the TUI's real Git diff. Native Git is deliberately absent from the
+shell; Git assertions continue through `ScenarioWorkspace.git()` with the
+isolated configuration described above. just-bash executes in the fixture
+process and is not a VM or container security boundary.
 
-- Mountx may provide an optional in-memory mounted workspace for filesystem
-  journaling and fault injection. It must not be treated as a sandbox.
-- just-bash may execute allowlisted shell behavior against the scenario
-  workspace. It should not expose unrestricted host commands or native Git.
-- Scenarios requiring arbitrary binaries, Git hooks, or untrusted code belong
-  in a container backend.
+The default workspace backend remains a normal temporary directory because it
+is portable and exercises the fewest layers. `--workspace-backend=mountx`
+replaces only that directory with Mountx's in-memory driver mounted through the
+host's selected transport. `MountxWorkspaceBackend` also accepts a custom
+Mountx driver for operation journaling or deterministic fault injection. The
+backend is opt-in because Mountx is alpha, requires OS mount support, and
+exposes the mount to other host processes. It is not a sandbox.
+The gated integration check can be run explicitly:
+
+```bash
+ZCODE_TEST_MOUNTX=1 bun test test/tui/scenario-mountx.test.ts
+```
+
+The completed backend boundary is:
+
+| Need | Backend |
+| --- | --- |
+| Runtime responses and permission ordering | Typed scenario runtime |
+| Deterministic `fetch` behavior | Strict child-process MSW |
+| Common shell syntax and workspace writes | Allowlisted just-bash |
+| Portable filesystem and real Git behavior | Temporary disk workspace |
+| Kernel mount behavior or filesystem-driver faults | Opt-in Mountx workspace |
+| Arbitrary binaries, Git hooks, or untrusted code | External container/VM |
+
+Do not add host command passthrough to just-bash or treat Mountx as containment.
+A scenario that crosses those constraints must move to an external
+container/VM runtime test instead of weakening the hermetic TUI suite.
 
 ## Adding a scenario
 
