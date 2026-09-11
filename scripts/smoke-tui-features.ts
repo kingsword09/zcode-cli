@@ -121,6 +121,9 @@ try {
   await sendAndWait("/help\r", "long help", /Use \/help <command> for details/i);
   await sendAndWait("\x1b[Z", "edit mode shortcut", /◈ alpha\/model ─ ◉ edit ─ ⚡ low/i);
   await Bun.sleep(1_100);
+  // The auto client mode sits between edit and yolo in the Shift+Tab cycle:
+  // edit -> auto (classifier overlay, footer shows auto) -> yolo -> plan.
+  await sendAndWait("\x1b[Z", "auto mode shortcut", /◈ alpha\/model ─ ◉ auto ─ ⚡ low/i);
   await sendAndWait("\x1b[Z", "yolo mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i);
   await sendAndWait("\x1b[Z", "plan mode shortcut", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i);
   await sendAndWait("\x0e", "model shortcut", /◈ beta\/model ─ ◉ plan ─ ⚡ low/i);
@@ -564,6 +567,7 @@ if (plain.includes("feature-secret-api-key") || plain.includes("override-fixture
 let stateOffset = 0;
 for (const [label, pattern] of [
   ["edit mode shortcut", /◈ alpha\/model ─ ◉ edit ─ ⚡ low/i],
+  ["auto mode shortcut", /◈ alpha\/model ─ ◉ auto ─ ⚡ low/i],
   ["yolo mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i],
   ["plan mode shortcut", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i],
   ["model shortcut preserving plan", /◈ beta\/model ─ ◉ plan ─ ⚡ low/i],
