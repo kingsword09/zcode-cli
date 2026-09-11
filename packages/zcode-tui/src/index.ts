@@ -115,6 +115,7 @@ import {
   type UserQuestion
 } from "./interactions.ts";
 import { PermissionPreview } from "./permission-view.ts";
+import { PermissionRequestQueue } from "./permission-request-queue.ts";
 import { createRuntimePluginReferenceLister } from "./plugin-references.ts";
 import {
   formatWorkflowPanel,
@@ -658,6 +659,7 @@ class ZCodeTui {
   private workflowPanel?: Record<string, unknown>;
   private workflowView?: Markdown;
   private workflowRefreshInFlight = false;
+  private readonly permissionRequests = new PermissionRequestQueue();
   private choiceDepth = 0;
   private settingSwitchInFlight = false;
   private fullscreenWelcomeVisible = true;
@@ -3268,12 +3270,18 @@ class ZCodeTui {
     this.ui.requestRender();
   }
 
-  private async requestPermission(requestValue: unknown, context?: unknown): Promise<unknown> {
-    const request = isRecord(requestValue) ? requestValue : {};
+  private requestPermission(requestValue: unknown, context?: unknown): Promise<unknown> {
     const contextRecord = isRecord(context) ? context : undefined;
     const signal = contextRecord?.abortSignal instanceof AbortSignal
       ? contextRecord.abortSignal
       : this.turnAbortController?.signal;
+    return this.permissionRequests.run(
+      () => this.requestPermissionUnqueued(requestValue, signal)
+    );
+  }
+
+  private async requestPermissionUnqueued(requestValue: unknown, signal?: AbortSignal): Promise<unknown> {
+    const request = isRecord(requestValue) ? requestValue : {};
     const toolName = asString(request.toolName) ?? "tool";
     const asksUserQuestion = isAskUserQuestionTool(toolName);
     const toolCallId = asString(request.toolCallId) ?? asString(request.toolUseId) ?? asString(request.callId);
@@ -5145,7 +5153,7 @@ class ZCodeTui {
       return await choose(this.ui, this.choiceHost, this.theme, options);
     } finally {
       this.choiceDepth = Math.max(0, this.choiceDepth - 1);
-      this.focusEditor();
+      if (this.choiceDepth === 0) this.focusEditor();
       this.ui.requestRender();
     }
   }
@@ -5156,7 +5164,7 @@ class ZCodeTui {
       return await promptText(this.ui, this.choiceHost, this.theme, options);
     } finally {
       this.choiceDepth = Math.max(0, this.choiceDepth - 1);
-      this.focusEditor();
+      if (this.choiceDepth === 0) this.focusEditor();
       this.ui.requestRender();
     }
   }
