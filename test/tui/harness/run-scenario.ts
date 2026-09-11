@@ -11,7 +11,14 @@ export async function runAutomatedTuiScenario(scenario: TuiScenario): Promise<vo
     command: [process.execPath, scenario.fixture],
     workspace
   });
-  await scenario.run(session, workspace);
+  try {
+    await scenario.run(session, workspace);
+  } catch (error) {
+    const runtimeJournal = await workspace.readRuntimeJournal();
+    if (!runtimeJournal) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}\n\nRuntime journal:\n${runtimeJournal.trimEnd()}`, { cause: error });
+  }
   await session.exit();
 }
 

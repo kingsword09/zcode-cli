@@ -24,6 +24,7 @@ export class ScenarioWorkspace implements AsyncDisposable {
   readonly gitDirectory: string;
   readonly home: string;
   readonly journal: ScenarioJournal;
+  readonly runtimeJournalPath: string;
 
   private constructor(root: string, journal: ScenarioJournal) {
     this.root = root;
@@ -31,6 +32,7 @@ export class ScenarioWorkspace implements AsyncDisposable {
     this.gitDirectory = join(root, "git");
     this.home = join(root, "home");
     this.journal = journal;
+    this.runtimeJournalPath = join(root, "runtime.jsonl");
   }
 
   static async create(options: ScenarioWorkspaceOptions = {}): Promise<ScenarioWorkspace> {
@@ -74,7 +76,8 @@ export class ScenarioWorkspace implements AsyncDisposable {
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_PAGER: "cat",
       GIT_TERMINAL_PROMPT: "0",
-      GIT_OPTIONAL_LOCKS: "0"
+      GIT_OPTIONAL_LOCKS: "0",
+      ZCODE_TUI_SCENARIO_RUNTIME_JOURNAL: this.runtimeJournalPath
     };
   }
 
@@ -90,6 +93,10 @@ export class ScenarioWorkspace implements AsyncDisposable {
 
   async read(path: string): Promise<string> {
     return await readFile(this.resolvePath(path), "utf8");
+  }
+
+  async readRuntimeJournal(): Promise<string> {
+    return await readFile(this.runtimeJournalPath, "utf8").catch(() => "");
   }
 
   async git(args: string[], cwd = this.directory): Promise<GitCommandResult> {

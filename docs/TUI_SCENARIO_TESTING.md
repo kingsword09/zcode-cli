@@ -61,12 +61,22 @@ Manual mode prints the temporary workspace path before opening the TUI. Enter
   tree with a separate real Git directory and deterministic configuration.
 - `test/tui/scenarios/` declares user-visible actions and assertions.
 - `test/tui/fixtures/` provides typed `RuntimeAdapter` behavior to the real TUI.
+- `test/tui/runtime/scenario-runtime.ts` maps declared prompt routes to typed
+  event, delay, permission, file-write, and response steps.
 - `scripts/tui-scenario.ts` exposes automatic and manual execution modes.
 
 A scenario should describe behavior rather than terminal timing. Use
 `waitForScreen()` or `sendAndWait()` to synchronize on visible state; do not
 add fixed sleeps except for a short render settle. Use `waitForHistory()` only
 for transient output that is intentionally no longer visible.
+
+Runtime fixtures should use `createScenarioRuntime()` rather than implementing
+`submitPrompt()` directly. Every turn must have a unique id and end in one
+`respond` step. Unknown input fails unless the fixture declares an
+`unmatchedResponse`. Permission batches explicitly choose parallel or
+sequential execution, delays observe the turn abort signal, and writes cannot
+escape the scenario workspace. Runtime steps are also written to
+`runtime.jsonl`; automatic failures include that journal in their diagnostics.
 
 ## Isolation and Git
 
