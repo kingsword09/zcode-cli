@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { clientModes, initialClientMode, nextClientMode, nextMode, normalizedClientMode, normalizedMode } from "../packages/zcode-tui/src/shortcuts.ts";
+import { clientModes, initialClientMode, nextClientMode, nextMode, normalizedClientMode, normalizedMode, runtimeResultClientMode } from "../packages/zcode-tui/src/shortcuts.ts";
 import { shouldAutoClassify } from "../packages/zcode-tui/src/auto-permissions.ts";
 
 describe("auto client mode", () => {
@@ -28,6 +28,13 @@ describe("auto client mode", () => {
     expect(initialClientMode(undefined, undefined)).toBe("build");
   });
 
+  test("env auto over a runtime genuinely in reserved auto is rejected, not re-labeled", () => {
+    // The overlay is documented to ride only on a build runtime; a runtime in
+    // its reserved `auto` denies every prompt, so the overlay must stay off.
+    // (Regression: normalization first silently re-labeled it "build".)
+    expect(initialClientMode("auto", "auto")).toBe("build");
+  });
+
   test("client mode validation accepts auto", () => {
     expect(normalizedClientMode("auto")).toBe("auto");
     expect(normalizedClientMode("nope")).toBe("build");
@@ -39,5 +46,27 @@ describe("auto client mode", () => {
     expect(shouldAutoClassify("yolo", "Bash")).toBe(false);
     expect(shouldAutoClassify("auto", "AskUserQuestion")).toBe(false);
     expect(shouldAutoClassify("auto", "ExitPlanMode")).toBe(false);
+  });
+});
+
+describe("runtime-confirmed mode results (regression: typed /mode re-armed the classifier)", () => {
+  test("reserved auto from the runtime rejects instead of re-entering client mode", () => {
+    // Overlay was active (mode "auto"); a typed `/mode auto` confirms the
+    // runtime's reserved value and exits the overlay. The confirmed result
+    // must not leave the client mode at "auto" — the classifier gate reads
+    // the mode alone.
+    expect(runtimeResultClientMode("auto", "auto")).toBe("build");
+    expect(runtimeResultClientMode("auto", "build")).toBe("build");
+  });
+
+  test("genuine confirmed values pass through; missing results keep the normalized current", () => {
+    expect(runtimeResultClientMode("edit", "auto")).toBe("edit");
+    expect(runtimeResultClientMode("yolo", "plan")).toBe("yolo");
+    expect(runtimeResultClientMode(undefined, "yolo")).toBe("yolo");
+    expect(runtimeResultClientMode("nope", "edit")).toBe("edit");
+  });
+
+  test("classifier gate cannot be re-armed by a runtime-confirmed reserved auto", () => {
+    expect(shouldAutoClassify(runtimeResultClientMode("auto", "auto"), "Bash")).toBe(false);
   });
 });

@@ -24,6 +24,16 @@ export function normalizedMode(mode?: string, fallback: Mode = "build"): Mode {
   return modes.includes(candidate) ? candidate : fallback;
 }
 
+// Client-side acceptance of a runtime-confirmed mode result (typed /mode
+// answers, runtime state echoes, setMode confirmations). The runtime owns its
+// enum and reserves `auto`, so confirmed values must normalize through the
+// runtime-only validator above: letting the reserved value pass
+// normalizedClientMode would leave the client mode at "auto" with the overlay
+// exited, and the classifier gate reads the mode alone.
+export function runtimeResultClientMode(resultMode: string | undefined, currentMode: ClientMode): ClientMode {
+  return normalizedMode(resultMode, normalizedMode(currentMode));
+}
+
 export function nextMode(currentMode?: string): Mode {
   const currentIndex = modes.indexOf(normalizedMode(currentMode));
   return modes[(currentIndex + 1) % modes.length] ?? modes[0];
@@ -41,6 +51,10 @@ export function nextClientMode(currentMode?: string): ClientMode {
 // modes are the only ones where client-side classification is meaningful).
 export function initialClientMode(runtimeMode: string | undefined, envClientMode: string | undefined): ClientMode {
   if (envClientMode === "auto") {
+    // Reject a runtime genuinely in its reserved `auto` before normalizing:
+    // normalization would silently re-label it "build" and switch the overlay
+    // on over a deny-everything runtime.
+    if (runtimeMode === "auto") return normalizedMode(runtimeMode)
     return normalizedMode(runtimeMode) === "build" ? "auto" : normalizedMode(runtimeMode)
   }
   return normalizedMode(runtimeMode)

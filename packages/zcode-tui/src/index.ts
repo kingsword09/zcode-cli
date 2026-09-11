@@ -230,6 +230,7 @@ import {
   nextPickerValue,
   normalizedClientMode,
   normalizedMode,
+  runtimeResultClientMode,
   settingTargetForCommand,
   transcriptPageDirection,
   type ClientMode,
@@ -2130,13 +2131,17 @@ class ZCodeTui {
     if (appliesToSetting(settingTarget, "mode") && typeof result.mode === "string") {
       if (settingTarget === "mode") {
         // An explicit typed /mode command executed in the runtime: the runtime
-        // owns its enum, so any confirmed value exits the auto overlay.
+        // owns its enum, so any confirmed value exits the auto overlay. The
+        // confirmed value normalizes through the runtime-only validator —
+        // the reserved `auto` must not re-enter client mode here, or the
+        // classifier gate (which reads the mode alone) would stay armed
+        // after the overlay exited.
         this.autoModeActive = false;
-        this.mode = normalizedClientMode(result.mode, this.mode);
+        this.mode = runtimeResultClientMode(result.mode, this.mode);
       } else if (!this.autoModeActive) {
         // Runtime state echoes while the overlay is active describe the build
         // mode the overlay forces — they must not clear the overlay.
-        this.mode = normalizedClientMode(result.mode, this.mode);
+        this.mode = runtimeResultClientMode(result.mode, this.mode);
       }
     }
     if (appliesToSetting(settingTarget, "model") && result.model !== undefined) {
@@ -4498,7 +4503,7 @@ class ZCodeTui {
       this.autoModeActive = false;
       const result = await this.options.setMode(requestedMode);
       const returnedMode = isRecord(result) ? asString(result.mode) : asString(result);
-      this.mode = normalizedClientMode(returnedMode, requestedMode);
+      this.mode = runtimeResultClientMode(returnedMode, requestedMode);
       this.updateMetadata();
     } catch (error) {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
