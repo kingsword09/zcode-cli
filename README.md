@@ -33,9 +33,22 @@ ZCode desktop app is installed it can import the desktop provider settings
 (credentials stay behind a fresh sign-in, like a browser profile import).
 Reopen it anytime with `/setup`; press Esc to skip.
 
+## Host integration
+
+`zcode-app-cli` is designed to run as a normal child process of a terminal host
+or agent orchestrator. Hosts such as Herdr and Orca can launch the same
+published `zcode` command without depending on private runtime files. The
+launcher uses the host terminal without inserting a second PTY, forwards
+cancellation signals, preserves the runtime exit status, and exposes a small
+set of environment overrides.
+
+See [Host integration](./docs/HOST_INTEGRATION.md) for the versioned contract,
+Node.js example, terminal/PTY requirements, and compatibility rules.
+
 ## Table of contents
 
 - [Quick start](#quick-start)
+- [Host integration](#host-integration)
 - [Install and update](#install-and-update)
 - [Architecture](#architecture)
 - [Features](#features)
