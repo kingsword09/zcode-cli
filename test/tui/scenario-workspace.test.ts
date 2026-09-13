@@ -1,3 +1,5 @@
+import { access } from "node:fs/promises";
+
 import { expect, test } from "bun:test";
 
 import { readWorkspaceDiff } from "../../packages/zcode-tui/src/workspace-diff.ts";
@@ -5,6 +7,7 @@ import {
   ScenarioWorkspace,
   type ScenarioWorkspaceBackend
 } from "./harness/scenario-workspace.ts";
+import { ScenarioJournal } from "./harness/scenario-journal.ts";
 
 test.skipIf(process.platform === "win32")("scenario workspace exposes real writes to Git and resets them", async () => {
   await using workspace = await ScenarioWorkspace.create({
@@ -54,4 +57,24 @@ test("scenario workspace mounts and disposes an optional backend exactly once", 
   await workspace.dispose();
   await workspace.dispose();
   expect(disposeCalls).toBe(1);
+});
+
+test("scenario workspace removes a partially initialized root when setup fails", async () => {
+  const journal = new ScenarioJournal();
+
+  await expect(ScenarioWorkspace.create({
+    journal,
+    files: { "../escaped.txt": "not allowed\n" }
+  })).rejects.toThrow("escapes the workspace");
+
+  const createEntry = journal.entries().find((entry) => entry.channel === "workspace.create");
+  expect(createEntry).toBeDefined();
+  await expect(access(String((createEntry?.detail as { root: string }).root))).rejects.toThrow();
+  expect(journal.entries().at(-1)?.channel).toBe("workspace.dispose");
+});
+
+test("scenario workspace disposal is idempotent", async () => {
+  const workspace = await ScenarioWorkspace.create();
+  await workspace.dispose();
+  await expect(workspace.dispose()).resolves.toBeUndefined();
 });

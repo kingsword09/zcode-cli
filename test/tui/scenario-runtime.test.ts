@@ -180,3 +180,84 @@ test("scenario runtime rejects unmatched input, unsafe writes, and invalid defin
     }]
   })).toThrow('must end with exactly one respond step');
 });
+
+test("scenario runtime covers fallback responses and missing callbacks", async () => {
+  const fallback = createScenarioRuntime({
+    unmatchedResponse: (context) => `fallback: ${String(context.input)}`,
+    turns: [{
+      id: "known",
+      match: "known",
+      steps: [{ type: "respond", response: "known" }]
+    }]
+  });
+  await expect(fallback.submitPrompt("unknown", {})).resolves.toEqual({
+    response: "fallback: unknown"
+  });
+
+  const missingPermissionCallback = createScenarioRuntime({
+    turns: [{
+      id: "permissions",
+      match: "permissions",
+      steps: [{
+        type: "permissions",
+        requests: [{ id: "permission" }],
+        saveAs: "decisions"
+      }, {
+        type: "respond",
+        response: "unreachable"
+      }]
+    }]
+  });
+  await expect(missingPermissionCallback.submitPrompt("permissions", {}))
+    .rejects.toThrow("permission callback is unavailable");
+
+  expect(() => createScenarioRuntime({
+    turns: [{
+      id: "invalid-delay",
+      match: "invalid-delay",
+      steps: [{ type: "delay", milliseconds: -1 }, { type: "respond", response: "never" }]
+    }]
+  })).toThrow("has an invalid delay");
+
+  expect(() => createScenarioRuntime({
+    turns: [{
+      id: "duplicate",
+      match: "first",
+      steps: [{ type: "respond", response: "first" }]
+    }, {
+      id: "duplicate",
+      match: "second",
+      steps: [{ type: "respond", response: "second" }]
+    }]
+  })).toThrow("turn id must be unique");
+});
+
+test("scenario runtime rejects pre-aborted turns and writes without a workspace", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("already stopped"));
+  const runtime = createScenarioRuntime({
+    turns: [{
+      id: "aborted",
+      match: "aborted",
+      steps: [{ type: "respond", response: "unreachable" }]
+    }]
+  });
+  await expect(runtime.submitPrompt("aborted", { abortSignal: controller.signal }))
+    .rejects.toThrow("already stopped");
+
+  const missingWorkspace = createScenarioRuntime({
+    turns: [{
+      id: "write",
+      match: "write",
+      steps: [{
+        type: "writeFiles",
+        files: { "result.txt": "unreachable" }
+      }, {
+        type: "respond",
+        response: "unreachable"
+      }]
+    }]
+  });
+  await expect(missingWorkspace.submitPrompt("write", {}))
+    .rejects.toThrow("without a workspaceDirectory");
+});

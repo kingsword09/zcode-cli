@@ -1,3 +1,6 @@
+import { symlink } from "node:fs/promises";
+import { join } from "node:path";
+
 import { expect, test } from "bun:test";
 
 import { ScenarioWorkspace } from "./harness/scenario-workspace.ts";
@@ -49,6 +52,33 @@ test("scenario shell supports expected failures, cancellation, and bounded execu
   await expect(shell.exec("echo unreachable", {
     signal: controller.signal
   })).rejects.toThrow();
+});
+
+test("scenario shell blocks symlink traversal and oversized output", async () => {
+  await using workspace = await ScenarioWorkspace.create();
+  await symlink("/etc/passwd", join(workspace.directory, "host-file"));
+
+  const shell = createScenarioShell({ workspaceDirectory: workspace.directory });
+
+  const symlinkRead = await shell.exec("cat host-file", { expectedExitCode: 1 });
+  expect(symlinkRead.stderr).toContain("No such file");
+
+  const boundedShell = createScenarioShell({
+    executionLimits: { maxOutputSize: 16 },
+    workspaceDirectory: workspace.directory
+  });
+  await expect(boundedShell.exec("printf 12345678901234567890")).rejects.toThrow(
+    "expected exit 0, received 126"
+  );
+});
+
+test("scenario shell rejects an empty command allowlist", async () => {
+  await using workspace = await ScenarioWorkspace.create();
+
+  expect(() => createScenarioShell({
+    commands: [],
+    workspaceDirectory: workspace.directory
+  })).toThrow("requires at least one allowed command");
 });
 
 test("scenario shell rejects ambiguous journals and invalid exit expectations", async () => {

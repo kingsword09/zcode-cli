@@ -157,3 +157,107 @@ test("scenario HTTP mock rejects ambiguous definitions", () => {
     }]
   })).toThrow("invalid expectedCalls");
 });
+
+test("scenario HTTP mock rejects duplicate starts and allows close before start", () => {
+  using mock = createScenarioHttpMock({ routes: [] });
+
+  expect(() => mock.close()).not.toThrow();
+  mock.start();
+  expect(() => mock.start()).toThrow("already started");
+  expect(() => mock.close()).not.toThrow();
+  expect(() => mock.close()).not.toThrow();
+});
+
+test("scenario HTTP mock records response validation failures", async () => {
+  using mock = createScenarioHttpMock({
+    routes: [{
+      id: "invalid-delay",
+      method: "GET",
+      url: "https://scenario.invalid/invalid-delay",
+      response: {
+        type: "text",
+        body: "unreachable",
+        delayMilliseconds: Number.NaN
+      }
+    }]
+  });
+  mock.start();
+
+  await expect(fetch("https://scenario.invalid/invalid-delay")).rejects.toThrow("Failed to fetch");
+  expect(mock.journal.entries().at(-1)).toMatchObject({
+    kind: "http.error",
+    detail: { error: "Scenario HTTP response has an invalid delay: NaN" }
+  });
+  expect(() => mock.assertSatisfied()).toThrow("invalid delay");
+});
+
+test("scenario HTTP mock records route assertion failures", async () => {
+  using mock = createScenarioHttpMock({
+    routes: [{
+      id: "assertion",
+      method: "GET",
+      url: "https://scenario.invalid/assertion",
+      assert() {
+        throw new Error("request did not match fixture");
+      },
+      response: { type: "empty", status: 204 }
+    }]
+  });
+  mock.start();
+
+  await expect(fetch("https://scenario.invalid/assertion")).rejects.toThrow("Failed to fetch");
+  expect(mock.journal.entries().at(-1)).toMatchObject({
+    kind: "http.error",
+    detail: { error: "request did not match fixture" }
+  });
+  expect(() => mock.assertSatisfied()).toThrow("request did not match fixture");
+});
+
+test("scenario HTTP mock truncates request bodies and redacts sensitive headers", async () => {
+  const body = "x".repeat(16_385);
+  using mock = createScenarioHttpMock({
+    routes: [{
+      id: "large-request",
+      method: "POST",
+      url: "https://scenario.invalid/large-request",
+      expectedCalls: 1,
+      async assert(context) {
+        expect((await context.text()).length).toBe(body.length);
+      },
+      response: {
+        type: "text",
+        body: "accepted",
+        delayMilliseconds: 1
+      }
+    }]
+  });
+  mock.start();
+
+  const response = await fetch("https://scenario.invalid/large-request", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer secret",
+      cookie: "session=secret",
+      "x-api-key": "secret"
+    },
+    body
+  });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe("accepted");
+  mock.assertSatisfied();
+
+  const requestEntry = mock.journal.entries().find((entry) => entry.kind === "http.request");
+  expect(requestEntry).toMatchObject({
+    detail: {
+      bodyTruncated: true,
+      headers: {
+        authorization: "[redacted]",
+        cookie: "[redacted]",
+        "x-api-key": "[redacted]"
+      }
+    }
+  });
+  const recordedBody = String((requestEntry?.detail as { body: string }).body);
+  expect(recordedBody).toHaveLength(16_385);
+  expect(recordedBody.endsWith("…")).toBe(true);
+});
