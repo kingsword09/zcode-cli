@@ -41,6 +41,14 @@ jobs:
       - name: Build and test
         run: bun run release:build
 
+      - name: Run Mountx integration when a transport is available
+        run: |
+          if bun -e 'import { probeScenarioMountx } from "./test/tui/harness/mountx-workspace-backend.ts"; process.exit((await probeScenarioMountx()).chosen ? 0 : 1)'; then
+            ZCODE_TEST_MOUNTX=1 bun test test/tui/scenario-mountx.test.ts
+          else
+            echo "Mountx integration skipped: no usable host transport."
+          fi
+
       - name: Pack and install-test
         run: bun run release:pack
 
