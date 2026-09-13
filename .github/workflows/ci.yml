@@ -41,13 +41,15 @@ jobs:
       - name: Build and test
         run: bun run release:build
 
-      - name: Run Mountx integration when a transport is available
-        run: |
-          if bun -e 'import { probeScenarioMountx } from "./test/tui/harness/mountx-workspace-backend.ts"; process.exit((await probeScenarioMountx()).chosen ? 0 : 1)'; then
-            ZCODE_TEST_MOUNTX=1 bun test test/tui/scenario-mountx.test.ts
-          else
-            echo "Mountx integration skipped: no usable host transport."
-          fi
+      # Platform probing only checks that a transport is theoretically
+      # supported. It cannot prove that this hosted runner has the required
+      # kernel capability, helper, and mount privileges. Keep the real mount
+      # test opt-in for a runner explicitly configured for Mountx; otherwise
+      # the regular scenario test still covers the probe and skip behavior.
+      - name: Run Mountx integration on an explicitly configured runner
+        if: ${{ vars.ZCODE_TEST_MOUNTX == '1' }}
+        timeout-minutes: 3
+        run: timeout --foreground 120s env ZCODE_TEST_MOUNTX=1 bun test test/tui/scenario-mountx.test.ts
 
       - name: Pack and install-test
         run: bun run release:pack

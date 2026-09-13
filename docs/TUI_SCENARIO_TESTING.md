@@ -6,23 +6,32 @@ can be run by CI or opened interactively for visual inspection.
 
 ## Test groups
 
-The project has three execution groups based on cost and environment:
+The project has four execution layers based on cost and environment:
 
 ```bash
-# In-process unit, component, and lightweight integration tests.
-bun run test:fast
+# In-process application and pure unit tests.
+bun run test:unit
+
+# In-process scenario harness components (no PTY or child TUI).
+bun run test:tui:component
 
 # Hermetic PTY scenarios with a fixture runtime.
+bun run test:tui:e2e
+
+# Tests requiring a host kernel transport and mount privileges.
+ZCODE_TEST_MOUNTX=1 bun run test:tui:host
+
+# Run component and PTY TUI layers (the default portable TUI suite).
 bun run test:tui
 
 # Tests that require vendor/zcode.cjs, Node, sockets, or local networking.
 bun run test:runtime
 
-# Run the three groups in order.
+# Run the portable layers and runtime integration in order.
 bun run test:all
 ```
 
-`bun run test` intentionally aliases the fast group for normal development.
+`bun run test` intentionally aliases the unit group for normal development.
 The built-in `bun test` command still discovers every `*.test.ts` recursively,
 so it behaves like the complete suite and requires a synchronized runtime.
 Run `bun run sync:local` first when testing against an installed macOS App. In
@@ -35,8 +44,17 @@ paths below the platform limit.
 # List TUI scenarios.
 bun run test:tui-scenario --list
 
-# Run all TUI scenarios automatically.
+# Run all portable TUI scenarios automatically.
 bun run test:tui
+
+# Run only the in-process scenario harness tests.
+bun run test:tui:component
+
+# Run only the real PTY TUI scenarios.
+bun run test:tui:e2e
+
+# Run Mountx only on a runner with a configured transport.
+ZCODE_TEST_MOUNTX=1 bun run test:tui:host
 
 # Run one scenario automatically.
 bun run test:tui-scenario permission-request-queue
