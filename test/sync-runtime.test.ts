@@ -694,6 +694,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain('$zSpawn.status!=="async_launched"&&$zSpawn.status!=="backgrounded"');
     expect(patched).toContain('status:$zStatus,taskType:"local_agent",type:"local_agent"');
     expect(patched).toContain('loadSessionContextMessages:a(async()=>await e.sessionStore.messages({sessionID:e.sessionId}),"loadSessionContextMessages")');
+    expect(patched).toContain('role:"agent",model:{providerId:r.info.providerID,modelId:r.info.modelID}');
     expect(patched).not.toContain("$zRuntimeProjectionBridge.loadSessionContextMessages?.()");
     expect(patched).not.toContain("e.loadSessionTranscript?.()");
     expect(patched).toContain("E.readSessionUsage=async()=>await(await S()).readSessionUsage?.()??null");
@@ -740,6 +741,9 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("promoteQueuedInput:g.promoteQueuedInput");
     expect(patched).toContain("listSkills:g.listSkills");
     expect(patched).toContain("setMode:g.setMode");
+    expect(patched).toContain("readSessionModel:g.readSessionModel");
+    expect(patched).toContain('type:"runtime/model_selection"');
+    expect(patched).toContain('modelRef:String(e)');
     expect(patched).toContain("subscribeSessionEvents:g.subscribeSessionEvents");
     expect(patched).toContain("sendBackgroundTaskMessage:g.sendBackgroundTaskMessage");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
@@ -1260,6 +1264,54 @@ describe("runtime synchronization", () => {
     )).toThrow(/active-turn steer delivery anchor missing/);
   });
 
+  test("persists transient model switches through the runtime session store", async () => {
+    const runtime = [
+      "function R(e,t){return f(e,{rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}",
+      "async function L(e){if(!e.sessionStore)return[];let t=await e.sessionStore.messages({sessionID:e.sessionId});return p(t)}",
+      'function p(e){let t=[];for(let r of e){if(r.info.role==="user"){let l=r.text;t.push({content:l,role:"user"});continue}let n=[],s=[],u=r.text;t.push({content:u,...s.length>0?{parts:s}:{},role:"agent"})}return t}',
+      "function c(e,t){if(t.targetMessageId)return O(e,[t.targetMessageId]);let r=P(e,t.targetCheckpointId);return r?[r]:[]}",
+      "E.sendInput=async(A,$)=>{let c=t.runtime.getActiveTurnInfo();if(c)return t.runtime.steerTurn({commandKind:$?.commandKind,inputId:$?.inputId,queryId:$?.queryId,expectedTurnId:$?.expectedTurnId,input:A});return Kvt(await S(),D,O1(t))},",
+      'listSkills:k(()=>H(e),"listSkills"),',
+      "E.recallPreviousInput=async A=>await(await S()).recallPreviousInputHistory?.(A)??null,",
+      "CVr(E,S,r);",
+      "return c({recallPreviousInput:g.recallPreviousInput,sendInput:g.sendInput,submitPrompt:g})"
+    ].join("").replace(
+      "E.sendInput",
+      'loadSessionTranscript:a(async()=>await dUr({sessionId:e.sessionId,sessionStore:e.sessionStore}),"loadSessionTranscript"),readTodos:E.sendInput'
+    );
+    const patched = patchRuntimeTuiBridge(runtime);
+    const start = patched.indexOf("E.setTransientModel=async");
+    const end = patched.indexOf(",E.readSessionModel=", start);
+    const bridge: Record<string, unknown> = {};
+    const saved: unknown[] = [];
+    const setTransientModel = new Function(
+      "E",
+      "S",
+      `${patched.slice(start, end)};return E.setTransientModel;`
+    )(
+      bridge,
+      async () => ({
+        sessionId: "sess_model_switch",
+        setModel: async () => ({ model: "zai/glm-5.3-flash", thoughtLevel: "high" }),
+        runtime: {
+          getModelRef: () => ({ providerId: "zai", modelId: "glm-5.3-flash" }),
+          sessionStore: { saveSessionEntry: async (entry: unknown) => saved.push(entry) }
+        }
+      })
+    ) as (model: string) => Promise<unknown>;
+
+    await setTransientModel("zai/glm-5.3-flash");
+    expect(saved[0]).toMatchObject({
+      sessionID: "sess_model_switch",
+      type: "runtime/model_selection",
+      data: {
+        modelRef: "zai/glm-5.3-flash",
+        providerId: "zai",
+        modelId: "glm-5.3-flash"
+      }
+    });
+  });
+
   test("upgrades an already-patched runtime that lacks the transient model bridge", () => {
     // Simulate a runtime patched by an older patchRuntimeTuiBridge: the
     // fixture above fully patched (minus setTransientModel, which did not
@@ -1283,7 +1335,7 @@ describe("runtime synchronization", () => {
     // injections to model an older patch generation.
     const fullyPatched = patchRuntimeTuiBridge(runtime);
     const stripped = fullyPatched
-      .replace(/[A-Za-z_$]+\.setTransientModel=async e=>await\(await [A-Za-z_$]+\(\)\)\.setModel\?\.\(e,\{transient:!0\}\),/u, "")
+      .replace(/[A-Za-z_$]+\.setTransientModel=async e=>\{.*?\},(?=[A-Za-z_$]+\.)/u, "")
       .replace(/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel,/u, "");
     expect(stripped).not.toMatch(/\.setTransientModel=async/u);
     expect(stripped).not.toMatch(/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u);

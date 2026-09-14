@@ -78,6 +78,7 @@ export interface RuntimeAdapter {
   listModelOptions?: () => Promise<unknown[]>;
   reloadModelOptions?: () => Promise<unknown[]>;
   setTransientModel?: (modelId: string) => Promise<unknown>;
+  readSessionModel?: () => Promise<unknown>;
   recallPreviousInput?: (skip: number) => Promise<unknown>;
   readGoal?: () => Promise<unknown>;
   readTodos?: () => Promise<unknown>;

@@ -50,6 +50,7 @@ export async function runManualTuiScenario(
   console.error(`Scenario: ${scenario.name}`);
   console.error(`Workspace backend: ${workspace.backendName}`);
   console.error(`Workspace: ${workspace.directory}`);
+  if (scenario.manualRun) return await scenario.manualRun(workspace);
   console.error("Exit the TUI with /exit. The workspace will then be deleted.");
   const child = Bun.spawn([process.execPath, scenario.fixture], {
     cwd: workspace.directory,

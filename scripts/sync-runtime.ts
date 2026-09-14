@@ -495,7 +495,8 @@ export function patchRuntimeGoalFailurePause(runtime: string): string {
 
 export function patchRuntimeTuiBridge(runtime: string): string {
   const transcriptMessageIdPattern = /\.push\(\{content:[A-Za-z_$][\w$]*,messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"\}\)/u;
-  const transcriptAgentMessageIdPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent"/u;
+  const transcriptAgentMessageIdPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id[^}]*role:"agent"/u;
+  const transcriptAgentModelPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent",model:\{providerId:[A-Za-z_$][\w$]*\.info\.providerID,modelId:[A-Za-z_$][\w$]*\.info\.modelID\}/u;
   const activeTranscriptPattern = /sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u;
   const activeTurnSteerPattern = /(\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\2\?\.inputId,queryId:\2\?\.queryId,expectedTurnId:\2\?\.expectedTurnId,)(?:delivery:"guide",)?(?:pendingInputId:\2\?\.pendingInputId,)?input:/u;
   const activeTurnGuidePattern = /\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\1\?\.inputId,queryId:\1\?\.queryId,expectedTurnId:\1\?\.expectedTurnId,delivery:"guide",pendingInputId:\1\?\.pendingInputId,input:/u;
@@ -551,7 +552,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && !legacyStartedTurnResultPattern.test(runtime)
     && supportsActiveTurnSteer(runtime)
     && transcriptMessageIdPattern.test(runtime)
-    && transcriptAgentMessageIdPattern.test(runtime)
+    && transcriptAgentModelPattern.test(runtime)
     && supportsMultiMessageFileRewind(runtime)
     && activeTranscriptPattern.test(runtime)
     && /loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(runtime)
@@ -643,7 +644,16 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     }
     patched = patched.replace(
       agentProjectionPattern,
-      `$1.push({content:$2,...$3.length>0?{parts:$3}:{},messageId:${messageRecord}.info.id,role:"agent"})`
+      `$1.push({content:$2,...$3.length>0?{parts:$3}:{},messageId:${messageRecord}.info.id,role:"agent",model:{providerId:${messageRecord}.info.providerID,modelId:${messageRecord}.info.modelID}})`
+    );
+  } else if (!transcriptAgentModelPattern.test(patched)) {
+    const modelAnchor = /messageId:([A-Za-z_$][\w$]*)\.info\.id,role:"agent"/u;
+    if (!modelAnchor.test(patched)) {
+      throw new Error("ZCode runtime is incompatible with the TUI bridge (assistant model anchor missing).");
+    }
+    patched = patched.replace(
+      modelAnchor,
+      "messageId:$1.info.id,role:\"agent\",model:{providerId:$1.info.providerID,modelId:$1.info.modelID}"
     );
   }
   if (!supportsMultiMessageFileRewind(patched)) {
@@ -764,7 +774,10 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   // model.main to config.json by default; {transient:true} keeps it in-memory
   // so the /model quick picker does not rewrite saved defaults.
   if (!patched.includes(".setTransientModel=async")) {
-    assignments.push(`${bridge}.setTransientModel=async e=>await(await ${getApp}()).setModel?.(e,{transient:!0})`);
+    assignments.push(`${bridge}.setTransientModel=async e=>{let t=await ${getApp}(),r=await t.setModel?.(e,{transient:!0}),n=t.runtime?.getModelRef?.(),o=t.sessionStore??t.runtime?.sessionStore;if(n&&o?.saveSessionEntry)try{let i=Date.now();await o.saveSessionEntry({id:t.sessionId+":runtime-model-selection",sessionID:t.sessionId,type:"runtime/model_selection",touchSession:!1,time:{created:i,updated:i},data:{modelRef:String(e),modelId:String(n.modelId),providerId:String(n.providerId),...r?.thoughtLevel?{thoughtLevel:String(r.thoughtLevel)}:{}}})}catch{}return r}`);
+  }
+  if (!patched.includes(".readSessionModel=async")) {
+    assignments.push(`${bridge}.readSessionModel=async()=>{let t=await ${getApp}(),o=t.sessionStore??t.runtime?.sessionStore,r=await o?.sessionEntries?.({sessionID:t.sessionId,type:"runtime/model_selection"}),n=Array.isArray(r)?r.at(-1)?.data:void 0;return n&&typeof n.modelRef==="string"?n.modelRef:n&&typeof n.providerId==="string"&&typeof n.modelId==="string"?n.providerId+"/"+n.modelId:void 0}`);
   }
   if (!sessionEventsBridgePattern.test(patched)) {
     assignments.push(`${bridge}.subscribeSessionEvents=e=>{let t=!1,r;${getApp}().then(o=>{t||(r=o.runtime?.subscribeEvents?.({onSessionEvent:e}))});return()=>{t=!0,r?.()}}`);
@@ -863,6 +876,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u.test(patched)) {
     optionFields.push(`setTransientModel:${submitBridge}.setTransientModel`);
+  }
+  if (!/readSessionModel:[A-Za-z_$][\w$]*\.readSessionModel/u.test(patched)) {
+    optionFields.push(`readSessionModel:${submitBridge}.readSessionModel`);
   }
   if (!sessionEventsOptionPattern.test(patched)) {
     optionFields.push(`subscribeSessionEvents:${submitBridge}.subscribeSessionEvents`);

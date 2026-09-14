@@ -2127,7 +2127,9 @@ class ZCodeTui {
     if (appliesToSetting(settingTarget, "mode") && typeof result.mode === "string") {
       this.mode = normalizedMode(result.mode, this.mode);
     }
-    if (appliesToSetting(settingTarget, "model") && result.model !== undefined) {
+    if (appliesToSetting(settingTarget, "model")
+      && result.model !== undefined
+      && result.resetSessionProjection !== true) {
       this.model = modelLabel(result.model);
     }
     if (typeof result.loginRequired === "boolean") {
@@ -2157,6 +2159,16 @@ class ZCodeTui {
 
     if (isRecord(result.workflowPanel)) await this.showWorkflowPanel(result.workflowPanel);
     if (isRecord(result.selection)) await this.showSelection(result.selection);
+    if (result.resetSessionProjection === true) {
+      try {
+        const persistedModel = await this.options.readSessionModel?.();
+        if (typeof persistedModel === "string" && persistedModel.trim()) this.model = persistedModel.trim();
+      } catch {
+        // Model metadata is supplementary; the resume response remains usable.
+      }
+      this.updateMetadata();
+      this.ui.requestRender();
+    }
   }
 
   private onEvent(value: unknown, turnEpoch?: number): void {
@@ -3099,6 +3111,7 @@ class ZCodeTui {
 
   private restoreTranscript(messages: RestoredMessage[]): void {
     let firstUserMessageText: string | undefined;
+    let lastAssistantModel: string | undefined;
     for (const message of messages) {
       this.currentToolGroup = undefined;
       this.currentToolGroupBlockId = undefined;
@@ -3114,6 +3127,7 @@ class ZCodeTui {
         }
         continue;
       }
+      if (message.role === "assistant" && message.model) lastAssistantModel = message.model;
       const hiddenToolIds = message.role === "assistant"
         ? backgroundToolPartIds(message.parts)
         : new Set<string>();
@@ -3139,6 +3153,7 @@ class ZCodeTui {
     this.currentToolGroupBlockId = undefined;
     this.currentToolGroupMessageId = undefined;
     this.assistantStream.breakSegment();
+    if (lastAssistantModel) this.model = lastAssistantModel;
   }
 
   private restorePart(part: RestoredPart, role: "assistant" | "system", fallbackMessageId?: string): void {
@@ -5213,12 +5228,19 @@ class ZCodeTui {
   }
 
   private async restoreInitialTranscript(): Promise<void> {
-    if (!this.options.loadSessionTranscript) return;
+    if (this.options.loadSessionTranscript) {
+      try {
+        this.restoreTranscript(restoredMessages(await this.options.loadSessionTranscript()));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.addNotice(`Unable to restore session transcript: ${message}`, "warning");
+      }
+    }
     try {
-      this.restoreTranscript(restoredMessages(await this.options.loadSessionTranscript()));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.addNotice(`Unable to restore session transcript: ${message}`, "warning");
+      const persistedModel = await this.options.readSessionModel?.();
+      if (typeof persistedModel === "string" && persistedModel.trim()) this.model = persistedModel.trim();
+    } catch {
+      // Model metadata is supplementary; transcript restoration remains authoritative.
     }
   }
 

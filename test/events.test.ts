@@ -367,6 +367,14 @@ describe("ZCode event adapter", () => {
       { role: "user", parts: [{ type: "text", text: "hello" }] },
       { role: "assistant", parts: [{ type: "text", text: "world" }] }
     ]);
+    expect(restoredMessages([{
+      info: { role: "assistant", providerID: "zai", modelID: "glm-5.3-flash" },
+      parts: [{ type: "text", text: "latest" }]
+    }])).toEqual([{
+      role: "assistant",
+      model: "zai/glm-5.3-flash",
+      parts: [{ type: "text", text: "latest" }]
+    }]);
   });
 
   test("preserves official rich transcript parts", () => {

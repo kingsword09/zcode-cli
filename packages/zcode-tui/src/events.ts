@@ -315,6 +315,8 @@ export type RestoredPart = PartIdentity & (
 
 export interface RestoredMessage {
   messageId?: string;
+  /** Effective model used for this assistant message, when persisted by runtime. */
+  model?: string;
   role: "user" | "assistant" | "system";
   parts: RestoredPart[];
 }
@@ -484,6 +486,11 @@ export function restoredMessages(value: unknown): RestoredMessage[] {
         ? "assistant"
         : "system";
     const direct = asString(item.text) ?? asString(item.content);
+    const model = modelReference(item.model)
+      ?? modelReference({
+        providerId: item.providerId ?? item.providerID ?? (info && (info.providerId ?? info.providerID)),
+        modelId: item.modelId ?? item.modelID ?? (info && (info.modelId ?? info.modelID))
+      });
     const structured = Array.isArray(item.parts)
       ? item.parts.map(normalizeRestoredPart).filter((part): part is RestoredPart => Boolean(part))
       : [];
@@ -492,6 +499,7 @@ export function restoredMessages(value: unknown): RestoredMessage[] {
     if (parts.length > 0) {
       messages.push({
         messageId: asString(item.messageId) ?? asString(item.messageID) ?? (info && (asString(info.messageId) ?? asString(info.id))),
+        ...(model ? { model } : {}),
         role,
         parts
       });

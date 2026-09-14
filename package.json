@@ -59,7 +59,7 @@
     "test:runtime": "bun test test/runtime/*.test.ts",
     "test:tui": "bun run test:tui:component && bun run test:tui:e2e",
     "test:tui:component": "bun test test/tui/scenario-http.test.ts test/tui/scenario-runtime.test.ts test/tui/scenario-shell.test.ts test/tui/scenario-workspace.test.ts test/tui/terminal-screen.test.ts",
-    "test:tui:e2e": "bun test test/tui/allowlisted-shell.test.ts test/tui/http-mock.test.ts test/tui/permission-request-queue.test.ts test/tui/run-scenario.test.ts test/tui/terminal-session.test.ts test/tui/write-and-diff.test.ts",
+    "test:tui:e2e": "bun test test/tui/allowlisted-shell.test.ts test/tui/http-mock.test.ts test/tui/model-resume.test.ts test/tui/permission-request-queue.test.ts test/tui/run-scenario.test.ts test/tui/terminal-session.test.ts test/tui/write-and-diff.test.ts",
     "test:tui:host": "bun test test/tui/scenario-mountx.test.ts",
     "test:tui:manual": "bun scripts/tui-scenario.ts --manual",
     "test:tui-scenario": "bun scripts/tui-scenario.ts",

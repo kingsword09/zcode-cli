@@ -7,4 +7,5 @@ export interface TuiScenario {
   fixture: string;
   files?: Record<string, string | Uint8Array>;
   run(session: TerminalSession, workspace: ScenarioWorkspace): Promise<void>;
+  manualRun?(workspace: ScenarioWorkspace): Promise<number>;
 }
