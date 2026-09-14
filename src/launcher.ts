@@ -323,6 +323,15 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
   return typeof number === "number" ? 128 + number : 1;
 }
 
+function abortSignalName(signal: AbortSignal): NodeJS.Signals | undefined {
+  const reason = signal.reason;
+  return reason === "SIGINT" || reason === "SIGTERM" || reason === "SIGHUP" ? reason : undefined;
+}
+
+function abortSignalExitCode(signal: AbortSignal): number {
+  return signalExitCode(abortSignalName(signal) ?? "SIGINT");
+}
+
 async function waitForChild(
   child: ChildProcess,
   onError: (error: Error) => void = (error) => console.error("Error: " + error.message)
@@ -440,13 +449,13 @@ async function completeOfficialZaiLogin(
   runtimeArgs: string[],
   abortSignal: AbortSignal
 ): Promise<number> {
-  if (abortSignal.aborted) return 130;
+  if (abortSignal.aborted) return abortSignalExitCode(abortSignal);
   const child = spawnChild(node, [runtimePath, ...runtimeArgs], {
     cwd: process.cwd(),
     env: runtimeEnvironment({ ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" }),
     stdio: ["pipe", "inherit", "inherit"]
   });
-  const onAbort = () => child.kill("SIGINT");
+  const onAbort = () => child.kill(abortSignalName(abortSignal) ?? "SIGINT");
   abortSignal.addEventListener("abort", onAbort, { once: true });
   try {
     child.stdin?.end(JSON.stringify(payload));
@@ -491,9 +500,13 @@ export async function main(args: string[]): Promise<number> {
 
   const node = resolveNodeExecutable();
   const pluginAbortController = new AbortController();
-  const cancelPluginCommand = () => pluginAbortController.abort();
-  process.once("SIGINT", cancelPluginCommand);
-  process.once("SIGTERM", cancelPluginCommand);
+  const cancelPluginCommand = (signal: NodeJS.Signals) => () => pluginAbortController.abort(signal);
+  const onPluginSigint = cancelPluginCommand("SIGINT");
+  const onPluginSigterm = cancelPluginCommand("SIGTERM");
+  const onPluginSighup = cancelPluginCommand("SIGHUP");
+  process.once("SIGINT", onPluginSigint);
+  process.once("SIGTERM", onPluginSigterm);
+  if (process.platform !== "win32") process.once("SIGHUP", onPluginSighup);
   let pluginCommand: number | undefined;
   try {
     pluginCommand = await runPluginCommand(args, {
@@ -511,8 +524,9 @@ export async function main(args: string[]): Promise<number> {
       signal: pluginAbortController.signal
     });
   } finally {
-    process.off("SIGINT", cancelPluginCommand);
-    process.off("SIGTERM", cancelPluginCommand);
+    process.off("SIGINT", onPluginSigint);
+    process.off("SIGTERM", onPluginSigterm);
+    if (process.platform !== "win32") process.off("SIGHUP", onPluginSighup);
   }
   if (pluginCommand !== undefined) return pluginCommand;
 
@@ -532,9 +546,13 @@ export async function main(args: string[]): Promise<number> {
 
   if (zaiOAuth) {
     const abortController = new AbortController();
-    const cancel = () => abortController.abort(new Error("Login cancelled."));
-    process.once("SIGINT", cancel);
-    process.once("SIGTERM", cancel);
+    const cancel = (signal: NodeJS.Signals) => () => abortController.abort(signal);
+    const onSigint = cancel("SIGINT");
+    const onSigterm = cancel("SIGTERM");
+    const onSighup = cancel("SIGHUP");
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
+    if (process.platform !== "win32") process.once("SIGHUP", onSighup);
     try {
       const code = await runZaiOAuthLogin({
         abortSignal: abortController.signal,
@@ -553,10 +571,11 @@ export async function main(args: string[]): Promise<number> {
       return code;
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-      return abortController.signal.aborted ? 130 : 1;
+      return abortController.signal.aborted ? abortSignalExitCode(abortController.signal) : 1;
     } finally {
-      process.off("SIGINT", cancel);
-      process.off("SIGTERM", cancel);
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      if (process.platform !== "win32") process.off("SIGHUP", onSighup);
     }
   }
 

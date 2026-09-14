@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { AppServerRequestError, requestAppServer } from "../src/app-server-client.ts";
+import {
+  AppServerProcessError,
+  AppServerRequestError,
+  requestAppServer
+} from "../src/app-server-client.ts";
 
 const node = Bun.which("node");
 
@@ -55,6 +59,20 @@ describe("app-server NDJSON client", () => {
     }
   });
 
+  test("preserves app-server process exit codes", async () => {
+    try {
+      await requestAppServer({
+        method: "plugins/overview",
+        params: {},
+        transport: transport("process.stdin.resume(); process.stdin.on('end', () => process.exit(7));")
+      });
+      throw new Error("Expected request to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AppServerProcessError);
+      expect(error).toMatchObject({ exitCode: 7 });
+    }
+  });
+
   test("rejects missing envelopes and honours cancellation", async () => {
     await expect(requestAppServer({
       method: "plugins/list",
@@ -87,5 +105,23 @@ describe("app-server NDJSON client", () => {
     setTimeout(() => controller.abort(), 150);
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  }, 3_000);
+
+  test("forwards SIGHUP and returns its conventional cancellation status", async () => {
+    if (process.platform === "win32") return;
+    const controller = new AbortController();
+    const pending = requestAppServer({
+      method: "plugins/list",
+      params: {},
+      signal: controller.signal,
+      transport: transport(`
+        process.on("SIGHUP", () => process.exit(0));
+        process.stdin.resume();
+        setInterval(() => {}, 1000);
+      `)
+    });
+    setTimeout(() => controller.abort("SIGHUP"), 150);
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError", exitCode: 129 });
   }, 3_000);
 });

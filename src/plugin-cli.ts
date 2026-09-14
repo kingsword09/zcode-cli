@@ -5,6 +5,7 @@ import type { Readable, Writable } from "node:stream";
 import { parseArgs } from "node:util";
 
 import { pluginProtocolMethods, pluginWorkspace } from "./plugin-protocol.ts";
+import { AppServerCancellationError, AppServerProcessError } from "./app-server-client.ts";
 
 const coordinateSegmentPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const managedActions = new Set([
@@ -583,6 +584,9 @@ export async function runPluginCommand(
     throw new Error(pluginUsage);
   } catch (error) {
     stderr.write(`Error: ${printableError(error)}\n`);
+    if (error instanceof AppServerCancellationError || error instanceof AppServerProcessError) {
+      return error.exitCode;
+    }
     return error instanceof Error && error.name === "AbortError" ? 130 : 1;
   }
 }

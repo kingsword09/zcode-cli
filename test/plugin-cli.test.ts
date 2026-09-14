@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 
+import { AppServerProcessError } from "../src/app-server-client.ts";
 import { runPluginCommand, type PluginRequestInput } from "../src/plugin-cli.ts";
 
 const temporaryDirectories: string[] = [];
@@ -88,6 +89,15 @@ describe("plugin CLI routing", () => {
       workingDirectory: "/workspace"
     });
     expect(JSON.parse(testHarness.stdout.text())).toEqual(overview);
+  });
+
+  test("returns the app-server process exit code", async () => {
+    const testHarness = harness();
+    testHarness.options.request = async () => {
+      throw new AppServerProcessError("app-server failed", 7);
+    };
+
+    expect(await runPluginCommand(["plugins", "discover"], testHarness.options)).toBe(7);
   });
 
   test("previews plugin components and dependencies before installing", async () => {
