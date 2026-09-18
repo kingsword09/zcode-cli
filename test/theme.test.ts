@@ -101,13 +101,18 @@ describe("TUI terminal theme", () => {
   });
 
   test("keeps fullscreen scrollbar thumbs aligned with the active theme", () => {
+    // pi-tui 0.85 paints the scrollbar as a track glyph plus a thumb glyph, so
+    // both roles are styled with foreground colors rather than a cell background.
     const theme = createTheme(true, "dark");
-    expect(theme.scrollbarThumb(" ")).toStartWith("\x1b[48;5;238m");
+    expect(theme.scrollbarThumb("\u2503")).toStartWith("\x1b[38;5;250m");
+    expect(theme.scrollbarTrack("\u2502")).toStartWith("\x1b[38;5;238m");
 
     theme.setColorScheme("light");
-    expect(theme.scrollbarThumb(" ")).toStartWith("\x1b[48;5;252m");
+    expect(theme.scrollbarThumb("\u2503")).toStartWith("\x1b[38;5;240m");
+    expect(theme.scrollbarTrack("\u2502")).toStartWith("\x1b[38;5;250m");
 
-    expect(createTheme(false).scrollbarThumb(" ")).toBe(" ");
+    expect(createTheme(false).scrollbarThumb("\u2503")).toBe("\u2503");
+    expect(createTheme(false).scrollbarTrack("\u2502")).toBe("\u2502");
   });
 
   test("never relies on the terminal default foreground for strong text", () => {

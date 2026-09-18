@@ -317,6 +317,24 @@ const backgroundTaskAttentionStatuses = new Set(["failed", "timed_out", "spawn_e
 const defaultBackgroundResumeMessage =
   "Continue the assigned task from the last completed step. Re-check the current workspace state and finish the remaining work.";
 
+function isMouseMultiplexer(): boolean {
+  const term = process.env.TERM?.toLowerCase() ?? "";
+  return process.env.TMUX !== undefined
+    || process.env.ZELLIJ !== undefined
+    || process.env.STY !== undefined
+    || term.startsWith("tmux")
+    || term.startsWith("screen");
+}
+
+function scrollbarHoverProbe(data: string): string | undefined {
+  if (!isMouseMultiplexer()) return undefined;
+  const match = /^\x1b\[<(\d+);(\d+);(\d+)M$/u.exec(data);
+  if (!match) return undefined;
+  const button = Number(match[1]);
+  if ((button & 32) !== 0 || (button & 3) !== 0) return undefined;
+  return `\x1b[<35;${match[2]};${match[3]}M`;
+}
+
 function backgroundTaskKindLabel(job: RuntimeBackgroundJob): string {
   switch (job.taskKind) {
     case "local_agent": return job.agentType ? `Agent (${job.agentType})` : "Agent";
@@ -555,6 +573,11 @@ class NotifyingProcessTerminal extends ProcessTerminal {
     super.start((data) => {
       this.beforeInput(data);
       try {
+        // Multiplexers use button-motion tracking and do not report passive
+        // pointer movement. Probe hover immediately before a press so a
+        // hidden auto scrollbar can still claim a direct drag gesture.
+        const hoverProbe = scrollbarHoverProbe(data);
+        if (hoverProbe) onInput(hoverProbe);
         onInput(data);
       } finally {
         this.afterInput?.();
@@ -1102,7 +1125,8 @@ class ZCodeTui {
         // Keep the chrome quiet until the transcript actually overflows and
         // the user scrolls. This is the default behavior used by pi-agent.
         scrollbar: "auto",
-        scrollbarStyle: this.theme.scrollbarThumb
+        scrollbarTrackStyle: this.theme.scrollbarTrack,
+        scrollbarThumbStyle: this.theme.scrollbarThumb
       });
       this.fullscreenLayout ??= new VStack([
         { component: this.fullscreenHeader, basis: 1, shrink: 0, minSize: 1 },

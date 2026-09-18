@@ -569,7 +569,7 @@ class TextPromptDialog implements Component {
 class PromptInput extends Input {
   constructor(
     private readonly mask: boolean,
-    private readonly placeholder: string | undefined,
+    private readonly placeholderText: string | undefined,
     private readonly theme: ZCodeTheme
   ) {
     super();
@@ -587,8 +587,8 @@ class PromptInput extends Input {
     }
 
     const lines = super.render(width);
-    if (!value && this.placeholder && lines[0]) {
-      const placeholder = this.theme.muted(this.placeholder);
+    if (!value && this.placeholderText && lines[0]) {
+      const placeholder = this.theme.muted(this.placeholderText);
       const line = lines[0].replace("\x1b[7m \x1b[27m", `\x1b[7m \x1b[27m${placeholder}`);
       return [truncateToWidth(line, width, "", true)];
     }
