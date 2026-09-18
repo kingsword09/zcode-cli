@@ -143,10 +143,11 @@ export ZCODE_TUI_LOGIN_CMD='zcode login --oauth'
 ```
 
 The TUI then releases raw terminal mode, runs that command with inherited
-stdio, restores the interface, and checks `~/.zcode/cli/config.json` again.
+stdio, restores the interface, and refreshes the shared provider registry from
+`~/.zcode/v2/provider_config.json`.
 
 For the direct API-key path, follow
-[Custom provider without login](./CONFIGURATION.md#custom-provider-without-login)
+[Custom provider](./CONFIGURATION.md#custom-provider)
 instead.
 
 ## Continuous integration

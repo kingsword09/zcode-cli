@@ -63,10 +63,9 @@ describe("TUI turn notifications", () => {
       ...env,
       ZCODE_TUI_NOTIFICATION_METHOD: "off"
     })).toEqual({ method: "native", condition: "always" });
-    expect(config.provider).toBeDefined();
-    expect(config.model).toBeDefined();
+    expect(config.modelStream).toBeDefined();
+    expect(config.subagents).toBeDefined();
     expect(config.ui).toMatchObject({
-      locale: "auto",
       theme: "auto",
       notifications: { method: "native", condition: "always" }
     });

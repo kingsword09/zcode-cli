@@ -1,16 +1,11 @@
+import { writeProviderFixture } from "../test/fixtures/provider-config.ts";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const home = await mkdtemp(join(tmpdir(), "zcode-keyless-tui-"));
-await mkdir(join(home, ".zcode", "cli"), { recursive: true });
-await writeFile(join(home, ".zcode", "cli", "config.json"), JSON.stringify({
-  provider: { zai: { kind: "anthropic", options: {
-    apiKeyRequired: true, baseURL: "https://api.z.ai/api/anthropic"
-  } } },
-  model: { main: "zai/glm-5.3-flash" }
-}));
+await writeProviderFixture({ HOME: home, USERPROFILE: home }, { providerId: "zai", modelId: "glm-5.3-flash", apiType: "anthropic-messages" });
 
 let output = "";
 const decoder = new TextDecoder();

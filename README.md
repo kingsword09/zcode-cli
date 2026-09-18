@@ -25,12 +25,12 @@ npm install -g zcode-app-cli@latest
 zcode
 ```
 
-On first launch, ZCode creates `~/.zcode/cli/config.json` (or
-`%USERPROFILE%\.zcode\cli\config.json` on Windows) with credential-free
+On first launch, ZCode creates `~/.zcode/cli/setting.json` (or
+`%USERPROFILE%\.zcode\cli\setting.json` on Windows) with credential-free
 defaults and opens a setup wizard in the TUI. It guides you through the three
-model-access paths in [Configuration](./docs/CONFIGURATION.md), and when the
-ZCode desktop app is installed it can import the desktop provider settings
-(credentials stay behind a fresh sign-in, like a browser profile import).
+model-access paths in [Configuration](./docs/CONFIGURATION.md). Provider settings
+and default model selection use the same native `~/.zcode/v2/provider_config.json`
+file as ZCode Desktop.
 Reopen it anytime with `/setup`; press Esc to skip.
 
 ## Host integration
@@ -111,7 +111,7 @@ multi-line editor; slash-command, unified `@` workspace/Plugin references and
 session events; `/mode`, `/model`, `/resume`, `/plugins` and other upstream
 slash commands; searchable model and reasoning-effort selectors, plus MCP and
 workflow panels; status-bar-only Shift+Tab mode cycling
-(`build` → `edit` → `yolo` → `plan`), Ctrl+N model and empty-prompt Tab effort
+(`build` → `edit` → `yolo`), independent `/plan` toggling with an input-border indicator, Ctrl+N model and empty-prompt Tab effort
 cycling; structured session-goal status in the right side of the turn footer;
 animated active-turn timer with a static `ZCODE_TUI_REDUCED_MOTION=1`
 fallback; responsive context-remaining and session-token metrics.
@@ -405,10 +405,23 @@ not available on `PATH`.
 
 ## Configuration
 
-ZCode reads configuration from `~/.zcode/cli/config.json` (or
-`%USERPROFILE%\.zcode\cli\config.json` on Windows), with project-level
+ZCode reads configuration from `~/.zcode/cli/setting.json` (or
+`%USERPROFILE%\.zcode\cli\setting.json` on Windows), with project-level
 overrides from `zcode.json` or `.zcode/config.json` in the working directory.
 Existing files are never replaced.
+
+Provider settings and the default model are stored in
+`~/.zcode/v2/provider_config.json`, shared with ZCode Desktop by default.
+Use `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` for an independent CLI provider file.
+`/settings` saves the default model; `/model` changes only the current session.
+See [`provider.example.json`](./provider.example.json) for complete field examples
+and the [provider configuration reference](./docs/PROVIDER_CONFIG.md) for multimodal
+capabilities, native search, token limits, reasoning maps and automatic upstream
+updates. The enabled example model inherits the catalog; disabled reference
+models demonstrate explicit overrides and manual configuration.
+中文文档：[配置说明](./docs/CONFIGURATION.zh-CN.md) ·
+[Provider 配置字段参考](./docs/PROVIDER_CONFIG.zh-CN.md)。
+The project follows the current upstream runtime and configuration schema.
 
 Three model-access paths are supported: Z.AI OAuth (macOS only), Z.AI/BigModel
 Coding Plan API key, or a direct API key with a custom provider. For detailed

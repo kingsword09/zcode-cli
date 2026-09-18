@@ -1,3 +1,4 @@
+import { writeProviderFixture } from "../fixtures/provider-config.ts";
 import { afterEach, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
@@ -112,7 +113,7 @@ async function runNetworkFixture(options: {
   temporaryDirectories.push(home);
   const workspace = join(home, "workspace");
   await mkdir(workspace, { recursive: true });
-  const config = await Bun.file(new URL("../../config.example.json", import.meta.url)).json() as {
+  const config = await Bun.file(new URL("../../setting.example.json", import.meta.url)).json() as {
     features: Record<string, unknown>;
     logging: Record<string, unknown>;
     mcp: { servers: Record<string, unknown> };
@@ -123,19 +124,9 @@ async function runNetworkFixture(options: {
     skills: Record<string, unknown>;
     storage: Record<string, unknown>;
   };
-  const defaultZai = config.provider.zai as { models: Record<string, unknown> };
-  config.provider.zai = {
-    kind: "openai-compatible",
-    name: options.providerName,
-    options: {
-      apiKey: "fixture-key",
-      apiKeyRequired: true,
-      baseURL: `http://127.0.0.1:${server.port}/v1`
-    },
-    headers: {},
-    models: defaultZai.models
-  };
-  config.model = { main: "zai/glm-5.2", lite: "zai/glm-5.2" };
+  await writeProviderFixture({ HOME: home, USERPROFILE: home }, {
+    providerId: "zai", modelId: "glm-5.3", apiKey: "fixture-key", baseUrl: `http://127.0.0.1:${server.port}/v1`
+  });
   config.storage = {
     dir: join(home, ".zcode"),
     sessionDbPath: join(home, ".zcode", "cli", "db", "db.sqlite")
@@ -161,7 +152,7 @@ async function runNetworkFixture(options: {
   config.logging = { level: "error", format: "text" };
   const configDirectory = join(home, ".zcode", "cli");
   await mkdir(configDirectory, { recursive: true });
-  await writeFile(join(configDirectory, "config.json"), `${JSON.stringify(config, null, 2)}\n`);
+  await writeFile(join(configDirectory, "setting.json"), `${JSON.stringify(config, null, 2)}\n`);
   const runtimeArgs = [
     ...(options.keepAlive === false
       ? []

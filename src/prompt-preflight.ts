@@ -1,7 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-import { userConfigPath } from "./model-access.ts";
+import { providerConfigPath, hasConfiguredProviderAccess } from "./model-access.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -44,26 +44,33 @@ export async function missingCodingPlanKey(options: {
     directory = parent;
   }
 
-  let config: Record<string, unknown> | undefined;
-  try {
-    config = record(JSON.parse(await readFile(userConfigPath(env), "utf8")));
-  } catch {
-    return undefined;
-  }
-  const model = options.model ?? record(config?.model)?.main;
-  if (typeof model !== "string") return undefined;
-  const providerId = model.split("/", 1)[0];
-  if (providerId !== "zai" && providerId !== "bigmodel") return undefined;
-  const provider = record(record(config?.provider)?.[providerId]);
-  const settings = record(provider?.options);
-  const expectedUrl = providerId === "zai"
-    ? "https://api.z.ai/api/anthropic"
-    : "https://open.bigmodel.cn/api/anthropic";
-  if (provider?.kind !== "anthropic" || settings?.baseURL !== expectedUrl
-    || settings?.apiKeyRequired !== true
-    || (typeof settings.apiKey === "string" && settings.apiKey.trim())
-    || (settings.apiKey !== undefined && typeof settings.apiKey !== "string")
-    || Object.keys(record(provider.headers) ?? {}).length > 0) return undefined;
-  return `Model access is not configured for ${providerId}. Run /login or /setup in zcode, `
+  const message = (providerId?: string) => `Model access is not configured${providerId ? ` for ${providerId}` : ""}. Run /login or /setup in zcode, `
     + "or configure its API key before sending a prompt. No model request was sent.";
+  let root: Record<string, unknown> | undefined;
+  try {
+    root = record(JSON.parse(await readFile(providerConfigPath(env), "utf8")));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" && !options.model ? message() : undefined;
+  }
+  const config = record(root?.config);
+  if (root?.schemaVersion !== 1 || !config) return undefined;
+  const selection = record(config.defaultModelSelection);
+  const model = options.model ?? (typeof selection?.providerId === "string" && typeof selection.modelId === "string"
+    ? `${selection.providerId}/${selection.modelId}` : undefined);
+  if (!model) return await hasConfiguredProviderAccess(env) ? undefined : message();
+  const separator = model.indexOf("/");
+  if (separator <= 0) return undefined;
+  const providerId = model.slice(0, separator), modelId = model.slice(separator + 1);
+  // Account credentials are encrypted and validated by the runtime.
+  if (providerId.startsWith("account:")) return undefined;
+  const rules = record(config.providerConfigRules)?.providerRules;
+  if (!Array.isArray(rules)) return undefined;
+  const provider = rules.map(record).find((rule) => rule?.providerId === providerId);
+  const settings = record(provider?.config), auth = record(settings?.access), api = record(settings?.api);
+  if (!settings || !["api-key", "zhipu-coding-plan-api-key"].includes(String(auth?.type))
+    || typeof auth?.apiKey === "string" && auth.apiKey.trim()
+    || auth?.apiKey !== undefined && typeof auth.apiKey !== "string"
+    || Object.keys(record(api?.headers) ?? {}).length > 0
+    || Array.isArray(settings.personalModelIds) && !settings.personalModelIds.includes(modelId)) return undefined;
+  return message(providerId);
 }

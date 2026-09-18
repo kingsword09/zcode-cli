@@ -35,19 +35,31 @@ const requiredFiles = [
   "LICENSE",
   "README.md",
   "bin/zcode.js",
-  "config.example.json",
+  "setting.example.json",
+  "provider.example.json",
+  "docs/CONFIGURATION.md",
+  "docs/CONFIGURATION.zh-CN.md",
+  "docs/PROVIDER_CONFIG.md",
+  "docs/PROVIDER_CONFIG.zh-CN.md",
   "package.json",
   "vendor/extraction.json",
   "vendor/node_modules/@zcode/tui/dist/index.js",
   "vendor/node_modules/@zcode/tui/package.json",
   "vendor/zcode.cjs",
+  "vendor/cli-config.cjs",
+  "vendor/provider/zcode-builtin.json",
   "zcode-runtime.lock.json"
 ];
 const allowedRoots = new Set([
   "LICENSE",
   "README.md",
   "bin/zcode.js",
-  "config.example.json",
+  "setting.example.json",
+  "provider.example.json",
+  "docs/CONFIGURATION.md",
+  "docs/CONFIGURATION.zh-CN.md",
+  "docs/PROVIDER_CONFIG.md",
+  "docs/PROVIDER_CONFIG.zh-CN.md",
   "package.json",
   "zcode-runtime.lock.json"
 ]);

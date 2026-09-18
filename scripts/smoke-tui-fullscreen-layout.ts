@@ -16,7 +16,7 @@ async function runPhase(options: { copyOnSelect: boolean }): Promise<void> {
     const configDirectory = join(temporaryHome, ".zcode", "cli");
     await mkdir(configDirectory, { recursive: true, mode: 0o700 });
     await writeFile(
-      join(configDirectory, "config.json"),
+      join(configDirectory, "setting.json"),
       `${JSON.stringify({ ui: { copyOnSelect: false } })}\n`
     );
   }

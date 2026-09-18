@@ -224,7 +224,9 @@ describe("launcher/runtime integration", () => {
     };
     const result = await run(["app-server"], `${JSON.stringify(request)}\n`);
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    const response = result.stdout.trim().split("\n").map((line) => JSON.parse(line))
+      .find((message) => message.id === request.id);
+    expect(response).toMatchObject({
       id: 1,
       result: {
         plugins: expect.arrayContaining([

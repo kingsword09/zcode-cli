@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,7 @@ import {
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeStreamEofFinishGuard,
+  installRuntimeProviderConfig,
   manifestUrl,
   parseArgs,
   parseRuntimePatchReports,
@@ -28,6 +29,7 @@ import {
   patchRuntimeStreamEofFinishGuard,
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge,
+  patchRuntimeTuiExecutionState,
   patchRuntimeZaiDesktopOAuth,
   resolveArtifactUrl,
   resolveLatestRuntimeLock,
@@ -45,6 +47,81 @@ import {
 } from "../scripts/release-version.ts";
 
 describe("runtime synchronization", () => {
+  test("projects native planEnabled separately from permission mode", async () => {
+    const source = 'const a=fn=>fn;const modes=["plan","build","edit","yolo"];a(format,"formatAvailableCommandCenterModes");function format(){return modes.join(", ")}const planning=()=>e.runtime.getPlanEnabled();const app={getMode:a(()=>e.runtime.getMode(),"getMode"),setMode:a(async mode=>{let previous=e.runtime.getMode();await e.runtime.setExecutionState({mode:mode},e.traceContext);return{mode:e.runtime.getMode(),previousMode:previous,traceId:e.traceContext.traceId}},"setMode")};';
+    let mode = "edit", planEnabled = false;
+    const patched = patchRuntimeTuiExecutionState(source);
+    expect(new Function(`${patched};return format();`)()).toBe("build, edit, yolo");
+    const app = new Function("e", `${patched};return app;`)({ runtime: {
+      getMode: () => mode, getPlanEnabled: () => planEnabled,
+      setExecutionState: async (state: { mode?: string; planEnabled?: boolean }) => {
+        planEnabled = state.planEnabled ?? (state.mode ? false : planEnabled);
+        if (state.mode) mode = state.mode;
+      }
+    }, prepareResume: async () => {}, traceContext: { traceId: "fixture" } });
+    expect(await app.readExecutionState()).toEqual({ mode: "edit", planEnabled: false });
+    expect(await app.setPlanEnabled(true)).toEqual({ mode: "edit", planEnabled: true });
+    expect(app.getMode()).toBe("edit");
+    expect(await app.setMode("yolo")).toMatchObject({ mode: "yolo", previousMode: "edit", planEnabled: true });
+    expect(await app.setPlanEnabled(false)).toEqual({ mode: "yolo", planEnabled: false });
+    expect(patchRuntimeTuiExecutionState(patched)).toBe(patched);
+    expect(() => patchRuntimeTuiExecutionState("unknown runtime")).toThrow("execution state");
+  });
+
+  test("copies the registry catalog from Desktop resources and rejects missing assets", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-registry-sync-"));
+    const glm = join(directory, "resources", "glm"), vendor = join(directory, "vendor");
+    const config = join(directory, "resources", "config", "provider");
+    try {
+      await mkdir(vendor, { recursive: true });
+      await writeFile(join(vendor, "zcode.cjs"), 'label(resolveConfig,"resolveBundledZCodeBuiltinProviderConfig")');
+      await expect(installRuntimeProviderConfig(glm, vendor)).rejects.toThrow("missing config/provider");
+      await mkdir(config, { recursive: true });
+      await writeFile(join(config, "zcode-builtin.json"), '{"revision":28}');
+      await installRuntimeProviderConfig(glm, vendor);
+      expect(await readFile(join(vendor, "provider", "zcode-builtin.json"), "utf8")).toBe('{"revision":28}');
+      await writeFile(join(config, "zcode-builtin.json"), '{"revision":29}');
+      await installRuntimeProviderConfig(glm, vendor);
+      expect(await readFile(join(vendor, "provider", "zcode-builtin.json"), "utf8")).toBe('{"revision":29}');
+      await writeFile(join(vendor, "zcode.cjs"), "legacy runtime");
+      await rm(config, { recursive: true });
+      await expect(installRuntimeProviderConfig(glm, vendor)).rejects.toThrow("required provider registry");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps registry login defaults driven by the selected provider catalog", async () => {
+    const source = [
+      'const label=(fn)=>fn;let saved;const store={async saveConfiguredDefault(value){saved=value}};',
+      'function catalog(e){return e.providers.flatMap(([id,p])=>{let a=p.access,m=p.builtinModelIds?.find(x=>x.trim())?.trim();return a?.type==="zhipu-account"&&a.mode==="individual-coding-plan"&&a.accountType&&m?[{family:a.accountType,modelId:m,providerId:id}]:[]})}',
+      'async function resolveProvider(family,env){let p=catalog(env).filter(x=>x.family===family);if(p.length!==1)throw new Error("ambiguous provider");return p[0]}',
+      'async function persist(e){let p=await resolveProvider(e.providerId,e.env),id=p.providerId,model=p.modelId,unused;await store.saveConfiguredDefault({providerId:id,modelId:model});return saved}',
+      'function initial(e){return e.configuredDefault?.options?.reasoningLevel?e.configuredDefault:{providerId:"wrong",modelId:"fallback"}}',
+      'function complete(registry,selection){return {...selection,options:{reasoningLevel:"high"}}}',
+      'function switchModel(e,t){let selected=t;return e.runtime.setSessionModelSelection(selected),t?.transient||void 0,selected}',
+      'label(initial,"resolveInitialModelSelection");label(complete,"completeNewModelSelection");',
+      'label(catalog,"readStandaloneCodingPlanCatalog");label(resolveProvider,"resolveStandaloneCodingPlanProvider");label(persist,"persistStandaloneCodingPlanConnection");'
+    ].join("");
+    const patched = patchRuntimeLoginModelDefaults(source);
+    expect(patchRuntimeLoginModelDefaults(patched)).toBe(patched);
+    const { persist, initial, switchModel } = new Function(`${patched};return {persist,initial,switchModel};`)();
+    const provider = { access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "zai" }, builtinModelIds: ["GLM-5.3", "GLM-5.3-Flash"] };
+    const env = { providers: [["account:zai-individual-coding-plan", provider]] };
+    expect(await persist({ providerId: "zai", env })).toEqual({ providerId: "account:zai-individual-coding-plan", modelId: "GLM-5.3" });
+    provider.builtinModelIds.unshift("GLM-6");
+    expect(await persist({ providerId: "zai", env })).toMatchObject({ modelId: "GLM-6" });
+    expect(initial({ registry: {}, configuredDefault: { providerId: "custom", modelId: "chosen" } })).toEqual({
+      providerId: "custom", modelId: "chosen", options: { reasoningLevel: "high" }
+    });
+    expect(initial({ registry: {}, configuredDefault: { providerId: "custom", modelId: "chosen", options: { reasoningLevel: "low" } } })).toMatchObject({ options: { reasoningLevel: "low" } });
+    const context = { runtime: { setSessionModelSelection: () => {} }, providerRegistry: { getView: () => ({}) } };
+    expect(switchModel(context, { providerId: "custom", modelId: "chosen" })).toMatchObject({ options: { reasoningLevel: "high" } });
+    expect(switchModel(context, { providerId: "custom", modelId: "chosen", options: { reasoningLevel: "low" } })).toMatchObject({ options: { reasoningLevel: "low" } });
+    await expect(persist({ providerId: "bigmodel", env })).rejects.toThrow("ambiguous provider");
+    expect(() => patchRuntimeLoginModelDefaults(source.replace("modelId:model}", "modelId:hardcoded}"))).toThrow("anchors missing");
+  });
+
   test("pins the exact remote runtime used by release workflows", async () => {
     const packageJson = await Bun.file(new URL("../package.json", import.meta.url)).json();
     const lock = await Bun.file(new URL("../zcode-runtime.lock.json", import.meta.url)).json();
@@ -333,7 +410,7 @@ describe("runtime synchronization", () => {
     expect(decide(cyclic)).toBe(false);
   });
 
-  test("adds a Desktop authorization-code completion path while retaining official persistence", () => {
+  test("adds Desktop OAuth with registry credential persistence", () => {
     const loginFunctions = [
       "async function sDo(e={}){",
       "let t=e.env??process.env,r=e.now??Date.now,o=e.sleep??fDo;",
@@ -342,8 +419,8 @@ describe("runtime synchronization", () => {
       "let c=await mDo({});",
       "try{await i.saveZaiLoginCredentials({accessToken:c.zai.access_token,jwtToken:c.token,user:c.user})}",
       "catch(f){throw new Ox(\"credential_write_failed\",\"Login succeeded but writing credentials failed.\",{cause:f})}",
-      "let d=await aGr({accessToken:c.zai.access_token,env:t,httpClient:e.httpClient,providerId:\"zai\",resolver:e.apiKeyResolver}),p;",
-      "try{p=await qz({apiKey:d,filePath:e.userConfigPath,providerId:\"zai\"})}",
+      `let d=await aGr({accessToken:c.zai.access_token,env:t,httpClient:e.httpClient,family:"zai",resolver:e.apiKeyResolver}),p;`,
+      `try{p=await qz({accountIdentity:c.user.user_id,apiKey:d,credentialStore:i,env:t,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"zai"})}`,
       "catch(f){throw new Ox(\"config_update_failed\",\"Login succeeded but updating ZCode config failed.\",{cause:f})}",
       "return{configPath:p.path}}",
       "async function uDo(e={}){let t=e.env??process.env;F1(e.abortSignal);",
@@ -365,7 +442,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain('url:"https://zcode.z.ai/api/v1/oauth/token"');
     expect(patched).toContain("i.saveZaiLoginCredentials");
     expect(patched).toContain("aGr({accessToken:$zAccessToken");
-    expect(patched).toContain("qz({apiKey:$zApiKey");
+    expect(patched).toContain("qz({accountIdentity:$zUser.user_id,apiKey:$zApiKey");
     expect(() => new Function(patched)).not.toThrow();
     expect(patchRuntimeZaiDesktopOAuth(patched)).toBe(patched);
     expect(() => patchRuntimeZaiDesktopOAuth("incompatible runtime")).toThrow(/credential anchor/);
@@ -395,79 +472,15 @@ describe("runtime synchronization", () => {
         providerId: "zai"
       });
       expect(fixture.read()).toMatchObject({
-        resolved: { accessToken: "oauth-token", providerId: "zai" },
+        resolved: { accessToken: "oauth-token", family: "zai" },
         saved: { accessToken: "oauth-token", jwtToken: "jwt-token" },
         written: { apiKey: "coding-plan-key", providerId: "zai" }
       });
+      expect(fixture.read().written).toMatchObject({
+        accountIdentity: "user-1", credentialStore: { filePath: "/credentials.json" },
+        env: { ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" }
+      });
     });
-  });
-
-  test("updates the login model defaults to the current server catalog", () => {
-    const runtime = [
-      'function Cs(e){return typeof e==="object"&&e!==null&&!Array.isArray(e)}',
-      'function Pni(e,t,r){let o=ICt[t],n=Cs(e.provider)?e.provider:{},',
-      'i=Cs(n[t])?n[t]:{},a=Cs(i.options)?i.options:{},u=Cs(i.models)?i.models:{},',
-      'l=Cs(u[kCt])?u[kCt]:{},c=Cs(u[SCt])?u[SCt]:{},d=Cs(e.model)?e.model:{},',
-      'p=typeof d.lite=="string"?d.lite:o.liteModel,m={...a,apiKeyRequired:true,baseURL:o.baseURL};',
-      'return r.length>0&&(m.apiKey=r),{...e,provider:{...n,[t]:{...i,kind:xni,name:o.displayName,options:m,',
-      'models:{...u,[kCt]:{...l,name:"GLM-5.1"},[SCt]:{...c,name:"GLM-4.7"}}}},',
-      'model:{...d,main:o.mainModel,lite:p}}}',
-      'var fni="bigmodel",hni="zai",',
-      'gni="zai/glm-5.1",_ni="zai/glm-4.7",vni="bigmodel/glm-5.1",yni="bigmodel/glm-4.7",',
-      'kCt="glm-5.1",SCt="glm-4.7",xni="anthropic",',
-      'ICt={[fni]:{baseURL:"https://open.bigmodel.cn/api/anthropic",displayName:"BigModel Coding Plan",',
-      'liteModel:yni,mainModel:vni},[hni]:{baseURL:"https://api.z.ai/api/anthropic",',
-      'displayName:"Z.AI Coding Plan",liteModel:_ni,mainModel:gni}};'
-    ].join("");
-    const patched = patchRuntimeLoginModelDefaults(runtime);
-    const updateConfig = new Function(`${patched};return Pni;`)() as (
-      config: Record<string, unknown>,
-      providerId: string,
-      apiKey: string
-    ) => {
-      model: { lite: string; main: string };
-      provider: Record<string, { models: Record<string, unknown> }>;
-    };
-
-    expect(patched).toContain(
-      'gni="zai/glm-5.2",_ni="zai/glm-5-turbo",vni="bigmodel/glm-5.2",yni="bigmodel/glm-4.7"'
-    );
-    expect(patched).toContain('kCt="glm-5.2",SCt="glm-4.7"');
-    expect(patched).toContain('["glm-5-turbo"]:{...u["glm-5-turbo"],name:"GLM-5-Turbo"}');
-    expect(patched).not.toContain('gni="zai/glm-5.1"');
-    expect(patched).not.toContain('"GLM-5.1"');
-
-    const zai = updateConfig({}, "zai", "zai-key");
-    expect(zai.model).toEqual({ main: "zai/glm-5.2", lite: "zai/glm-5-turbo" });
-    expect(Object.keys(zai.provider.zai!.models).sort()).toEqual([
-      "glm-4.7",
-      "glm-5-turbo",
-      "glm-5.2"
-    ]);
-
-    const bigmodel = updateConfig({}, "bigmodel", "bigmodel-key");
-    expect(bigmodel.model).toEqual({ main: "bigmodel/glm-5.2", lite: "bigmodel/glm-4.7" });
-    expect(bigmodel.provider.bigmodel!.models["glm-4.7"]).toBeDefined();
-    expect(updateConfig(
-      { model: { lite: "zai/custom-lite" } },
-      "bigmodel",
-      "bigmodel-key"
-    ).model.lite).toBe("bigmodel/glm-4.7");
-    expect(updateConfig(
-      { model: { lite: "bigmodel/custom-lite" } },
-      "bigmodel",
-      "bigmodel-key"
-    ).model.lite).toBe("bigmodel/custom-lite");
-
-    const partiallyUpdated = runtime.replace(
-      'gni="zai/glm-5.1",_ni="zai/glm-4.7",vni="bigmodel/glm-5.1",yni="bigmodel/glm-4.7"',
-      'gni="zai/glm-5.2",_ni="zai/glm-5-turbo",vni="bigmodel/glm-5.2",yni="bigmodel/glm-4.7"'
-    );
-    expect(patchRuntimeLoginModelDefaults(partiallyUpdated)).toBe(patched);
-    expect(patchRuntimeLoginModelDefaults(patched)).toBe(patched);
-    expect(() => patchRuntimeLoginModelDefaults("incompatible runtime")).toThrow(
-      /login model defaults patch/
-    );
   });
 
   test("applies required patches and records optional compatibility skips", () => {
@@ -677,7 +690,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("E.listSkills=async()=>await H(e)");
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
     expect(patched).toContain("E.readTodos=async()=>await(await S()).readTodos?.()??[]");
-    expect(patched).toContain("E.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await S();await E.$zRestorePersistedBackgroundTasks?.($zRuntimeProjectionBridge);let t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;");
+    expect(patched).toContain("E.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await S();let $zExecutionState=await $zRuntimeProjectionBridge.readExecutionState();await E.$zRestorePersistedBackgroundTasks?.($zRuntimeProjectionBridge);let t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;");
     expect(patched).toContain(".filter(o=>o.isBackgrounded===!0).map(o=>");
     expect(patched).toContain("backgroundTaskDetails:r");
     expect(patched).toContain("E.$zRestorePersistedBackgroundTasks=async $zApp=>");
@@ -706,7 +719,7 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.()");
     expect(patched).toContain("E.previewFileRewind=async e=>{let t=await S();return await t.runtime?.previewWorkspaceFileRewind?.({targetMessageIds:e})??null}");
     expect(patched).toContain("E.applyFileRewind=async e=>{let t=await S();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}");
-    expect(patched).toContain("E.setMode=async e=>{let t=await S();if(t.setMode)return await t.setMode(e);t.runtime?.updateConfig?.({mode:e});return{mode:t.getMode?.()??e}}");
+    expect(patched).toContain("E.setMode=async e=>{return await(await S()).setMode(e)}");
     expect(patched).toContain("E.interruptTurn=async e=>");
     expect(patched).toContain("t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:");
     expect(patched).toContain('e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId');
@@ -743,7 +756,8 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("setMode:g.setMode");
     expect(patched).toContain("readSessionModel:g.readSessionModel");
     expect(patched).toContain('type:"runtime/model_selection"');
-    expect(patched).toContain('modelRef:String(e)');
+    expect(patched).toContain('...n.options?{options:n.options}:{}');
+    expect(patched).not.toContain('modelRef:String(e)');
     expect(patched).toContain("subscribeSessionEvents:g.subscribeSessionEvents");
     expect(patched).toContain("sendBackgroundTaskMessage:g.sendBackgroundTaskMessage");
     expect(patched).toContain("sessionStore.queryTaskUsage?.({sessionID:e.sessionId})");
@@ -758,6 +772,7 @@ describe("runtime synchronization", () => {
     )(
       bridge,
       async () => ({
+        readExecutionState: () => ({ mode: "edit", planEnabled: true }),
         runtime: {
           getProjection: () => ({
             activeToolCalls: [],
@@ -783,6 +798,7 @@ describe("runtime synchronization", () => {
     )(
       liveProjectionBridge,
       async () => ({
+        readExecutionState: () => ({ mode: "edit", planEnabled: true }),
         runtime: {
           getProjection: () => ({
             activeToolCalls: [],
@@ -1264,7 +1280,7 @@ describe("runtime synchronization", () => {
     )).toThrow(/active-turn steer delivery anchor missing/);
   });
 
-  test("persists transient model switches through the runtime session store", async () => {
+  test("delegates session model persistence to the current runtime and refreshes reasoning options", async () => {
     const runtime = [
       "function R(e,t){return f(e,{rewindCreatedMessageId:t.revert?.createdMessageID,rewindKeptMessageIds:t.revert?.keptMessageIDs,rewindTargetMessageId:t.revert?.targetMessageID})}",
       "async function L(e){if(!e.sessionStore)return[];let t=await e.sessionStore.messages({sessionID:e.sessionId});return p(t)}",
@@ -1283,7 +1299,7 @@ describe("runtime synchronization", () => {
     const start = patched.indexOf("E.setTransientModel=async");
     const end = patched.indexOf(",E.readSessionModel=", start);
     const bridge: Record<string, unknown> = {};
-    const saved: unknown[] = [];
+    const selections: string[] = [];
     const setTransientModel = new Function(
       "E",
       "S",
@@ -1292,24 +1308,16 @@ describe("runtime synchronization", () => {
       bridge,
       async () => ({
         sessionId: "sess_model_switch",
-        setModel: async () => ({ model: "zai/glm-5.3-flash", thoughtLevel: "high" }),
-        runtime: {
-          getModelRef: () => ({ providerId: "zai", modelId: "glm-5.3-flash" }),
-          sessionStore: { saveSessionEntry: async (entry: unknown) => saved.push(entry) }
-        }
+        setModel: async (model: string) => { selections.push(model); return { model }; },
+        getThoughtLevel: () => "high",
+        listThoughtLevels: () => ["disabled", "high"]
       })
     ) as (model: string) => Promise<unknown>;
 
-    await setTransientModel("zai/glm-5.3-flash");
-    expect(saved[0]).toMatchObject({
-      sessionID: "sess_model_switch",
-      type: "runtime/model_selection",
-      data: {
-        modelRef: "zai/glm-5.3-flash",
-        providerId: "zai",
-        modelId: "glm-5.3-flash"
-      }
+    expect(await setTransientModel("zai/glm-5.3-flash")).toMatchObject({
+      model: "zai/glm-5.3-flash", thoughtLevel: "high", effortOptions: ["disabled", "high"]
     });
+    expect(selections).toEqual(["zai/glm-5.3-flash"]);
   });
 
   test("upgrades an already-patched runtime that lacks the transient model bridge", () => {
@@ -1363,7 +1371,7 @@ describe("runtime synchronization", () => {
     );
     const fullyPatched = patchRuntimeTuiBridge(runtime);
     const stripped = fullyPatched
-      .replace(/[A-Za-z_$]+\.setMode=async e=>\{let t=await [A-Za-z_$][\w$]*\(\);if\(t\.setMode\)return await t\.setMode\(e\);t\.runtime\?\.updateConfig\?\.\(\{mode:e\}\);return\{mode:t\.getMode\?\.\(\)\?\?e\}\},/u, "")
+      .replace(/[A-Za-z_$]+\.setMode=async e=>\{return await\(await [A-Za-z_$][\w$]*\(\)\)\.setMode\(e\)\},/u, "")
       .replace(/setMode:[A-Za-z_$][\w$]*\.setMode,/u, "");
     expect(stripped).not.toMatch(/\.setMode=async/u);
     expect(stripped).not.toMatch(/setMode:[A-Za-z_$][\w$]*\.setMode/u);
@@ -1473,7 +1481,7 @@ describe("runtime synchronization", () => {
     expect(() => patchRuntimeGoalFailurePause("incompatible runtime")).toThrow(/incompatible/);
   });
 
-  test("reclassifies a graceful mid-stream EOF without a finish reason as retryable", () => {
+  test("reclassifies registry stream EOF as retryable", () => {
     const runtime = [
       "function detectFallback(e){return}",
       "function findProviderError(e){return}",
@@ -1494,7 +1502,10 @@ describe("runtime synchronization", () => {
       "await Ac({...k,attempt:u,durationMs:de-c,requestHeaderCount:U,requestHeaders:F,responseHeaderCount:Object.keys(le).length,responseHeaders:le,providerRequestId:m2e(le),finishReason:x.finishReason,usage:x.usage,timeToFirstProviderEventMs:Z,timeToFirstContentMs:J,timeToFirstTextMs:Q,streamMaxIdleMs:X||void 0,streamStallCount:V,streamOutputCommitted:z,timestamp:new Date(de).toISOString(),type:\"model_request_completed\"},_A(e)),O=!0}",
       "r&&P&&await Yrt({modelIoFullRetentionEnabled:e.modelIoFullRetentionEnabled,attempt:u,debugDir:e.debugDir,isDev:n,normalizedToolCalls:S.snapshotNormalizedToolCalls(),options:P,recordModelIO:r,request:b,requestId:k.requestId,resolved:H,result:W,startedAt:c});return}"
     ].join("");
-    const source = `${runtime}${runner}`;
+    const source = `${runtime}${runner.replace(
+      'providerId:String(k.model.providerId),providerKind:k.providerKind,source:x.lastErrorChunk??x.lastFinishChunk})',
+      'providerId:String(k.providerId),providerKind:H.providerKind,source:x.lastErrorChunk??x.lastFinishChunk})??fallback({captcha:H.accountAccess?.mode==="start-plan",providerId:String(k.providerId),providerKind:H.providerKind})'
+    )}`;
 
     expect(hasRuntimeStreamEofFinishGuard(source)).toBe(false);
     const patched = patchRuntimeStreamEofFinishGuard(source);

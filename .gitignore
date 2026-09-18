@@ -2,6 +2,7 @@ node_modules/
 vendor/
 packages/zcode-tui/dist/
 bin/zcode.js
+bin/runtime-config.cjs
 .vendor-next/
 .release/
 .zcode/

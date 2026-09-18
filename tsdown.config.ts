@@ -2,6 +2,18 @@ import { defineConfig } from "tsdown";
 
 export default defineConfig([
   {
+    name: "runtime-config",
+    entry: { "runtime-config": "src/runtime-config-bridge.ts" },
+    outDir: "bin",
+    outExtensions: () => ({ js: ".cjs" }),
+    format: "cjs",
+    platform: "node",
+    target: "node22.19",
+    clean: false,
+    dts: false,
+    sourcemap: false
+  },
+  {
     name: "launcher",
     entry: { zcode: "bin/zcode.ts" },
     outDir: "bin",

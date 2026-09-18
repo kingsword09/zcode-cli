@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { extname, isAbsolute, join } from "node:path";
 
-import { readUserConfig, updateUserConfig } from "../../../src/model-access.ts";
+import { readCliSettings, updateCliSettings } from "../../../src/model-access.ts";
 
 import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
 
@@ -113,20 +113,20 @@ export function notificationSettings(
 export async function readNotificationSettings(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<NotificationSettings> {
-  return notificationSettings(env, await readUserConfig(env));
+  return notificationSettings(env, await readCliSettings(env));
 }
 
 export async function readStoredNotificationSettings(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<NotificationSettings> {
-  return notificationSettings({}, await readUserConfig(env));
+  return notificationSettings({}, await readCliSettings(env));
 }
 
 export async function writeNotificationSettings(
   settings: NotificationSettings,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string> {
-  return await updateUserConfig((config) => {
+  return await updateCliSettings((config) => {
     const ui = record(config.ui) ?? {};
     ui.notifications = { ...settings };
     config.ui = ui;

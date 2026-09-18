@@ -88,7 +88,7 @@ try {
   await sendAndWait("/settings\r", "settings picker", /ZCode settings/i);
   await sendAndWait("\x1b[B\x1b[B\r", "notification timing picker", /When to notify/i);
   await sendAndWait("\x1b[B\r", "saved setting returned to root", /When to notify: always saved · environment override remains active/i);
-  const savedConfig = (await Bun.file(join(temporaryHome, ".zcode", "cli", "config.json")).json()) as {
+  const savedConfig = (await Bun.file(join(temporaryHome, ".zcode", "cli", "setting.json")).json()) as {
     ui?: { notifications?: { condition?: string } };
   };
   if (savedConfig.ui?.notifications?.condition !== "always") {
@@ -122,35 +122,22 @@ try {
   await sendAndWait("\x1b[Z", "edit mode shortcut", /◈ alpha\/model ─ ◉ edit ─ ⚡ low/i);
   await Bun.sleep(1_100);
   await sendAndWait("\x1b[Z", "yolo mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i);
-  await sendAndWait("\x1b[Z", "plan mode shortcut", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i);
-  await sendAndWait("\x0e", "model shortcut", /◈ beta\/model ─ ◉ plan ─ ⚡ low/i);
-  await sendAndWait("\t", "effort shortcut", /◈ beta\/model ─ ◉ plan ─ ⚡ high/i);
+  await sendAndWait("/plan on\r", "independent Plan switch", /Plan enabled · permission mode: yolo/i);
+  await sendAndWait("\x0e", "model shortcut", /◈ beta\/model ─ ◉ yolo ─ ⚡ low/i);
+  await sendAndWait("\t", "effort shortcut", /◈ beta\/model ─ ◉ yolo ─ ⚡ high/i);
   // /model — flat quick-switch picker (session-level, not persistent)
   await sendAndWait("/model\r", "model picker", /Select model/i);
-  await sendAndWait("alpha\r", "model picker selection", /◈ alpha\/model ─ ◉ plan ─ ⚡ high/i);
-  // /settings → Model providers — three-level cascade (provider → main → lite)
-  // Use sendAndSettle + a settle delay to flush any buffered key sequences
-  // from prior test steps before driving the Model providers cascade.
+  await sendAndWait("alpha\r", "model picker selection", /◈ alpha\/model ─ ◉ yolo ─ ⚡ high/i);
   await sendAndSettle("/settings\r");
   await waitFor("settings menu (re-opened)", /Model providers\s+(?:Session:|Saved:)/i);
   await Bun.sleep(renderSettleMilliseconds * 2);
-  await sendAndWait("\r", "model providers entry", /Configure the main and lite/i);
-  await sendAndWait("\r", "provider selected (alpha)", /Select main model/i);
-  // Esc at lite → back to main picker (not provider)
-  await sendAndWait("\r", "lite model picker with Same as main default", /Select lite model[\s\S]*Same as main/i);
-  await sendAndWait("\x1b", "lite Esc back to main", /Select main model/i);
-  // Esc at main → back to provider picker
-  await sendAndWait("\x1b", "main Esc back to provider", /Configure the main and lite/i);
-  // Re-enter and complete the full cascade
-  await sendAndWait("\r", "provider selected (re-enter)", /Select main model/i);
-  await sendAndWait("\r", "lite model picker (re-enter)", /Select lite model/i);
-  // Press Enter directly — should confirm "Same as main" (the default)
-  await sendAndWait("\r", "model cascade confirm (Same as main default)", /Model config saved/i);
-  // The cascade returns to the settings menu — Esc to close it and return
-  // to the editor before continuing with /effort.
+  await sendAndWait("\r", "model providers entry", /Default model/i);
+  await sendAndWait("\x1b", "default model Esc back to settings", /ZCode settings/i);
+  await sendAndWait("\r", "default model picker re-opened", /Default model/i);
+  await sendAndWait("alpha/model\r", "default model saved", /Default model saved: alpha\/model/i);
   await sendAndSettle("\x1b");
   await sendAndWait("/effort\r", "effort picker", /Select reasoning effort/i);
-  await sendAndWait("\x1b[B\r", "effort picker selection", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i);
+  await sendAndWait("\x1b[B\r", "effort picker selection", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i);
   await sendAndWait("\x1b[Z", "build mode shortcut", /◈ alpha\/model ─ ◉ build ─ ⚡ low/i);
   await sendAndWait(
     "review long plan\r",
@@ -565,11 +552,11 @@ let stateOffset = 0;
 for (const [label, pattern] of [
   ["edit mode shortcut", /◈ alpha\/model ─ ◉ edit ─ ⚡ low/i],
   ["yolo mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i],
-  ["plan mode shortcut", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i],
-  ["model shortcut preserving plan", /◈ beta\/model ─ ◉ plan ─ ⚡ low/i],
-  ["effort shortcut preserving plan", /◈ beta\/model ─ ◉ plan ─ ⚡ high/i],
-  ["model picker preserving plan", /◈ alpha\/model ─ ◉ plan ─ ⚡ high/i],
-  ["effort picker preserving plan", /◈ alpha\/model ─ ◉ plan ─ ⚡ low/i],
+  ["plan mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i],
+  ["model shortcut preserving plan", /◈ beta\/model ─ ◉ yolo ─ ⚡ low/i],
+  ["effort shortcut preserving plan", /◈ beta\/model ─ ◉ yolo ─ ⚡ high/i],
+  ["model picker preserving plan", /◈ alpha\/model ─ ◉ yolo ─ ⚡ high/i],
+  ["effort picker preserving plan", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i],
   ["build mode shortcut", /◈ alpha\/model ─ ◉ build ─ ⚡ low/i],
   ["scrollable plan approval", /Plan approval fixture complete: allow\./i],
   ["plan feedback continuation", /Plan approval fixture complete: deny · plan_approval_feedback\./i]

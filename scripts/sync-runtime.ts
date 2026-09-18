@@ -494,6 +494,12 @@ export function patchRuntimeGoalFailurePause(runtime: string): string {
 }
 
 export function patchRuntimeTuiBridge(runtime: string): string {
+  // Upstream's login gate only checks account subscriptions. API-key providers
+  // imported into the registry must remain usable without a separate OAuth login.
+  runtime = runtime.replace(
+    /return async\(\)=>\(await ([A-Za-z_$][\w$]*)\(\)\)\.hasConfiguredStandaloneCodingPlan\(\{env:([A-Za-z_$][\w$]*)\.env\?\?process\.env\}\)/u,
+    (_match, bootstrap, host) => `return async()=>{let $zBootstrap=await ${bootstrap}(),$zEnv=${host}.env??process.env;if(await $zBootstrap.hasConfiguredStandaloneCodingPlan({env:$zEnv}))return!0;let $zRegistry=await $zBootstrap.startProcessProviderRegistryRuntime($zEnv,${host}.skipUserConfig?{}:{standalone:{legacyCliUserConfigFilePath:${host}.userConfigPath}});try{return $zRegistry.runtime.registryService.getView().providers.some($zProvider=>$zProvider.config.visibility!=="hidden"&&$zProvider.models.length>0&&typeof $zProvider.config.access?.apiKey==="string"&&$zProvider.config.access.apiKey.trim().length>0)}finally{$zRegistry.dispose()}}`
+  );
   const transcriptMessageIdPattern = /\.push\(\{content:[A-Za-z_$][\w$]*,messageId:[A-Za-z_$][\w$]*\.info\.id,role:"user"\}\)/u;
   const transcriptAgentMessageIdPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id[^}]*role:"agent"/u;
   const transcriptAgentModelPattern = /messageId:[A-Za-z_$][\w$]*\.info\.id,role:"agent",model:\{providerId:[A-Za-z_$][\w$]*\.info\.providerID,modelId:[A-Za-z_$][\w$]*\.info\.modelID\}/u;
@@ -534,6 +540,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const projectionBridgeMarker = ".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ";
   const modeBridgePattern = /\.setMode=async/u;
   const modeOptionPattern = /setMode:[A-Za-z_$][\w$]*\.setMode/u;
+  const cliModeOverrideBridge = /([A-Za-z_$][\w$]*)\.setMode=async ([A-Za-z_$][\w$]*)=>\(\{mode:await [A-Za-z_$][\w$]*\(\2\)\}\)/u;
   const transientModelBridgePattern = /\.setTransientModel=async/u;
   const transientModelOptionPattern = /setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u;
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
@@ -570,6 +577,10 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && listModelOptionsOptionPattern.test(runtime)
     && modeBridgePattern.test(runtime)
     && modeOptionPattern.test(runtime)
+    && !cliModeOverrideBridge.test(runtime)
+    && runtime.includes(".readExecutionState=async")
+    && runtime.includes(".setPlanEnabled=async")
+    && runtime.includes("...$zExecutionState")
     && transientModelBridgePattern.test(runtime)
     && transientModelOptionPattern.test(runtime)
     && sessionEventsBridgePattern.test(runtime)
@@ -699,7 +710,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     'if(!$zSpawn||typeof $zSpawn!=="object"||Array.isArray($zSpawn)){let $zAgentId=',
     'if(!$zSpawn||typeof $zSpawn!=="object"||Array.isArray($zSpawn)){if(!$zOutput.includes("Async agent launched successfully."))continue;let $zAgentId='
   );
-  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ${getApp}();await ${bridge}.$zRestorePersistedBackgroundTasks?.($zRuntimeProjectionBridge);let t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;let r=Object.values($zRuntimeProjectionBridge.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.status==="running"?null:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.status==="running"?null:o.completedAt,cancelRequestedAt:o.status==="running"?null:o.cancelRequestedAt,blocked:o.status==="running"?null:o.blocked,blockedReason:o.status==="running"?null:o.blockedReason,cancellable:(o.taskType??o.type)==="local_agent"?o.status==="running":o.cancellable}));let s=Array.isArray(t.backgroundTasks)?t.backgroundTasks.slice():[];for(let $zDetail of r){let $zIndex=s.findIndex($zExisting=>$zExisting.taskId===$zDetail.taskId);if($zIndex<0)s.push($zDetail);else s[$zIndex]={...s[$zIndex],...Object.fromEntries(Object.entries($zDetail).filter(([,v])=>v!==void 0))}}return{...t,backgroundTasks:s,backgroundTaskDetails:r,restoredBackgroundTasks:Array.isArray($zRuntimeProjectionBridge.$zRestoredBackgroundTasksLog)?$zRuntimeProjectionBridge.$zRestoredBackgroundTasksLog:[]}}`;
+  const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ${getApp}();let $zExecutionState=await $zRuntimeProjectionBridge.readExecutionState();await ${bridge}.$zRestorePersistedBackgroundTasks?.($zRuntimeProjectionBridge);let t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;let r=Object.values($zRuntimeProjectionBridge.runtime?.runtimeTaskRegistry?.all?.()??{}).filter(o=>o.isBackgrounded===!0).map(o=>({taskId:o.taskId,taskKind:o.taskType??o.type,agentId:o.agentId,agentType:o.agentType,childSessionId:o.childSessionId,parentSessionId:o.parentSessionId,parentToolCallId:o.parentToolCallId,turnId:o.turnId,prompt:o.prompt,error:o.status==="running"?null:o.error instanceof Error?o.error.message:typeof o.error==="string"?o.error:void 0,outputPath:o.outputFile,status:o.status,description:o.description,startedAt:o.startedAt,completedAt:o.status==="running"?null:o.completedAt,cancelRequestedAt:o.status==="running"?null:o.cancelRequestedAt,blocked:o.status==="running"?null:o.blocked,blockedReason:o.status==="running"?null:o.blockedReason,cancellable:(o.taskType??o.type)==="local_agent"?o.status==="running":o.cancellable}));let s=Array.isArray(t.backgroundTasks)?t.backgroundTasks.slice():[];for(let $zDetail of r){let $zIndex=s.findIndex($zExisting=>$zExisting.taskId===$zDetail.taskId);if($zIndex<0)s.push($zDetail);else s[$zIndex]={...s[$zIndex],...Object.fromEntries(Object.entries($zDetail).filter(([,v])=>v!==void 0))}}return{...t,...$zExecutionState,backgroundTasks:s,backgroundTaskDetails:r,restoredBackgroundTasks:Array.isArray($zRuntimeProjectionBridge.$zRestoredBackgroundTasksLog)?$zRuntimeProjectionBridge.$zRestoredBackgroundTasksLog:[]}}`;
   const taskMessageAssignment = `${bridge}.sendBackgroundTaskMessage=async e=>{let t=await ${getApp}();await ${bridge}.$zRestorePersistedBackgroundTasks?.(t);let r=t.runtime,o=r?.runtimeTaskRegistry?.get?.(e?.taskId);if(!o&&typeof t.sessionId==="string"){t.$zRestoredBackgroundTasksSession=void 0;await ${bridge}.$zRestorePersistedBackgroundTasks?.(t);o=r?.runtimeTaskRegistry?.get?.(e?.taskId)}if(!r?.subagentPort?.sendMessage)throw new Error("Background agent messaging is unavailable in this runtime.");if(!o||(o.type??o.taskType)!=="local_agent")throw new Error("The selected task is not a local agent.");if(typeof e?.message!=="string"||!e.message.trim())throw new Error("Enter a message for the background agent.");let n=e.message.trim().slice(0,2e4),i=(typeof e.summary==="string"?e.summary:n).replace(/\\s+/g," ").trim().slice(0,200);if(e?.restart===!0&&o.status==="running"){if(!r.subagentPort.stopTask)throw new Error("Background agent restart is unavailable in this runtime.");await r.subagentPort.stopTask(e.taskId),o=r.runtimeTaskRegistry?.get?.(e.taskId);if(!o)throw new Error("The background agent stopped but could not be restored.")}return await r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.(),turnId:o.turnId??"tui-task-message",parentToolCallId:o.parentToolCallId??"tui-task-message",to:o.agentId??e.taskId,summary:i,message:n,workingDirectory:o.workingDirectory??r.workingDirectory,workspaceRoot:o.workspaceRoot??r.workingDirectory,trace:o.traceContext??r.rootTraceContext})}`;
   if (!listSkillsBridgePattern.test(patched)) {
     const listSkillsFactory = /listSkills:[A-Za-z_$][\w$]*\(\(\)=>([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),"listSkills"\)/u
@@ -725,7 +736,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!patched.includes(projectionBridgeMarker) || !patched.includes(backgroundRestoreMarker)
     || !patched.includes(backgroundTasksMergeMarker) || !patched.includes(backgroundTasksReplaceMarker)
-    || !patched.includes(backgroundTasksRestoredFieldMarker)) {
+    || !patched.includes(backgroundTasksRestoredFieldMarker) || !patched.includes("...$zExecutionState")) {
     const existingProjectionStart = `${bridge}.readRuntimeProjection=async()=>`;
     const existingProjectionIndex = patched.indexOf(existingProjectionStart);
     if (existingProjectionIndex >= 0) {
@@ -767,17 +778,25 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".applyFileRewind=async e=>")) {
     assignments.push(`${bridge}.applyFileRewind=async e=>{let t=await ${getApp}();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}`);
   }
+  // The upstream CLI shim turns every switch into a permanent --mode override,
+  // which prevents later resumes from loading their saved execution state.
+  patched = patched.replace(cliModeOverrideBridge, `${bridge}.setMode=async e=>{return await(await ${getApp}()).setMode(e)}`);
   if (!modeBridgePattern.test(patched)) {
-    assignments.push(`${bridge}.setMode=async e=>{let t=await ${getApp}();if(t.setMode)return await t.setMode(e);t.runtime?.updateConfig?.({mode:e});return{mode:t.getMode?.()??e}}`);
+    assignments.push(`${bridge}.setMode=async e=>{return await(await ${getApp}()).setMode(e)}`);
   }
-  // Session-level (transient) model switch: the runtime's setModel persists
-  // model.main to config.json by default; {transient:true} keeps it in-memory
-  // so the /model quick picker does not rewrite saved defaults.
+  if (!patched.includes(".readExecutionState=async")) {
+    assignments.push(`${bridge}.readExecutionState=async()=>await(await ${getApp}()).readExecutionState()`);
+  }
+  if (!patched.includes(".setPlanEnabled=async")) {
+    assignments.push(`${bridge}.setPlanEnabled=async e=>await(await ${getApp}()).setPlanEnabled(e)`);
+  }
+  // The current runtime's setModel owns session persistence and never writes
+  // the shared default. Use it directly so quick switches also survive restart.
   if (!patched.includes(".setTransientModel=async")) {
-    assignments.push(`${bridge}.setTransientModel=async e=>{let t=await ${getApp}(),r=await t.setModel?.(e,{transient:!0}),n=t.runtime?.getModelRef?.(),o=t.sessionStore??t.runtime?.sessionStore;if(n&&o?.saveSessionEntry)try{let i=Date.now();await o.saveSessionEntry({id:t.sessionId+":runtime-model-selection",sessionID:t.sessionId,type:"runtime/model_selection",touchSession:!1,time:{created:i,updated:i},data:{modelRef:String(e),modelId:String(n.modelId),providerId:String(n.providerId),...r?.thoughtLevel?{thoughtLevel:String(r.thoughtLevel)}:{}}})}catch{}return r}`);
+    assignments.push(`${bridge}.setTransientModel=async e=>{if(e==="main"){e=await ${bridge}.readDefaultModel();if(!e)throw new Error("No default model is configured.")}let t=await ${getApp}(),r=await t.setModel(e);return{...r,thoughtLevel:t.getThoughtLevel(),effortOptions:t.listThoughtLevels()}}`);
   }
   if (!patched.includes(".readSessionModel=async")) {
-    assignments.push(`${bridge}.readSessionModel=async()=>{let t=await ${getApp}(),o=t.sessionStore??t.runtime?.sessionStore,r=await o?.sessionEntries?.({sessionID:t.sessionId,type:"runtime/model_selection"}),n=Array.isArray(r)?r.at(-1)?.data:void 0;return n&&typeof n.modelRef==="string"?n.modelRef:n&&typeof n.providerId==="string"&&typeof n.modelId==="string"?n.providerId+"/"+n.modelId:void 0}`);
+    assignments.push(`${bridge}.readSessionModel=async()=>{let t=await ${getApp}(),o=t.sessionStore??t.runtime?.sessionStore,r=await o?.sessionEntries?.({sessionID:t.sessionId,type:"runtime/model_selection"}),n=Array.isArray(r)?r.at(-1)?.data:void 0;if(!n||typeof n.providerId!=="string"||typeof n.modelId!=="string")return;await t.setModel({providerId:n.providerId,modelId:n.modelId,...n.options?{options:n.options}:{}},{transient:!0});return{model:n.providerId+"/"+n.modelId,thoughtLevel:t.getThoughtLevel?.(),effortOptions:t.listThoughtLevels?.()??[]}}`);
   }
   if (!sessionEventsBridgePattern.test(patched)) {
     assignments.push(`${bridge}.subscribeSessionEvents=e=>{let t=!1,r;${getApp}().then(o=>{t||(r=o.runtime?.subscribeEvents?.({onSessionEvent:e}))});return()=>{t=!0,r?.()}}`);
@@ -874,6 +893,12 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!modeOptionPattern.test(patched)) {
     optionFields.push(`setMode:${submitBridge}.setMode`);
   }
+  if (!/readExecutionState:[A-Za-z_$][\w$]*\.readExecutionState/u.test(patched)) {
+    optionFields.push(`readExecutionState:${submitBridge}.readExecutionState`);
+  }
+  if (!/setPlanEnabled:[A-Za-z_$][\w$]*\.setPlanEnabled/u.test(patched)) {
+    optionFields.push(`setPlanEnabled:${submitBridge}.setPlanEnabled`);
+  }
   if (!/setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u.test(patched)) {
     optionFields.push(`setTransientModel:${submitBridge}.setTransientModel`);
   }
@@ -893,24 +918,81 @@ export function patchRuntimeTuiBridge(runtime: string): string {
 }
 
 export function patchRuntimeModelCatalogReload(runtime: string): string {
+  runtime = runtime
+    .replace("Use main, lite, or a provider/model id to switch the active session model.", "Use a provider/model id to switch the active session model.")
+    .replace("/model [list|main|lite|provider/model]", "/model [list|provider/model]")
+    .replace("Use /model <provider/model>, /model main, or /model lite.", "Use /model <provider/model> to switch this session.");
   if (/reloadModelOptions:[A-Za-z_$][\w$]*\.reloadModelOptions/u.test(runtime)
     && runtime.includes(".reloadModelOptions=async()=>")) return runtime;
   const list = /([A-Za-z_$][\w$]*)\.listModelOptions=async\(\)=>\(await ([A-Za-z_$][\w$]*)\(\)\)\.listModels\?\.\(\)\?\?\[\]/u.exec(runtime);
-  const createConfig = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"createConfig"\)/u.exec(runtime)?.[1];
   const factoryStart = list ? runtime.lastIndexOf("function ", list.index) : -1;
-  const host = factoryStart >= 0 && list
-    ? /^function [A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*)(?:,|\))/u.exec(runtime.slice(factoryStart, list.index))?.[1]
-    : undefined;
   const option = /listModelOptions:([A-Za-z_$][\w$]*)\.listModelOptions/u.exec(runtime);
-  if (!list || !createConfig || !host || !option || !runtime.includes('"setModelCatalogOverlay"')) {
-    throw new Error("ZCode runtime is incompatible with model catalog reload (config/overlay bridge anchor missing).");
+  const registryList = /listModels:([A-Za-z_$][\w$]*)\(\(\)=>([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\.providerRegistry\),"listModels"\)/u.exec(runtime);
+  if (list && option && registryList) {
+    const [, bridge, getApp] = list;
+    const [, label, , context] = registryList;
+    const registry = /let ([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*),[A-Za-z_$][\w$]*=\1\?\.modelSelectionConfigRepository\?await \1\.modelSelectionConfigRepository\.read\(\)/u.exec(runtime.slice(factoryStart, list.index))?.[2];
+    // 3.12+ owns catalog discovery and personal config in the registry service.
+    // Refresh that same service so active sessions keep their model selection.
+    if (!registry || !runtime.includes('"ProviderRegistryService"') || !/refresh\([^)]*="explicit"\)/u.test(runtime)) {
+      throw new Error("ZCode runtime is incompatible with model catalog reload (registry refresh anchor missing).");
+    }
+    return runtime
+      .replace(registryList[0], `${registryList[0]},reloadModels:${label}(async()=>{await ${context}.providerRegistry.refresh("cli-model-catalog");return ${registryList[2]}(${context}.providerRegistry)},"reloadModels")`)
+      .replace(list[0], `${bridge}.reloadModelOptions=async()=>await(await ${getApp}()).reloadModels(),${bridge}.readDefaultModel=async()=>{await ${getApp}();let $zSelection=await(await ${registry}).modelSelectionConfigRepository.read();return $zSelection?$zSelection.providerId+"/"+$zSelection.modelId:void 0},${bridge}.setDefaultModel=async $zModel=>{let $zApp=await ${getApp}(),$zIndex=$zModel.indexOf("/"),$zSelection={providerId:$zModel.slice(0,$zIndex),modelId:$zModel.slice($zIndex+1)};if($zIndex<=0||!$zApp.getModelOption($zSelection))throw new Error("Unknown default model: "+$zModel);await(await ${registry}).modelSelectionConfigRepository.saveConfiguredDefault($zSelection);return await ${bridge}.setTransientModel($zModel)},${list[0]}`)
+      .replace(option[0], `readDefaultModel:${option[1]}.readDefaultModel,setDefaultModel:${option[1]}.setDefaultModel,reloadModelOptions:${option[1]}.reloadModelOptions,${option[0]}`);
   }
-  const [, bridge, getApp] = list;
-  // The native loader retains user/project/env precedence and translates provider
-  // metadata. The overlay replaces the registry without replacing the session.
-  const reload = `${bridge}.reloadModelOptions=async()=>{let $zApp=await ${getApp}(),$zConfig=${createConfig}({env:${host}.env??process.env,workingDirectory:(${host}.cwd??process.cwd)(),projectConfigPath:${host}.projectConfigPath,skipUserConfig:${host}.skipUserConfig,userConfigPath:${host}.userConfigPath}).config,$zModel=$zConfig.model;if($zModel&&$zApp.setModelCatalogOverlay)await $zApp.setModelCatalogOverlay({targets:[$zModel.main,...$zModel.lite?[$zModel.lite]:[],...$zModel.available??[]],catalogOverrides:$zConfig.modelCatalog.overrides});return $zApp.listModels?.()??[]}`;
-  return runtime.replace(list[0], `${reload},${list[0]}`)
-    .replace(option[0], `reloadModelOptions:${option[1]}.reloadModelOptions,${option[0]}`);
+  throw new Error("ZCode runtime is incompatible with model catalog reload (registry bridge anchor missing).");
+}
+
+export function patchRuntimeSharedConfig(runtime: string): string {
+  if (runtime.includes('ZCODE_CLI_MIGRATE_CONFIG==="1"')) return runtime;
+  const file = /([A-Za-z_$][\w$]*)="config.json",([A-Za-z_$][\w$]*)="~\/\.zcode\/cli"/u.exec(runtime);
+  const importer = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"importLegacyCliPersonalProviderConfig"\)/u.exec(runtime);
+  const repository = /([A-Za-z_$][\w$]*)=class\{static\{[A-Za-z_$][\w$]*\(this,"NodePersonalProviderConfigRepository"\)/u.exec(runtime);
+  const initializer = (index: number): string | undefined => [...runtime.slice(0, index).matchAll(/([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(\(\)=>\{/gu)].at(-1)?.[1];
+  const initImporter = importer && initializer(importer.index), initRepository = repository && initializer(repository.index);
+  const main = /async function [A-Za-z_$][\w$]*\(\)\{let [A-Za-z_$][\w$]*=process\.argv\.slice\(2\);/u.exec(runtime);
+  const loader = /([A-Za-z_$][\w$]*)=\(0,[A-Za-z_$][\w$]*\.readFileSync\)\(([A-Za-z_$][\w$]*),"utf-8"\),([A-Za-z_$][\w$]*)=JSON\.parse\(\1\),([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(\3\);/u.exec(runtime);
+  const validation = loader && new RegExp(`let ([A-Za-z_$][\\w$]*)=([A-Za-z_$][\\w$]*)\\(${escapeRegExpName(loader[3]!)}\\);return\\{config:\\1\\.config`, "u")
+    .exec(runtime.slice(loader.index, loader.index + 1000));
+  if (!file || !importer || !repository || !initImporter || !initRepository || !main || !loader || !validation) {
+    throw new Error("ZCode runtime is incompatible with shared configuration (settings/migration anchors missing).");
+  }
+  const bridge = 'require(require("node:path").join(__dirname,"cli-config.cjs"))';
+  return runtime
+    .replace(file[0], `${file[1]}="setting.json",${file[2]}="~/.zcode/cli"`)
+    // Merge shared preferences after native file migrations have run, so a
+    // plugin migration cannot accidentally persist inherited Desktop values.
+    .replace(validation[0], validation[0].replace(`${validation[2]}(${loader[3]})`, `${validation[2]}(${bridge}.mergeDesktopSettings(${loader[3]},${loader[2]},process.env))`))
+    .replace(main[0], `${main[0]}if(process.env.ZCODE_CLI_MIGRATE_CONFIG==="1"){try{${initRepository}();${initImporter}();await ${bridge}.migrateLegacyProviders({Repository:${repository[1]},importLegacy:${importer[1]},env:process.env})}catch($zError){process.stderr.write(($zError instanceof Error?$zError.message:"CLI configuration migration failed")+"\\n"),process.exitCode=1}return}`);
+}
+
+export function patchRuntimeTuiExecutionState(runtime: string): string {
+  if (runtime.includes('"readExecutionState"') && runtime.includes('"setPlanEnabled"')) return runtime;
+  const modes = /\["plan","build","edit","yolo"\](;[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"formatAvailableCommandCenterModes"\))/u;
+  const getter = /getMode:([A-Za-z_$][\w$]*)\(\(\)=>([A-Za-z_$][\w$]*)\.runtime\.getMode\(\),"getMode"\)/u.exec(runtime);
+  const setter = /setMode:[A-Za-z_$][\w$]*\(async ([A-Za-z_$][\w$]*)=>\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.runtime\.getMode\(\);/u.exec(runtime);
+  if (!modes.test(runtime) || !getter || !setter || !runtime.includes("getPlanEnabled")) {
+    throw new Error("ZCode runtime is incompatible with the TUI execution state bridge.");
+  }
+  const [, label, context] = getter;
+  const state = `{mode:${context}.runtime.getMode(),planEnabled:${context}.runtime.getPlanEnabled()}`;
+  const update = `${setter[3]}.runtime.setExecutionState({mode:${setter[1]}}`;
+  const result = `{mode:${setter[3]}.runtime.getMode(),previousMode:${setter[2]},traceId:${setter[3]}.traceContext.traceId}`;
+  if (!runtime.includes(update) || !runtime.includes(result)) throw new Error("ZCode runtime is incompatible with the TUI execution state result.");
+  return runtime
+    .replace(modes, '["build","edit","yolo"]$1')
+    .replace("/mode [plan|build|edit|yolo]", "/mode [build|edit|yolo]")
+    .replaceAll("build, edit, plan, or yolo", "build, edit, or yolo")
+    .replaceAll(String.raw`build\u3001edit\u3001plan \u6216 yolo`, String.raw`build\u3001edit \u6216 yolo`)
+    .replace(/if\(([A-Za-z_$][\w$]*)==="build"\|\|\1==="plan"\|\|\1==="edit"\|\|\1==="yolo"\)return \1;throw new Error\(`Unsupported --mode value:/u,
+      'if($1==="build"||$1==="edit"||$1==="yolo")return $1;throw new Error(`Unsupported --mode value:')
+    .replace("Supported modes: build, edit, plan, yolo.", "Supported modes: build, edit, yolo. Use /plan in the TUI to toggle planning.")
+    .replace(getter[0], `${getter[0]},readExecutionState:${label}(async()=>{await ${context}.prepareResume();return ${state}},"readExecutionState"),setPlanEnabled:${label}(async $zEnabled=>{await ${context}.prepareResume();await ${context}.runtime.setExecutionState({planEnabled:$zEnabled},${context}.traceContext);return ${state}},"setPlanEnabled")`)
+    .replace(setter[0], setter[0].replace("=>{", `=>{await ${setter[3]}.prepareResume();`))
+    .replace(update, `${setter[3]}.runtime.setExecutionState({mode:${setter[1]},planEnabled:${setter[3]}.runtime.getPlanEnabled()}`)
+    .replace(result, result.replace("previousMode:", `planEnabled:${setter[3]}.runtime.getPlanEnabled(),previousMode:`));
 }
 
 export function patchRuntimeOAuthHttpErrors(runtime: string): string {
@@ -1133,7 +1215,7 @@ export function hasRuntimeStreamEofFinishGuard(runtime: string): boolean {
 export function patchRuntimeStreamEofFinishGuard(runtime: string): string {
   if (hasRuntimeStreamEofFinishGuard(runtime)) return runtime;
 
-  const completionGatePattern = /if\(([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{providerId:String\(([A-Za-z_$][\w$]*)\.model\.providerId\),providerKind:\5\.providerKind,source:\2\.lastErrorChunk/u;
+  const completionGatePattern = /if\(([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{providerId:String\(([A-Za-z_$][\w$]*)\.providerId\),providerKind:[A-Za-z_$][\w$]*\.providerKind,source:\2\.lastErrorChunk/u;
 
   const completionGate = completionGatePattern.exec(runtime);
   if (!completionGate) {
@@ -1216,8 +1298,9 @@ export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
   const abortHelper = /;([A-Za-z_$][\w$]*)\(e\.abortSignal\);let/u.exec(originalFunction)?.[1];
   const credentialStore = /e\.credentialStore\?\?([A-Za-z_$][\w$]*)\(\{env:[A-Za-z_$][\w$]*\}\)/u.exec(originalFunction)?.[1];
   const loginError = /new ([A-Za-z_$][\w$]*)\("credential_write_failed"/u.exec(originalFunction)?.[1];
-  const apiKeyResolver = /await ([A-Za-z_$][\w$]*)\(\{accessToken:[^,]+,env:[^,]+,httpClient:e\.httpClient,providerId:"zai"/u.exec(originalFunction)?.[1];
-  const configWriter = /await ([A-Za-z_$][\w$]*)\(\{apiKey:[^,]+,filePath:e\.userConfigPath,providerId:"zai"\}\)/u.exec(originalFunction)?.[1];
+  const apiKeyResolverMatch = /await ([A-Za-z_$][\w$]*)\(\{accessToken:[^,]+,env:[^,]+,httpClient:e\.httpClient,family:"zai"/u.exec(originalFunction);
+  const apiKeyResolver = apiKeyResolverMatch?.[1];
+  const configWriter = /await ([A-Za-z_$][\w$]*)\(\{accountIdentity:[^,]+\.user\.user_id,apiKey:[^,]+,credentialStore:[^,]+,env:[^,]+,personalProviderConfigPath:e\.personalProviderConfigPath,providerId:"zai"\}\)/u.exec(originalFunction)?.[1];
   const httpClientFactory = /e\.httpClient\?\?([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*=e\.state\?\?/u.exec(runtime)?.[1];
   if (!prefix || !abortHelper || !credentialStore || !loginError
     || !apiKeyResolver || !configWriter || !httpClientFactory) {
@@ -1245,8 +1328,8 @@ export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
     `if(typeof $zAccessToken!=="string"||typeof $zJwtToken!=="string"||!$zUser||typeof $zUser!=="object")throw new ${loginError}("token_exchange_failed","Z.AI token response is missing credentials or user data.");`,
     `${abortHelper}(e.abortSignal);`,
     `try{await $zStore.saveZaiLoginCredentials({accessToken:$zAccessToken,jwtToken:$zJwtToken,user:$zUser})}catch($zError){throw new ${loginError}("credential_write_failed","Login succeeded but writing credentials failed.",{cause:$zError})}`,
-    `let $zApiKey=await ${apiKeyResolver}({accessToken:$zAccessToken,env:$zEnv,httpClient:$zHttp,providerId:"zai",resolver:e.apiKeyResolver}),$zConfig;`,
-    `try{$zConfig=await ${configWriter}({apiKey:$zApiKey,filePath:e.userConfigPath,providerId:"zai"})}catch($zError){throw new ${loginError}("config_update_failed","Login succeeded but updating ZCode config failed.",{cause:$zError})}`,
+    `let $zApiKey=await ${apiKeyResolver}({accessToken:$zAccessToken,env:$zEnv,httpClient:$zHttp,family:"zai",resolver:e.apiKeyResolver}),$zConfig;`,
+    `try{$zConfig=await ${configWriter}({accountIdentity:$zUser.user_id,apiKey:$zApiKey,credentialStore:$zStore,env:$zEnv,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"zai"})}catch($zError){throw new ${loginError}("config_update_failed","Login succeeded but updating ZCode config failed.",{cause:$zError})}`,
     'return{configPath:$zConfig.path,credentialsPath:$zStore.filePath,model:$zConfig.mainModel,providerId:"zai",user:$zUser}',
     "}"
   ].join("");
@@ -1310,47 +1393,44 @@ async function installLocalTui(nextVendor: string): Promise<void> {
   await mkdir(target, { recursive: true });
   await cp(join(source, "package.json"), join(target, "package.json"));
   await cp(join(source, "dist"), join(target, "dist"), { recursive: true });
+  await cp(join(root, "bin", "runtime-config.cjs"), join(nextVendor, "cli-config.cjs"));
 }
 
 /** Align Coding Plan defaults without depending on platform-specific minifier names. */
 export function patchRuntimeLoginModelDefaults(runtime: string): string {
-  const presetPattern = /([A-Za-z_$][\w$]*)="zai\/glm-(?:5\.1|5\.2)",([A-Za-z_$][\w$]*)="zai\/glm-(?:4\.7|5-turbo)",([A-Za-z_$][\w$]*)="bigmodel\/glm-(?:5\.1|5\.2)",([A-Za-z_$][\w$]*)="bigmodel\/glm-4\.7"/u;
-  const modelIdPattern = /([A-Za-z_$][\w$]*)="glm-(?:5\.1|5\.2)",([A-Za-z_$][\w$]*)="glm-(?:4\.7|5-turbo)"/u;
-  const modelEntriesPattern = /models:\{\.\.\.([A-Za-z_$][\w$]*),\[([A-Za-z_$][\w$]*)\]:\{\.\.\.([A-Za-z_$][\w$]*),name:"GLM-5\.(?:1|2)"\},\[([A-Za-z_$][\w$]*)\]:\{\.\.\.([A-Za-z_$][\w$]*),name:"GLM-(?:4\.7|5-Turbo)"\}(?:,\["glm-5-turbo"\]:\{\.\.\.\1\["glm-5-turbo"\],name:"GLM-5-Turbo"\})?\}/u;
-  const legacyLiteSelectionPattern = /([A-Za-z_$][\w$]*)=typeof ([A-Za-z_$][\w$]*)\.lite=="string"\?\2\.lite:([A-Za-z_$][\w$]*)\.liteModel/u;
-  const scopedLiteSelectionPattern = /([A-Za-z_$][\w$]*)=typeof ([A-Za-z_$][\w$]*)\.lite=="string"&&\2\.lite\.startsWith\(([A-Za-z_$][\w$]*)\.mainModel\.slice\(0,\3\.mainModel\.indexOf\("\/"\)\+1\)\)\?\2\.lite:\3\.liteModel/u;
-
-  const preset = presetPattern.exec(runtime);
-  const modelIds = modelIdPattern.exec(runtime);
-  const modelEntries = modelEntriesPattern.exec(runtime);
-  if (!preset || !modelIds || !modelEntries
-    || modelIds[1] !== modelEntries[2]
-    || modelIds[2] !== modelEntries[4]) {
-    throw new Error("ZCode runtime is incompatible with the login model defaults patch (model preset/catalog anchors missing).");
+  // Registry runtimes select the first model declared by the server's unique
+  // Individual Coding Plan provider and persist that selection natively. The
+  // old hard-coded main/lite table must not override that catalog. Imported
+  // defaults omit reasoning options; complete them before native validation or
+  // the runtime silently falls back to the first provider/model in the registry.
+  if (hasRuntimeRegistryLoginModelDefaults(runtime)) {
+    const initial = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"resolveInitialModelSelection"\)/u.exec(runtime)?.[1];
+    const complete = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"completeNewModelSelection"\)/u.exec(runtime)?.[1];
+    const prefix = initial && new RegExp(`function ${escapeRegExpName(initial)}\\(([A-Za-z_$][\\w$]*)\\)\\{`, "u").exec(runtime);
+    if (!prefix || !complete) throw new Error("ZCode runtime is incompatible with login model defaults (registry selection anchor missing).");
+    const input = prefix[1];
+    let patched = runtime.includes("let $zConfiguredDefault=") ? runtime : runtime.replace(prefix[0], `${prefix[0]}if(${input}.configuredDefault&&!${input}.configuredDefault.options?.reasoningLevel){let $zConfiguredDefault=${complete}(${input}.registry,${input}.configuredDefault);if($zConfiguredDefault)${input}={...${input},configuredDefault:{...${input}.configuredDefault,options:{...${input}.configuredDefault.options,...$zConfiguredDefault.options}}}}`);
+    if (!patched.includes("let $zSelectedModel=")) {
+      const setter = /return ([A-Za-z_$][\w$]*)\.runtime\.setSessionModelSelection\(([A-Za-z_$][\w$]*)\),[A-Za-z_$][\w$]*\?\.transient/u.exec(patched);
+      if (!setter) throw new Error("ZCode runtime is incompatible with login model defaults (registry model switch anchor missing).");
+      const [, context, selection] = setter;
+      patched = patched.replace(setter[0], `if(!${selection}.options?.reasoningLevel){let $zSelectedModel=${complete}(${context}.providerRegistry.getView(),${selection});if($zSelectedModel)${selection}={...${selection},options:{...${selection}.options,...$zSelectedModel.options}}}${setter[0]}`);
+    }
+    return patched;
   }
+  throw new Error("ZCode runtime is incompatible with login model defaults (registry catalog anchors missing).");
+}
 
-  let patched = runtime
-    .replace(
-      preset[0],
-      `${preset[1]}="zai/glm-5.2",${preset[2]}="zai/glm-5-turbo",${preset[3]}="bigmodel/glm-5.2",${preset[4]}="bigmodel/glm-4.7"`
-    )
-    .replace(modelIds[0], `${modelIds[1]}="glm-5.2",${modelIds[2]}="glm-4.7"`)
-    .replace(
-      modelEntries[0],
-      `models:{...${modelEntries[1]},[${modelEntries[2]}]:{...${modelEntries[3]},name:"GLM-5.2"},[${modelEntries[4]}]:{...${modelEntries[5]},name:"GLM-4.7"},["glm-5-turbo"]:{...${modelEntries[1]}["glm-5-turbo"],name:"GLM-5-Turbo"}}`
-    );
-
-  const legacyLiteSelection = legacyLiteSelectionPattern.exec(patched);
-  if (legacyLiteSelection) {
-    const [, selection, model, selectedPreset] = legacyLiteSelection;
-    patched = patched.replace(
-      legacyLiteSelection[0],
-      `${selection}=typeof ${model}.lite=="string"&&${model}.lite.startsWith(${selectedPreset}.mainModel.slice(0,${selectedPreset}.mainModel.indexOf("/")+1))?${model}.lite:${selectedPreset}.liteModel`
-    );
-  } else if (!scopedLiteSelectionPattern.test(patched)) {
-    throw new Error("ZCode runtime is incompatible with the login model defaults patch (lite model anchor missing).");
-  }
-  return patched;
+export function hasRuntimeRegistryLoginModelDefaults(runtime: string): boolean {
+  const resolveProvider = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"resolveStandaloneCodingPlanProvider"\)/u.exec(runtime)?.[1];
+  if (!resolveProvider) return false;
+  const persistence = new RegExp(`async function [A-Za-z_$][\\w$]*\\(e\\)\\{let ([A-Za-z_$][\\w$]*)=await ${escapeRegExpName(resolveProvider)}\\(e\\.providerId,e\\.env\\),([A-Za-z_$][\\w$]*)=\\1\\.providerId,([A-Za-z_$][\\w$]*)=\\1\\.modelId,`, "u").exec(runtime);
+  return !!persistence
+    && runtime.includes('"readStandaloneCodingPlanCatalog"')
+    && /\.builtinModelIds\?\.find\([A-Za-z_$][\w$]*=>[A-Za-z_$][\w$]*\.trim\(\)\)\?\.trim\(\)/u.test(runtime)
+    && runtime.includes('mode==="individual-coding-plan"')
+    && runtime.includes(`.saveConfiguredDefault({providerId:${persistence[2]},modelId:${persistence[3]}})`)
+    && runtime.includes('"persistStandaloneCodingPlanConnection"');
 }
 
 const goalFailurePauseMarker = /finishTargetTurnAccounting\(\{[^{}]*?status:"paused",traceContext:/u;
@@ -1360,6 +1440,17 @@ const terminalProjectionMarkers = [
 ] as const;
 
 export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
+  {
+    id: "tui-execution-state", requirement: "required", apply: patchRuntimeTuiExecutionState,
+    verify: runtime => runtime.includes('"readExecutionState"') && runtime.includes('"setPlanEnabled"')
+      && /\["build","edit","yolo"\];[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"formatAvailableCommandCenterModes"\)/u.test(runtime)
+  },
+  {
+    id: "shared-config",
+    requirement: "required",
+    apply: patchRuntimeSharedConfig,
+    verify: runtime => runtime.includes('ZCODE_CLI_MIGRATE_CONFIG==="1"') && runtime.includes('="setting.json",')
+  },
   {
     id: "official-mcp-availability",
     requirement: "optional",
@@ -1491,6 +1582,22 @@ async function installTuiBridge(nextVendor: string): Promise<RuntimePatchReport[
   const result = applyRuntimePatchPlan(runtime);
   await writeFile(runtimePath, result.runtime);
   return result.reports;
+}
+
+export async function installRuntimeProviderConfig(glm: string, nextVendor: string): Promise<void> {
+  const runtime = await readFile(join(nextVendor, "zcode.cjs"), "utf8");
+  if (!runtime.includes('"resolveBundledZCodeBuiltinProviderConfig"')) {
+    throw new Error("ZCode runtime does not support the required provider registry.");
+  }
+  const target = join(nextVendor, "provider", "zcode-builtin.json");
+  const source = join(dirname(glm), "config", "provider", "zcode-builtin.json");
+  if (!existsSync(source)) {
+    throw new Error("ZCode registry runtime is missing config/provider/zcode-builtin.json.");
+  }
+  await mkdir(dirname(target), { recursive: true });
+  // Copy the complete current catalog, including capability and option maps.
+  // A pre-existing extraction must not pin an older catalog revision.
+  await cp(source, target);
 }
 
 async function findFile(directory: string, name: string): Promise<string | null> {
@@ -1627,6 +1734,7 @@ async function sync(options: SyncOptions): Promise<void> {
     source = await resolveSource(options, temporaryDirectory);
     await rm(nextVendor, { recursive: true, force: true });
     await cp(source.glm, nextVendor, { recursive: true });
+    await installRuntimeProviderConfig(source.glm, nextVendor);
     runtimePatches = await installTuiBridge(nextVendor);
     await installLocalTui(nextVendor);
     const node = process.env.ZCODE_NODE || Bun.which("node");

@@ -108,6 +108,7 @@ export interface RuntimeProjectionSnapshot {
   sessionId?: string;
   status?: string;
   mode?: string;
+  planEnabled?: boolean;
   turnCount?: number;
   totalTokenCount?: number;
   currentTurnId?: string;
@@ -344,6 +345,7 @@ export function normalizeRuntimeProjection(value: unknown): RuntimeProjectionSna
     sessionId: stringField(projection, "sessionId", "sessionID", "id"),
     status: stringField(projection, "status"),
     mode: stringField(projection, "mode"),
+    planEnabled: typeof projection.planEnabled === "boolean" ? projection.planEnabled : undefined,
     turnCount: nonNegativeInteger(projection.turnCount),
     totalTokenCount: nonNegativeInteger(projection.totalTokenCount),
     currentTurnId: stringField(projection, "currentTurnId", "currentTurnID"),

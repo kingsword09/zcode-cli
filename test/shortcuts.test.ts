@@ -11,16 +11,17 @@ import {
 } from "../packages/zcode-tui/src/shortcuts.ts";
 
 describe("TUI shortcuts", () => {
-  test("cycles every official mode through one Shift+Tab state", () => {
+  test("cycles only the three Desktop permission modes", () => {
     expect(normalizedMode("invalid")).toBe("build");
     expect(nextMode("build")).toBe("edit");
     expect(nextMode("edit")).toBe("yolo");
-    expect(nextMode("yolo")).toBe("plan");
+    expect(nextMode("auto")).toBe("build");
+    expect(nextMode("yolo")).toBe("build");
     expect(nextMode("plan")).toBe("build");
   });
 
   test("isolates mode, model, and effort command results", () => {
-    expect(settingTargetForCommand("/mode plan")).toBe("mode");
+    expect(settingTargetForCommand("/mode edit")).toBe("mode");
     expect(settingTargetForCommand(" /model local/glm ")).toBe("model");
     expect(settingTargetForCommand("/effort max")).toBe("effort");
     expect(settingTargetForCommand("/variant high")).toBe("effort");

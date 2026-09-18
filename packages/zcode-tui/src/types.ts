@@ -76,6 +76,8 @@ export interface RuntimeAdapter {
   listPluginReferences?: ListPluginReferences;
   listSkills?: ListSkills;
   listModelOptions?: () => Promise<unknown[]>;
+  readDefaultModel?: () => Promise<string | undefined>;
+  setDefaultModel?: (model: string) => Promise<unknown>;
   reloadModelOptions?: () => Promise<unknown[]>;
   setTransientModel?: (modelId: string) => Promise<unknown>;
   readSessionModel?: () => Promise<unknown>;
@@ -102,6 +104,8 @@ export interface RuntimeAdapter {
   ) => Promise<unknown>;
   submitPrompt: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   setMode?: (mode: string) => Promise<unknown>;
+  readExecutionState?: () => Promise<unknown>;
+  setPlanEnabled?: (enabled: boolean) => Promise<unknown>;
   listMcpServers?: () => Promise<unknown>;
   refreshWorkflowPanel?: (options: { runId?: string }) => Promise<unknown>;
   stopWorkflow?: (options: { runId: string }) => Promise<unknown>;
@@ -111,6 +115,7 @@ export interface RuntimeAdapter {
 
 export interface TuiOptions extends RuntimeAdapter {
   initialMode?: string;
+  initialPlanEnabled?: boolean;
   initialModel?: unknown;
   initialThoughtLevel?: string;
   initialTuiMode?: "regular" | "fullscreen";

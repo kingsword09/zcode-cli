@@ -1,3 +1,4 @@
+import { writeProviderFixture } from "./fixtures/provider-config.ts";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,7 +6,7 @@ import { dirname, join } from "node:path";
 
 import { missingCodingPlanKey } from "../src/prompt-preflight.ts";
 import { promptPreflight } from "../src/launcher.ts";
-import { userConfigPath } from "../src/model-access.ts";
+import { providerConfigPath } from "../src/model-access.ts";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -16,21 +17,10 @@ async function fixture() {
   const home = await mkdtemp(join(tmpdir(), "zcode-preflight-"));
   directories.push(home);
   const env = { HOME: home, USERPROFILE: home };
-  const file = userConfigPath(env);
-  const config = {
-    provider: {
-      zai: {
-        kind: "anthropic", models: { "glm-5.3-flash": {} },
-        options: { apiKeyRequired: true, baseURL: "https://api.z.ai/api/anthropic", apiKey: "" },
-        headers: {} as Record<string, string>
-      }
-    },
-    model: { main: "zai/glm-5.3-flash" }
-  };
-  await mkdir(dirname(file), { recursive: true });
+  const { config, path: file } = await writeProviderFixture(env, { providerId: "zai", modelId: "GLM-5.3", apiType: "anthropic-messages" });
+  const settings = config.config.providerConfigRules.providerRules[0]!.config;
   const save = () => writeFile(file, JSON.stringify(config));
-  await save();
-  return { home, env, file, config, save, options: { env, workingDirectory: home } };
+  return { home, env, file, config, settings, save, options: { env, workingDirectory: home } };
 }
 
 describe("prompt credential preflight (offline)", () => {
@@ -43,11 +33,11 @@ describe("prompt credential preflight (offline)", () => {
 
   test("permits configured keys and auth headers without revealing them", async () => {
     const f = await fixture();
-    f.config.provider.zai.options.apiKey = "private-fixture-key";
+    f.settings.access.apiKey = "private-fixture-key";
     await f.save();
     expect(await missingCodingPlanKey(f.options)).toBeUndefined();
-    f.config.provider.zai.options.apiKey = "";
-    f.config.provider.zai.headers.Authorization = "Bearer private-fixture-token";
+    f.settings.access.apiKey = "";
+    Object.assign(f.settings.api, { headers: { Authorization: "Bearer private-fixture-token" } });
     await f.save();
     expect(await missingCodingPlanKey(f.options)).toBeUndefined();
   });
@@ -64,14 +54,11 @@ describe("prompt credential preflight (offline)", () => {
     } })).toBeDefined();
   });
 
-  test("does not block a session's different model, OAuth provider, or custom endpoint", async () => {
+  test("defers a session's different model and account provider", async () => {
     const f = await fixture();
-    for (const model of ["bigmodel/glm-5.3-flash", "builtin:bigmodel-start-plan/GLM-5.3-Flash", "default"]) {
+    for (const model of ["bigmodel/glm-5.3-flash", "account:bigmodel-start-plan/GLM-5.3-Flash", "default"]) {
       expect(await missingCodingPlanKey({ ...f.options, model })).toBeUndefined();
     }
-    f.config.provider.zai.options.baseURL = "http://localhost:8000";
-    await f.save();
-    expect(await missingCodingPlanKey(f.options)).toBeUndefined();
   });
 
   test("defers project and dotenv overrides in parent directories", async () => {

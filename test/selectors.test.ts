@@ -7,11 +7,22 @@ import {
   isModePickerRequest,
   isModelPickerRequest,
   modePicker,
-  modelPicker,
-  providerModelPicker
+  modelPicker
 } from "../packages/zcode-tui/src/selectors.ts";
 
 describe("TUI selectors", () => {
+  test("reads registry model references in the model picker", () => {
+    const options = [
+      { ref: { providerId: "account:zai-individual-coding-plan", modelId: "GLM-5.3" }, label: "GLM-5.3", providerLabel: "Z.AI" },
+      { ref: { providerId: "custom", modelId: "org/model" }, label: "Custom" }
+    ];
+    const current = "custom/org/model";
+    expect(modelPicker(options, current).items.map((item) => item.value)).toEqual([
+      "account:zai-individual-coding-plan/GLM-5.3", current
+    ]);
+    expect(modelPicker(options, current).selectedIndex).toBe(1);
+  });
+
   test("builds and selects model choices from upstream model entries", () => {
     const picker = modelPicker([
       { alias: "main", id: "zai/glm-5.2", name: "GLM-5.2" },
@@ -76,8 +87,8 @@ describe("TUI selectors", () => {
     expect(explicitModelRequest("/model list")).toBeUndefined();
     // Runtime-resolved aliases also use the transient session switch path.
     expect(explicitModelRequest("/model main")).toBe("main");
-    expect(explicitModelRequest("/model lite")).toBe("lite");
-    expect(explicitModelRequest("/model opus")).toBe("opus");
+    expect(explicitModelRequest("/model lite")).toBeUndefined();
+    expect(explicitModelRequest("/model opus")).toBeUndefined();
     // Malformed refs fall through to the runtime's own error handling.
     expect(explicitModelRequest("/model not-a-ref")).toBeUndefined();
     expect(explicitModelRequest("/effort high")).toBeUndefined();
@@ -86,17 +97,15 @@ describe("TUI selectors", () => {
   test("builds mode choices with the current mode preselected", () => {
     const picker = modePicker("edit");
     expect(picker.selectedIndex).toBe(1);
-    expect(picker.items).toEqual([
-      { value: "build", label: "Build", description: undefined, command: "/mode build" },
-      { value: "edit", label: "Edit", description: "current", command: "/mode edit" },
-      { value: "yolo", label: "Yolo", description: undefined, command: "/mode yolo" },
-      { value: "plan", label: "Plan", description: undefined, command: "/mode plan" }
-    ]);
+    expect(picker.items.map(item => item.value)).toEqual(["build", "edit", "yolo"]);
+    expect(picker.items[1]?.description).toBe("Edit automatically · current");
+    expect(modePicker("edit", ["build", "edit", "auto", "yolo", "plan"]).items.map(item => item.value))
+      .toEqual(["build", "edit", "yolo"]);
 
     // Unknown current mode falls back to index 0 with no current marker.
     const fallback = modePicker(undefined);
     expect(fallback.selectedIndex).toBe(0);
-    expect(fallback.items.every((item) => item.description === undefined)).toBe(true);
+    expect(fallback.items.every((item) => !item.description?.includes("current"))).toBe(true);
 
     // Restricted mode list (e.g. runtime-reported availability).
     const restricted = modePicker("yolo", ["build", "yolo"]);
@@ -108,67 +117,4 @@ describe("TUI selectors", () => {
     expect(isModePickerRequest("/mode plan")).toBe(false);
   });
 
-  test("groups runtime modelOptions into a provider cascade", () => {
-    // Runtime format: { modelId, providerId, providerLabel }
-    const cascade = providerModelPicker([
-      { modelId: "glm-5.2", providerId: "zai", providerLabel: "Z.AI", name: "GLM-5.2" },
-      { modelId: "glm-5-turbo", providerId: "zai", providerLabel: "Z.AI", name: "GLM-5-Turbo" },
-      { modelId: "glm-5.2", providerId: "bigmodel", providerLabel: "BigModel", name: "GLM-5.2" }
-    ], "zai/glm-5.2");
-
-    expect(cascade).not.toBeNull();
-    expect(cascade!.providers.items).toHaveLength(2);
-    expect(cascade!.providers.items[0]).toMatchObject({ value: "zai", label: "Z.AI" });
-    expect(cascade!.providers.items[1]).toMatchObject({ value: "bigmodel", label: "BigModel" });
-    expect(cascade!.providers.selectedIndex).toBe(0);
-
-    const zaiGroup = cascade!.groups.find((g) => g.providerId === "zai")!;
-    expect(zaiGroup.models.items).toHaveLength(2);
-    expect(zaiGroup.models.items[0]).toMatchObject({
-      value: "zai/glm-5.2",
-      label: "GLM-5.2",
-      command: "/model zai/glm-5.2"
-    });
-    expect(zaiGroup.models.items[0]?.description).toContain("current");
-    expect(zaiGroup.models.selectedIndex).toBe(0);
-  });
-
-  test("accepts legacy { id, name } format alongside runtime format", () => {
-    const cascade = providerModelPicker([
-      { id: "zai/glm-5.2", name: "GLM-5.2" },
-      { id: "custom/model" }
-    ], "zai/glm-5.2");
-
-    expect(cascade).not.toBeNull();
-    expect(cascade!.providers.items).toHaveLength(2);
-    expect(cascade!.groups.find((g) => g.providerId === "zai")!.models.items).toHaveLength(1);
-    expect(cascade!.groups.find((g) => g.providerId === "custom")!.models.items[0]?.label).toBe("model");
-  });
-
-  test("returns null for empty or unparseable options", () => {
-    expect(providerModelPicker([], "zai/glm-5.2")).toBeNull();
-    expect(providerModelPicker([
-      "plain-string",
-      { noId: true }
-    ], "zai/glm-5.2")).toBeNull();
-  });
-
-  test("deduplicates models within the same provider", () => {
-    const cascade = providerModelPicker([
-      { modelId: "glm-5.2", providerId: "zai" },
-      { id: "zai/glm-5.2", name: "duplicate" }
-    ], undefined);
-
-    expect(cascade!.groups[0]!.models.items).toHaveLength(1);
-  });
-
-  test("falls back to providerName when providerLabel is absent (runtime format)", () => {
-    const cascade = providerModelPicker([
-      { modelId: "glm-5.2", providerId: "zai", providerName: "Z.AI" },
-      { modelId: "glm-5.2", providerId: "bigmodel", providerName: "BigModel" }
-    ], undefined);
-
-    expect(cascade!.providers.items[0]?.label).toBe("Z.AI");
-    expect(cascade!.providers.items[1]?.label).toBe("BigModel");
-  });
 });

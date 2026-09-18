@@ -1,47 +1,4 @@
 {
-  "provider": {
-    "zai": {
-      "kind": "anthropic",
-      "name": "Z.AI Coding Plan",
-      "options": {
-        "apiKeyRequired": true,
-        "baseURL": "https://api.z.ai/api/anthropic"
-      },
-      "headers": {},
-      "models": {
-        "glm-5.3": {
-          "name": "GLM-5.3"
-        },
-        "glm-5.3-flash": {
-          "name": "GLM-5.3-Flash",
-          "limit": {
-            "context": 1000000,
-            "output": 128000
-          },
-          "modalities": {
-            "input": ["text", "image", "video"],
-            "output": ["text"]
-          }
-        },
-        "glm-5.2": {
-          "name": "GLM-5.2"
-        },
-        "glm-5.1": {
-          "name": "GLM-5.1"
-        },
-        "glm-5-turbo": {
-          "name": "GLM-5-Turbo"
-        }
-      }
-    }
-  },
-  "model": {
-    "main": "zai/glm-5.2",
-    "lite": "zai/glm-5-turbo"
-  },
-  "modelCatalog": {
-    "overrides": {}
-  },
   "modelStream": {
     "idleTimeoutMs": 60000
   },
@@ -63,7 +20,6 @@
     "compact": true,
     "rewind": true,
     "subagent": true,
-    "memory": true,
     "skill": true,
     "mcp": true
   },
@@ -71,8 +27,6 @@
     "autoBackgroundMs": 1000
   },
   "memory": {
-    "use": true,
-    "write": true,
     "autoConsolidate": true,
     "summaryMaxBytes": 8192
   },
@@ -99,7 +53,6 @@
     "format": "text"
   },
   "ui": {
-    "locale": "auto",
     "theme": "auto",
     "tuiMode": "regular",
     "copyOnSelect": true,

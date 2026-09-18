@@ -1,4 +1,4 @@
-import { readUserConfig, updateUserConfig } from "../../../src/model-access.ts";
+import { readCliSettings, updateCliSettings } from "../../../src/model-access.ts";
 
 export type TuiMode = "regular" | "fullscreen";
 
@@ -33,14 +33,14 @@ export function resolveTuiMode(
 export async function readTuiMode(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<TuiMode> {
-  return resolveTuiMode(env, await readUserConfig(env));
+  return resolveTuiMode(env, await readCliSettings(env));
 }
 
 export async function writeTuiMode(
   mode: TuiMode,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string> {
-  return await updateUserConfig((config) => {
+  return await updateCliSettings((config) => {
     const ui = record(config.ui) ?? {};
     ui.tuiMode = mode;
     config.ui = ui;

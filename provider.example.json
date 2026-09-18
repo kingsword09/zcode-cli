@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "config": {
+    "providerConfigRules": {
+      "providerRules": [
+        {
+          "providerId": "custom",
+          "templateId": null,
+          "providerName": "Custom provider",
+          "enabled": true,
+          "config": {
+            "group": "standard-personal",
+            "logo": null,
+            "access": {
+              "type": "api-key",
+              "apiKey": "",
+              "apiKeyManagementUrl": "https://api.example.com/api-keys"
+            },
+            "api": {
+              "type": "openai-chat-completions",
+              "baseUrl": "https://api.example.com/v1",
+              "headers": {}
+            },
+            "personalModelIds": [
+              "your-model-id",
+              "overrides-reference",
+              "manual-reference"
+            ],
+            "modelOrder": [
+              "your-model-id",
+              "overrides-reference",
+              "manual-reference"
+            ],
+            "visibility": "visible"
+          }
+        },
+        {
+          "providerId": "coding-plan-example",
+          "templateId": "zai-api",
+          "providerName": "Coding Plan template example",
+          "enabled": false,
+          "config": {
+            "group": "standard-personal",
+            "logo": {
+              "type": "builtin",
+              "key": "zai"
+            },
+            "access": {
+              "type": "zhipu-coding-plan-api-key",
+              "apiKey": "",
+              "apiKeyManagementUrl": "https://z.ai/manage-apikey/apikey-list"
+            },
+            "visibility": "hidden"
+          }
+        }
+      ]
+    },
+    "modelConfigRules": {
+      "providerModelRules": [
+        {
+          "providerId": "custom",
+          "modelId": "your-model-id",
+          "config": {
+            "enabled": true
+          }
+        },
+        {
+          "providerId": "custom",
+          "modelId": "overrides-reference",
+          "config": {
+            "enabled": false,
+            "properties": {
+              "contextWindow": 200000,
+              "inputFormat": {
+                "supportsText": true,
+                "supportsImage": false,
+                "supportsVideo": false,
+                "supportsAudio": false,
+                "supportsPdf": false
+              },
+              "outputFormat": {
+                "supportsText": true
+              },
+              "supportsToolCall": true,
+              "supportsJsonSchemaOutput": false,
+              "supportsNativeWebSearch": false,
+              "supportsMidConversationSystem": false,
+              "requiresMfjsToolSchema": false
+            },
+            "optionSpecs": {
+              "maxOutputTokens": {
+                "max": 32768,
+                "map": "{\"max_tokens\": maxOutputTokens}"
+              },
+              "reasoningLevel": {
+                "values": [
+                  "disabled",
+                  "low",
+                  "high"
+                ],
+                "map": "reasoningLevel == \"disabled\" ? {} : {\"reasoning_effort\": reasoningLevel}"
+              }
+            }
+          }
+        }
+      ],
+      "manualProviderModelRules": [
+        {
+          "providerId": "custom",
+          "modelId": "manual-reference",
+          "config": {
+            "enabled": false,
+            "properties": {
+              "contextWindow": 200000,
+              "inputFormat": {
+                "supportsImage": false,
+                "supportsVideo": false,
+                "supportsPdf": false
+              },
+              "supportsJsonSchemaOutput": false,
+              "supportsNativeWebSearch": false,
+              "supportsMidConversationSystem": false
+            },
+            "optionSpecs": {
+              "maxOutputTokens": {
+                "max": 32768
+              },
+              "reasoningLevel": {
+                "values": [
+                  "disabled"
+                ],
+                "map": "{}"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "providerOrder": [
+      "custom",
+      "coding-plan-example"
+    ],
+    "defaultModelSelection": {
+      "providerId": "custom",
+      "modelId": "your-model-id",
+      "options": {
+        "reasoningLevel": "disabled"
+      }
+    }
+  }
+}

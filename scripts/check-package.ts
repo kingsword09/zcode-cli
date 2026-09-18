@@ -14,7 +14,12 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const publishedFiles = [
   "bin/zcode.js",
   "vendor",
-  "config.example.json",
+  "setting.example.json",
+  "provider.example.json",
+  "docs/CONFIGURATION.md",
+  "docs/CONFIGURATION.zh-CN.md",
+  "docs/PROVIDER_CONFIG.md",
+  "docs/PROVIDER_CONFIG.zh-CN.md",
   "zcode-runtime.lock.json",
   "README.md",
   "LICENSE"
@@ -80,7 +85,12 @@ export async function validatePackageTree(base = root): Promise<void> {
     "README.md",
     "bin/zcode.js",
     "bin/zcode.ts",
-    "config.example.json",
+    "setting.example.json",
+    "provider.example.json",
+    "docs/CONFIGURATION.md",
+    "docs/CONFIGURATION.zh-CN.md",
+    "docs/PROVIDER_CONFIG.md",
+    "docs/PROVIDER_CONFIG.zh-CN.md",
     "package.json",
     "src/app-server-client.ts",
     "src/command.ts",
@@ -95,6 +105,8 @@ export async function validatePackageTree(base = root): Promise<void> {
     "vendor/node_modules/@zcode/tui/dist/index.js",
     "vendor/node_modules/@zcode/tui/package.json",
     "vendor/zcode.cjs",
+    "vendor/cli-config.cjs",
+    "vendor/provider/zcode-builtin.json",
     "zcode-runtime.lock.json"
   ];
   for (const path of required) {

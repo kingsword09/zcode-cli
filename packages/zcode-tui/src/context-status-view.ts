@@ -273,6 +273,7 @@ export interface StatusDetailData {
   version?: string;
   model: string;
   mode: string;
+  planEnabled?: boolean;
   effort?: string;
   workspace: string;
   branch?: string;
@@ -300,7 +301,9 @@ export class StatusDetailView implements Component {
       ["CLI version", this.data.cliVersion],
       ["Runtime version", this.data.version],
       ["Model", this.data.model],
-      ["Mode", [this.data.mode, this.data.effort].filter(Boolean).join(" · ")],
+      ["Mode", this.data.mode],
+      ["Plan", this.data.planEnabled ? "on" : "off"],
+      ["Reasoning effort", this.data.effort],
       ["Workspace", this.data.workspace],
       ["Git branch", this.data.branch],
       ["Session", projection?.sessionId],

@@ -4,6 +4,7 @@ import { runTui } from "../../packages/zcode-tui/src/index.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+let resumed = false;
 const defaultModel = "scenario/glm-5.3";
 const statePath = join(process.cwd(), ".model-resume-state.json");
 
@@ -23,11 +24,12 @@ await runTui({
     { id: "scenario/glm-5.3-flash", name: "GLM-5.3-Flash" }
   ],
   loadSessionTranscript: async () => [],
+  readSessionModel: async () => resumed ? { model: await selectedModel() } : undefined,
   setTransientModel: async (modelId) => {
     await writeFile(statePath, JSON.stringify({ model: modelId }), "utf8");
     return { model: modelId };
   },
-  submitPrompt: async (input) => input === "/resume fixture-session"
+  submitPrompt: async (input) => input === "/resume fixture-session" && (resumed = true)
     ? {
         model: defaultModel,
         resetSessionProjection: true,

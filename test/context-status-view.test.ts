@@ -87,8 +87,9 @@ describe("context and status detail views", () => {
       mcpSummary: "2 connected"
     }).render(80).join("\n");
     expect(output).toContain("ZCode Status");
-    expect(output).toContain("CLI version      3.3.5-1");
-    expect(output).toContain("Runtime version  1.0.0");
+    expect(output).toMatch(/CLI version\s+3.3.5-1/);
+    expect(output).toMatch(/Runtime version\s+1.0.0/);
+    expect(output).toMatch(/Plan\s+off/);
     expect(output).toContain("custom/glm");
     expect(output).toMatch(/Goal\s+Active \(40K \/ 50K\)/u);
     expect(output).not.toContain("[ Goal:");

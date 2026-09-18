@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, posix, win32 } from "node:path";
 
 import { compareReleaseVersions, parseReleaseVersion } from "../scripts/release-version.ts";
-import { userConfigPath } from "./model-access.ts";
+import { cliSettingsPath } from "./model-access.ts";
 
 export const UPDATE_CACHE_TTL_MS = 20 * 60 * 60 * 1_000;
 export const UPDATE_CHECK_URL = "https://registry.npmjs.org/zcode-app-cli/latest";
@@ -56,7 +56,7 @@ export function updateCachePath(
   fallbackHome: string = homedir()
 ): string {
   const path = platform === "win32" ? win32 : posix;
-  return path.join(path.dirname(userConfigPath(env, platform, fallbackHome)), "version.json");
+  return path.join(path.dirname(cliSettingsPath(env, platform, fallbackHome)), "version.json");
 }
 
 function parseUpdateCache(value: unknown): UpdateCache | undefined {

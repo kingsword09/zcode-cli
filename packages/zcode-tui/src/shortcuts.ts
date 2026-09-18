@@ -2,7 +2,7 @@ import { isKeyRelease, matchesKey } from "@earendil-works/pi-tui";
 
 import type { PickerSpec } from "./selectors.ts";
 
-export const modes = ["build", "edit", "yolo", "plan"] as const;
+export const modes = ["build", "edit", "yolo"] as const;
 export type Mode = (typeof modes)[number];
 export type SettingTarget = "mode" | "model" | "effort";
 
@@ -12,7 +12,7 @@ export function normalizedMode(mode?: string, fallback: Mode = "build"): Mode {
 }
 
 export function nextMode(currentMode?: string): Mode {
-  const currentIndex = modes.indexOf(normalizedMode(currentMode));
+  const currentIndex = modes.indexOf(currentMode as Mode);
   return modes[(currentIndex + 1) % modes.length] ?? modes[0];
 }
 

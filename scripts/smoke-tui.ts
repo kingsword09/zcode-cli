@@ -17,10 +17,19 @@ if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode ru
 const decoder = new TextDecoder();
 let output = "";
 const temporaryHome = await mkdtemp(join(tmpdir(), "zcode-cli-smoke-"));
-const configPath = join(temporaryHome, ".zcode", "cli", "config.json");
+const configPath = join(temporaryHome, ".zcode", "cli", "setting.json");
 const updateCachePath = join(temporaryHome, ".zcode", "cli", "version.json");
 const smokeSkillPath = join(temporaryHome, ".agents", "skills", "smoke-review", "SKILL.md");
 const availableVersion = nextBuildVersion(packageVersion);
+const providerPath = join(temporaryHome, ".zcode", "v2", "provider_config.json");
+const builtin = await Bun.file(join(root, "vendor", "provider", "zcode-builtin.json")).json();
+const familyModel = (family: string): string => {
+  const rule = builtin.config.providerConfigRules.providerRules.find((entry: { config: { access?: { accountType?: string; mode?: string } } }) => entry.config.access?.accountType === family && entry.config.access?.mode === "individual-coding-plan");
+  if (!rule) throw new Error(`Missing native Coding Plan provider: ${family}`);
+  return `${rule.providerId}/${rule.config.builtinModelIds[0]}`;
+};
+const zaiModel = familyModel("zai"), bigmodelModel = familyModel("bigmodel");
+const literal = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const smokeApiKey = "smoke-api-key-not-real";
 const command = process.argv[2]
   ? [resolve(process.argv[2])]
@@ -55,6 +64,7 @@ const child = Bun.spawn(command, {
     ...process.env,
     CI: "0",
     HOME: temporaryHome,
+    ZCODE_DATA_BASE_DIR: temporaryHome,
     NO_UPDATE_NOTIFIER: "0",
     USERPROFILE: temporaryHome,
     ZCODE_DISABLE_UPDATE_CHECK: "0",
@@ -116,6 +126,7 @@ async function verifyLauncherSighup(): Promise<void> {
       ...process.env,
       CI: "1",
       HOME: temporaryHome,
+    ZCODE_DATA_BASE_DIR: temporaryHome,
       NO_UPDATE_NOTIFIER: "1",
       USERPROFILE: temporaryHome,
       TERM: "xterm-256color"
@@ -164,15 +175,14 @@ try {
     throw new Error("Regular TUI did not render the framed session header.");
   }
   if (!await Bun.file(configPath).exists()) {
-    throw new Error("The launcher did not create config.json before starting the TUI.");
+    throw new Error("The launcher did not create setting.json before starting the TUI.");
   }
   const initialConfig = await Bun.file(configPath).json() as {
     model?: { main?: string };
     provider?: { zai?: { options?: { apiKey?: string } } };
   };
-  if (initialConfig.model?.main !== "zai/glm-5.2"
-    || initialConfig.provider?.zai?.options?.apiKey !== undefined) {
-    throw new Error("The launcher created an invalid initial config.json.");
+  if (initialConfig.model !== undefined || initialConfig.provider !== undefined) {
+    throw new Error("The launcher created an invalid initial setting.json.");
   }
   // The first-run setup wizard opens over the composer; skip it explicitly
   // (Esc) so the rest of the scripted interaction reaches the editor.
@@ -207,7 +217,7 @@ try {
   );
   await waitFor(
     "API key turn completion",
-    /(?:Configured Z\.AI Coding Plan|已配置 Z\.AI Coding Plan)[\s\S]*◈ zai\/glm-5\.2/i,
+    new RegExp(`(?:Configured Z\\.AI Coding Plan|已配置 Z\\.AI Coding Plan)[\\s\\S]*◈ ${literal(zaiModel)}`, "i"),
     apiKeySetupStart
   );
   await sendAndWait("/login\r", "reopened login setup picker", /Set Up Coding Plan|配置 Coding Plan/i);
@@ -224,14 +234,16 @@ try {
   );
   await waitFor(
     "BigModel API key turn completion",
-    /(?:Configured BigModel Coding Plan|已配置 BigModel Coding Plan)[\s\S]*◈ bigmodel\/glm-5\.2/i,
+    new RegExp(`(?:Configured BigModel Coding Plan|已配置 BigModel Coding Plan)[\\s\\S]*◈ ${literal(bigmodelModel)}`, "i"),
     bigmodelSetupStart
   );
   await sendAndWait("/status\r", "status details", /Runtime version\s+\d+/i);
   terminal.write("\r");
   await Bun.sleep(50);
   await sendAndWait("/help\r", "help output", /Slash commands:|Usage:/i);
-  await sendAndWait("/mode plan\r", "plan mode", /mode switched to plan|current mode: plan|◈ default ─ ◉ plan/i);
+  await sendAndWait("/plan on\r", "plan enabled", /Plan enabled · permission mode: build/i);
+  await sendAndWait("/mode edit\r", "edit permission mode", /mode switched to edit/i);
+  await sendAndWait("/plan off\r", "plan disabled with permissions preserved", /Plan disabled · permission mode: edit/i);
   terminal.write("/exit\r");
 } catch (error) {
   interactionError = error;
@@ -248,8 +260,8 @@ if (!interactionError) {
     interactionError = error;
   }
 }
-const configured = await Bun.file(configPath).exists()
-  ? await Bun.file(configPath).text()
+const configured = await Bun.file(providerPath).exists()
+  ? await Bun.file(providerPath).text()
   : "";
 const setupPendingPath = join(temporaryHome, ".zcode", "cli", "setup-pending");
 // The wizard was skipped interactively and the API keys configured model
@@ -259,7 +271,6 @@ if (await Bun.file(setupPendingPath).exists()) {
 }
 const leakedFiles: string[] = [];
 for (const path of await filesBelow(temporaryHome)) {
-  if (path === configPath) continue;
   const content = Buffer.from(await Bun.file(path).arrayBuffer());
   if (content.includes(smokeApiKey)) leakedFiles.push(path);
 }
@@ -301,18 +312,17 @@ if (/Model config is missing/i.test(plain)) {
 if (plain.includes(smokeApiKey)) {
   throw new Error(`The API key leaked into terminal output.\n${plain.slice(-4_000)}`);
 }
-if (!configured.includes(smokeApiKey)
-  || !configured.includes('"main": "bigmodel/glm-5.2"')
-  || !configured.includes('"lite": "bigmodel/glm-4.7"')) {
-  throw new Error("The official runtime did not persist the Coding Plan configuration.");
+const selected = JSON.parse(configured).config.defaultModelSelection;
+if (`${selected.providerId}/${selected.modelId}` !== bigmodelModel) {
+  throw new Error("The official runtime did not persist the native Coding Plan selection.");
 }
 if (leakedFiles.length > 0) {
-  throw new Error(`The API key leaked outside config.json: ${leakedFiles.join(", ")}`);
+  throw new Error(`The API key leaked into a plaintext file: ${leakedFiles.join(", ")}`);
 }
 if (!/Slash commands:|Usage:/i.test(plain)) {
   throw new Error(`The /help command did not render.\n${plain.slice(-4_000)}`);
 }
-if (!/mode switched to plan|current mode: plan|◈ default ─ ◉ plan/i.test(plain)) {
+if (!/Plan enabled · permission mode: build/i.test(plain)) {
   throw new Error(`The /mode command did not update the TUI.\n${plain.slice(-4_000)}`);
 }
 

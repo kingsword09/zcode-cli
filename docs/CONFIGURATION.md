@@ -1,321 +1,219 @@
 # Configuration
 
-## Prompt Access Preflight
+English | [简体中文](CONFIGURATION.zh-CN.md)
 
-Ordinary TUI input and new headless `--prompt`, `--print`, `-p`, and `--target`
-requests diagnose a clearly keyless Z.AI/BigModel Coding Plan configuration
-before starting a model turn. The TUI restores rejected input to an empty editor,
-or retains it in the follow-up queue without replacing a newer draft. Rejected
-queued input keeps its position and metadata; auto-send pauses until user action.
-Headless commands exit unsuccessfully with setup instructions.
+The CLI follows the current ZCode runtime's provider registry schema. General
+runtime settings and provider configuration live in separate files.
 
-This is deliberately not a general credentials validator. Custom endpoints,
-environment authentication/model overrides, ancestor project configurations,
-dotenv files, and resumed headless sessions remain the runtime's responsibility.
-Login, setup, help, and other management commands remain available. No credentials
-are printed, changed, or tested over the network by this check.
+## Configuration files
 
-This document covers the detailed model-access configuration for
-zcode-app-cli. For installation and basic usage, see the
-[main README](../README.md).
+| File | Purpose |
+| --- | --- |
+| `~/.zcode/cli/setting.json` | CLI theme, notifications, tools, storage and other runtime settings |
+| `~/.zcode/v2/setting.json` | Existing Desktop language and memory preferences, read without modification |
+| `~/.zcode/v2/provider_config.json` | Providers, model metadata overrides and the default model |
+| `~/.zcode/v2/credentials.json` | Credentials persisted by the native runtime |
 
-## Configuration file location
+On Windows, use `%USERPROFILE%` in place of `~`. The provider file is shared
+with ZCode Desktop by default: changing providers or the saved default affects
+both clients. `/model` changes only the current CLI session.
 
-On first launch, ZCode recursively creates the configuration directory and a
-credential-free `config.json` when it is missing. Existing files are never
-replaced. The location is `~/.zcode/cli/config.json` on macOS and Linux, and
-`%USERPROFILE%\.zcode\cli\config.json` on Windows. Newly created directories
-and files use private permissions on POSIX; Windows keeps the current user's
-inherited ACLs.
+Set `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` to a separate file to isolate provider
+settings. `ZCODE_DATA_BASE_DIR` changes the native runtime's base directory,
+including its provider and credential storage. General CLI settings still use
+the user's `~/.zcode/cli/setting.json`.
 
-The generated file contains the complete non-secret configuration shape plus
-valid Z.AI model metadata, but deliberately omits `apiKey` until one is
-configured. This lets the official runtime and TUI start cleanly without
-pretending that model access is already configured. Choose one of the
-model-access paths below before sending a prompt.
+On first launch, the CLI creates a credential-free general configuration from
+[`setting.example.json`](../setting.example.json). Existing files are not replaced.
+Provider settings are created by native login or configured using
+[`provider.example.json`](../provider.example.json). The complete
+[provider field reference](PROVIDER_CONFIG.md) explains every supported personal
+configuration field, Desktop editor mapping and automatic catalog inheritance.
 
-## Automatic model catalog updates
+## Startup migration
 
-After the TUI is ready, it downloads the official model catalog in the background
-and caches it for six hours in `~/.zcode/cli/model-catalog.json`. Startup, including
-the first-run wizard, never waits for that request. A first installation starts
-with the bundled model list; failed or slow requests leave that list usable.
+The CLI follows the Desktop migration rules and uses the runtime's native parser
+and file-locked provider repository. Desktop imports its legacy providers when
+its native file is first created. CLI startup performs one additional, one-time
+merge from `~/.zcode/cli/config.json`, because the shared provider file may
+already have been created by Desktop.
 
-Opening `/model`, cycling models, or opening **Settings > Model providers** applies
-any downloaded catalog and reloads the running session's model registry. These
-actions use local data only and never wait for the network. If discovery is still
-running, reopen the picker after it finishes. Providers added during first-run
-login are included on the next model selection. Saved `model.main` and
-`model.lite` are not automatically switched to a new release.
+Only missing personal provider IDs are added. Existing provider definitions,
+model overrides, ordering and the shared default selection are preserved.
+Account providers and encrypted secrets are excluded. Deleted models are
+excluded; native model IDs and provider aliases are normalized by the upstream
+parser. Unsupported provider configurations are recorded as skipped.
 
-Synchronization only covers existing `anthropic` providers named `zai` or
-`bigmodel` using their official Coding Plan API roots. Custom endpoints and
-protocols are excluded. Existing names, model IDs (including casing), and user
-metadata overrides are preserved. New models include context/output limits,
-modalities, and supported Anthropic reasoning-effort mappings.
+CLI-specific fields move to `~/.zcode/cli/setting.json`; provider, main/lite and
+catalog-overlay fields are omitted. The original file remains intact. A marker
+under `~/.zcode/cli/migrations/` records completion for each target provider file,
+so later startup does not re-import providers that a user has deleted. A separate
+`settings-v1.json` marker prevents a reset of CLI settings from importing the old
+settings again. The old
+file is never used as a runtime configuration fallback. Invalid new files are
+reported rather than replaced by old settings.
 
-The adjacent `model-catalog-managed.json` records automatically added entries.
-After a successful refresh, an entry missing from both official provider lists
-is removed only when it was automatically added, is unchanged, has no catalog
-override, and is not selected by `main`, `lite`, or the current session. Bundled
-and manually added models are retained because their ownership is unknown.
-Offline, invalid, empty, and incomplete responses do not trigger retirement.
+## Setting ownership and precedence
 
-Set `ZCODE_DISABLE_MODEL_CATALOG_REFRESH=1` to disable discovery and automatic
-configuration changes. `CI=1` also disables them. Requests honor `ZCODE_BASE_URL`
-and use a five-second timeout; failures do not interrupt the TUI.
+| Setting or action | Read/write behavior |
+| --- | --- |
+| Providers and model metadata | Shared native `provider_config.json` |
+| Default model in `/settings` | Writes the shared default and applies it to the current session |
+| `/model`, model cycling and reasoning effort | Change/persist this session's native selection; shared default stays unchanged |
+| `/new` | Reads the current shared default |
+| Resume/restart | Restores the session's model and reasoning options |
+| Language and memory | Reads Desktop `localePreference` / `memoryEnabled`; explicit CLI settings override these values |
+| Theme, terminal layout, copy-on-select and notifications | CLI `setting.json` |
+| Tool permissions, retries, stream timeout, CLI plugin/MCP options and other runtime settings | CLI `setting.json`, with native project/environment precedence |
+| Update cache, diagnostic logs and migration state | Operational files beneath the CLI directory |
 
-## First-run setup wizard
+The CLI does not add keys to Desktop's `setting.json`. Notification and display
+changes write only the CLI file. Shared preferences are applied while loading
+runtime settings, not copied into CLI settings during unrelated updates.
 
-When the TUI starts while model access has not been set up, a setup wizard
-opens automatically. ZCode tracks this with a `setup-pending` marker file next
-to `config.json`: it is written when the credential-free default config is
-first created, survives non-interactive commands (`zcode plugin list`,
-`zcode -p …`, `app-server`, …) so the wizard still appears on the first
-interactive TUI start, and is cleared once setup is handled — finishing or
-explicitly skipping the wizard, choosing the custom-provider help entry,
-deferring the post-import sign-in, or configuring model access by any other
-means (`zcode login`, a hand-edited `config.json`), in which case the wizard
-does not appear at all. The marker is only kept when login or the desktop
-import was attempted and failed, so an unconfigured user is guided again on
-the next start. Press Esc to skip the wizard. It can be reopened anytime with
-`/setup`, and it never appears for an existing configuration unless invoked
-manually.
+## Model catalogs and default selection
 
-### Importing settings from the ZCode desktop app
+The native registry loads the bundled catalog and manages upstream catalog
+refreshes. `/model`, model cycling, and **Settings > Model providers** refresh
+the current registry from its configuration sources. The session is retained.
+The CLI does not keep a separate legacy model catalog cache.
 
-The desktop import copies the selected desktop provider family (Z.AI or
-BigModel): provider name, `baseURL`, and the desktop model list (merged into
-the existing models, desktop IDs first). `model.main` keeps the current
-selection when the model ID exists on both sides (case-insensitively),
-otherwise it falls back to the first available of `glm-5.2`/`glm-5.3` (or the
-desktop list's first model); `model.lite` falls back to `glm-5-turbo` and then
-to the selected main model, so both selections always reference models that
-exist after the import. A backup of the pre-import `config.json` is written
-next to it as `config.json.pre-migration.bak`; if the backup cannot be
-written, the import is aborted before any change is made.
+`config.defaultModelSelection` in the provider file chooses the model for new
+sessions. `/settings` saves that selection through the native repository and
+applies it to the current session. `/model provider/model` is a temporary session
+switch. A resumed session can retain its saved selection.
 
-Desktop credentials are never copied: the desktop app stores them encrypted
-(`enc:v1:`) with a key held by the desktop process, and the CLI reads desktop
-files only. After importing, sign in once via the offered login step (or
-`/login` later) so a fresh Coding Plan API key lands in the CLI config. An
-existing CLI-side `apiKey` for the same provider is always preserved.
+Reasoning options omitted from a saved selection are completed using that
+model's registry defaults. Explicit reasoning choices remain intact.
 
-## Model-access paths
+## First-run setup
 
-Three model-access paths are supported:
+The setup wizard appears on the first interactive launch. Choose **Sign in**,
+**Custom provider**, or **Skip for now**. `/setup` reopens it. A `setup-pending`
+marker beside the general config survives non-interactive commands and is
+cleared after successful configuration or an explicit skip. An existing native
+provider configuration is recognized directly; no desktop import step is needed.
 
-- **Z.AI OAuth on macOS**: run `zcode login` when no provider is configured, or
-  `zcode login --oauth` to force reauthorization; add `--no-browser` to print
-  the authorization URL instead of opening a browser (useful over SSH);
-- **Z.AI/BigModel Coding Plan API key**: open `/login` in the TUI and choose the
-  matching masked API-key option;
-- **Direct API key with a custom provider**: use the
-  [`config.example.json`](../config.example.json) template and do not log in.
+## Model access
 
-When `model.main` already resolves to a configured provider/model with an
-inline API key, plain `zcode login` exits successfully and explains that OAuth
-is unnecessary. This prevents a custom provider from being replaced by an
-unrelated login flow.
+- **Z.AI OAuth on macOS:** use `zcode login`, or `zcode login --oauth` to force
+  authorization. `--no-browser` prints the authorization URL.
+- **Z.AI/BigModel Coding Plan API key:** open `/login` and choose the masked
+  API-key option. The official runtime owns credential and provider persistence.
+- **Custom provider:** configure the native provider file directly. Any provider
+  ID can be used; a separate OAuth login is unnecessary.
 
-### Coding Plan API key
+Plain `zcode login` recognizes a configured native default and reports its
+configuration path. Configuration presence is checked locally; credential
+validation and decryption belong to the runtime.
 
-Start the TUI and open its setup picker:
+For macOS OAuth, the CLI temporarily registers a callback receiver, checks
+`state`, restores the previous `zcode://` handler and sends the callback through
+stdin. The runtime exchanges the token, stores encrypted credentials, resolves
+the Coding Plan API key and saves the native default model. The TUI then rereads
+provider configuration. BigModel uses the runtime's localhost callback.
 
-```text
-/login
-```
+## Custom provider
 
-Choose either **Z.AI Coding Plan API Key** or **BigModel Coding Plan API Key**,
-then paste the key into the masked prompt. The raw key is sent only to the
-official runtime's `configureCodingPlanApiKey` implementation. The local TUI
-does not add it to editor history or the visible/session transcript, and error
-messages are redacted before rendering.
+Use `provider.example.json` as a reference for a new provider file. Its enabled
+model inherits the upstream catalog; its disabled reference models demonstrate
+all smart-override and manual fields. Fill the empty API key, replace the
+placeholder IDs/endpoint, and remove unused reference entries. When a file already
+exists, merge the desired provider rule into it and preserve the other rules and
+selections.
 
-The same picker includes a **Custom provider** entry that points to the
-configuration-template path below. Custom providers do not use OAuth.
-
-Selecting **Z.AI Coding Plan** releases TUI raw mode and starts the registered
-Desktop authorization-code flow. On macOS the CLI temporarily installs a
-background-only callback receiver, verifies the returned `state`, restores the
-previous `zcode://` handler, and hands the callback to the official runtime.
-The authorization code travels over stdin instead of command-line arguments or
-environment variables. The runtime performs token exchange, encrypted
-credential persistence, Coding Plan API-key resolution and `config.json`
-updates. The TUI is then restored and the model configuration is re-read.
-
-The callback receiver is removed after success, cancellation or timeout. A
-small recovery record lets the next login restore the previous handler after
-an unclean process exit. The BigModel option continues to use the official
-localhost-callback implementation inside the runtime.
-
-### Custom provider without login
-
-Start `zcode` once to generate the full user configuration automatically. From
-a source checkout, `config.example.json` contains the same initial structure
-for reference. Then edit the generated file:
-
-```bash
-zcode
-```
-
-Edit these four areas in `~/.zcode/cli/config.json` (or the Windows path shown
-above):
-
-1. `provider.zai.kind`: use `anthropic`, `openai-compatible`, or `openai`;
-2. `provider.zai.options.baseURL`: use the provider's API root;
-3. `provider.zai.options.apiKey`: insert the direct API key;
-4. replace the entries in `provider.zai.models`, then point both `model.main`
-   and `model.lite` at the desired model IDs.
-
-The provider map key is deliberately `zai`. The upstream CLI 0.15.x TUI
-considers a direct API key configured only when it is stored under provider ID
-`zai` or `bigmodel`. An arbitrary provider ID is valid model configuration,
-but as the only provider it still triggers the upstream login gate. The
-display name, API format, endpoint, headers and models remain fully custom.
-
-For an Anthropic-compatible endpoint:
+A minimal configuration uses this structure:
 
 ```json
 {
-  "kind": "anthropic",
-  "options": {
-    "baseURL": "https://example.com/api/anthropic",
-    "apiKey": "YOUR_API_KEY",
-    "apiKeyRequired": true
-  }
-}
-```
-
-Use the API root, not a final `/messages` path. For an OpenAI-compatible
-endpoint, set `kind` to `openai-compatible` and normally use a root ending in
-`/v1`, not `/chat/completions`. For the official OpenAI API, use `openai`;
-`baseURL` can be omitted.
-
-The object keys form the runtime model reference:
-
-```text
-provider.<provider-id>.models.<model-id>
-                    -> <provider-id>/<model-id>
-```
-
-Set both roles to keep all work on the custom provider:
-
-```json
-{
-  "model": {
-    "main": "zai/your-model-id",
-    "lite": "zai/your-model-id"
-  }
-}
-```
-
-`main` is the normal conversation model. `lite` is used for lightweight and
-subagent work. Model IDs are case-sensitive and must match the endpoint.
-
-The no-login TUI path currently requires a non-empty `options.apiKey` in the
-local config; an environment-only API key does not satisfy the upstream login
-gate. Never commit the populated file, and keep its mode at `600`.
-
-### Adding a multimodal model
-
-Each entry under `provider.<id>.models.<model-id>` is a catalog record. The
-runtime reads these optional fields to decide whether a model accepts image,
-PDF, or video input:
-
-| Field | Type | Purpose |
-| --- | --- | --- |
-| `modalities.input` | string[] | Enumerated input modalities: `text`, `audio`, `image`, `video`, `pdf`. Image, PDF, and video support are derived from this list. |
-| `modalities.output` | string[] | Enumerated output modalities (usually `["text"]`). |
-| `limit.context` | number | Context window in tokens. |
-| `limit.output` | number | Max output tokens. |
-
-Listing `"image"` under `modalities.input` is all that is needed to enable
-image attachments — the runtime derives the capability gates from the input
-list, so no separate capability flags are required.
-
-To add `glm-5.3-flash` as a multimodal model under the `zai` provider:
-
-```json
-{
-  "provider": {
-    "zai": {
-      "kind": "anthropic",
-      "name": "Z.AI Coding Plan",
-      "options": {
-        "apiKeyRequired": true,
-        "baseURL": "https://api.z.ai/api/anthropic"
-      },
-      "headers": {},
-      "models": {
-        "glm-5.3-flash": {
-          "name": "GLM-5.3-Flash",
-          "modalities": {
-            "input": ["text", "image", "video"],
-            "output": ["text"]
-          },
-          "limit": { "context": 1000000, "output": 128000 }
+  "schemaVersion": 1,
+  "config": {
+    "providerConfigRules": {
+      "providerRules": [
+        {
+          "providerId": "custom",
+          "providerName": "Custom provider",
+          "config": {
+            "group": "standard-personal",
+            "access": { "type": "api-key", "apiKey": "YOUR_API_KEY" },
+            "api": {
+              "type": "openai-chat-completions",
+              "baseUrl": "https://api.example.com/v1"
+            },
+            "personalModelIds": ["your-model-id"]
+          }
         }
-      }
+      ]
+    },
+    "modelConfigRules": {
+      "providerModelRules": [],
+      "manualProviderModelRules": []
+    },
+    "defaultModelSelection": {
+      "providerId": "custom",
+      "modelId": "your-model-id"
     }
-  },
-  "model": {
-    "main": "zai/glm-5.3-flash",
-    "lite": "zai/glm-5-turbo"
   }
 }
 ```
 
-Then point `model.main` (and optionally `model.lite`) at the new id. The
-`model` block stays strict — only `main` and `lite` are accepted; multimodal
-capability is declared in the provider catalog entry above, never inside
-`model`.
-
-After saving, verify the picker sees the capability:
+Use `anthropic-messages` for an Anthropic-compatible endpoint,
+`openai-chat-completions` for Chat Completions, or `openai-responses` for the
+Responses API. `baseUrl` is the API root; model IDs are case-sensitive.
+The model reference is `providerId/modelId`.
 
 ```text
-/model   # should list zai/glm-5.3-flash with image input enabled
+/model custom/your-model-id
+/settings
+/new
 ```
 
-Attach an image from the clipboard with `Ctrl+V` or `/paste-image`; pending
-images appear as `[Image #N]` tokens above the editor and are sent with the
-next prompt. The runtime silently drops image blocks for models whose
-`modalities.input` does not include `image`, so a vision model is required to
-actually send the attachment upstream.
+The native catalog supplies context limits, reasoning options and input/output
+capabilities for known models. Custom metadata overrides belong in the native
+`modelConfigRules`, including `properties.contextWindow`,
+`properties.inputFormat` and `optionSpecs`. Image, video and PDF support follow
+the selected model's registry metadata.
 
-### Using the custom provider
+Use `properties.supportsJsonSchemaOutput`, `supportsNativeWebSearch` and
+`supportsMidConversationSystem` for Desktop's three capability switches.
+The maximum output limit is `optionSpecs.maxOutputTokens.max`; it is independent
+of the context window. Request parameter mappings belong in each option's `map`
+string. See the [complete field tables and examples](PROVIDER_CONFIG.md).
 
-After saving the config, no login command is required. Start the client:
+When the upstream catalog changes, smart models inherit the new capability
+and option metadata automatically. Only explicit personal overrides remain fixed.
+Runtime sync copies the complete catalog, and `/model` refreshes the live registry;
+there is no need to write upstream capability values into every personal model.
 
-```bash
-zcode
-```
+## Permission and planning state
 
-From a source checkout, use `bun run dev` instead (see
-[Development](./DEVELOPMENT.md)).
+The CLI follows Desktop's three selectable permission modes: `build` (ask before
+changes), `edit` (edit automatically), and `yolo` (full access). `/mode` opens the
+picker; Shift+Tab cycles these three options. The internal `auto` value is not a
+menu option.
 
-Use these commands inside the TUI:
+`/plan` toggles planning independently. `/plan on` and `/plan off` set it
+explicitly. Changing permissions keeps the Plan switch unchanged; toggling Plan
+keeps the selected permissions unchanged. The native runtime owns validation,
+including the restriction against enabling Plan while a Goal is active.
 
-```text
-/model                         # show the active and available models
-/model zai/your-model-id       # switch to the custom provider explicitly
-/new                           # start a new session with the configured default
-```
+When enabled, `Plan` appears at the right end of the input's upper border without
+adding a row. An empty editor shows a planning hint. The statusline always shows
+the permission mode, and `/status` lists Mode and Plan separately. The marker
+follows native state changes, including plan approval, new sessions and resume;
+no separate CLI preference is written for Plan.
 
-The status line should show `zai/your-model-id`. Setting both `model.main` and
-`model.lite` in the config makes the custom provider the default for normal,
-lightweight and subagent work. A resumed session may retain its previous model,
-so use `/new` after changing the default.
+## Prompt access preflight
 
-Headless prompts use the same provider configuration:
+New headless prompts and ordinary TUI input diagnose missing provider setup or
+an explicitly keyless API-key provider before a model turn starts. No key or
+credential value is printed or checked over the network. Account authentication,
+malformed configuration, environment overrides, project configuration and resumed
+headless sessions remain the runtime's responsibility.
 
-```bash
-zcode --prompt "Explain this repository"
-```
-
-Project-level overrides are read from `zcode.json` or `.zcode/config.json` in
-the working directory. Running `/model` does not call the provider, so it is a
-safe configuration check before the first prompt.
+The TUI restores rejected input to an empty editor, or retains it in the
+follow-up queue without replacing a newer draft. Headless commands exit with
+setup instructions. Login, setup and other management commands remain usable.
 
 ### Background agents
 
@@ -421,8 +319,8 @@ select**.
 ## Theme
 
 Set `ui.theme` to `"auto"` (terminal detection), `"dark"`, or `"light"` in the
-user config: `~/.zcode/cli/config.json` on macOS/Linux or
-`%USERPROFILE%\.zcode\cli\config.json` on Windows. An explicit dark/light value
+user config: `~/.zcode/cli/setting.json` on macOS/Linux or
+`%USERPROFILE%\.zcode\cli\setting.json` on Windows. An explicit dark/light value
 takes priority over terminal probing. `auto` queries the terminal background
 color and color scheme at startup and re-applies the matching palette.
 
@@ -458,7 +356,7 @@ Saving a value returns to the settings root so several options can be changed
 in one visit. `Esc` returns from a setting to the root, then closes the root.
 
 The picker updates the active session immediately and persists the selected
-values under `ui.notifications` in the cross-platform user `config.json`:
+values under `ui.notifications` in the cross-platform user `setting.json`:
 
 ```json
 {
@@ -471,7 +369,7 @@ values under `ui.notifications` in the cross-platform user `config.json`:
 }
 ```
 
-Environment variables override `config.json` on startup and are useful for a
+Environment variables override `setting.json` on startup and are useful for a
 temporary per-shell setting:
 
 ```bash

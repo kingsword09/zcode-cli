@@ -15,7 +15,7 @@ describe("fullscreen copy on select", () => {
     try {
       expect(await readCopyOnSelect(env)).toBe(true);
       await Bun.write(
-        join(home, ".zcode", "cli", "config.json"),
+        join(home, ".zcode", "cli", "setting.json"),
         JSON.stringify({ ui: { copyOnSelect: "disabled" } })
       );
       expect(await readCopyOnSelect(env)).toBe(true);
@@ -27,7 +27,7 @@ describe("fullscreen copy on select", () => {
   test("reads and writes the setting without replacing other config", async () => {
     const home = await mkdtemp(join(tmpdir(), "zcode-copy-on-select-test-"));
     const configDirectory = join(home, ".zcode", "cli");
-    const configPath = join(configDirectory, "config.json");
+    const configPath = join(configDirectory, "setting.json");
     const env = { HOME: home, USERPROFILE: home };
     try {
       await mkdir(configDirectory, { recursive: true });

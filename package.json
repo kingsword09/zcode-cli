@@ -1,6 +1,6 @@
 {
   "name": "zcode-app-cli",
-  "version": "3.11.2-25",
+  "version": "3.12.3-25",
   "description": "Unofficial terminal client for the ZCode agent runtime",
   "keywords": [
     "agent",
@@ -32,7 +32,12 @@
   "files": [
     "bin/zcode.js",
     "vendor",
-    "config.example.json",
+    "setting.example.json",
+    "provider.example.json",
+    "docs/CONFIGURATION.md",
+    "docs/CONFIGURATION.zh-CN.md",
+    "docs/PROVIDER_CONFIG.md",
+    "docs/PROVIDER_CONFIG.zh-CN.md",
     "zcode-runtime.lock.json",
     "README.md",
     "LICENSE"

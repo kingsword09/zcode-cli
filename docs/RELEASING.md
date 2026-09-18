@@ -1,5 +1,9 @@
 # Releasing zcode-app-cli
 
+Each release follows the current upstream runtime and provider schema. The lock
+file records the verified installer for reproducible builds; it is not a promise
+to support older runtime versions.
+
 This document covers the maintainer-only workflows for synchronizing the
 upstream runtime, building the npm tarball, and publishing releases. End users
 do not need any of this — see the [main README](../README.md) for installation
@@ -48,7 +52,9 @@ It contains only:
 - `bin/zcode.js`, the bundled executable Node.js launcher;
 - `vendor/`, the verified official `zcode.cjs` runtime, official bundled
   plugins and the compiled local `@zcode/tui` adapter;
-- `config.example.json` and `zcode-runtime.lock.json`;
+- `setting.example.json`, `provider.example.json` and `zcode-runtime.lock.json`;
+- the English and Simplified Chinese configuration guides and provider field
+  references in `docs/`;
 - `README.md`, `LICENSE` and the required npm `package.json`.
 
 Tests, GitHub workflows, build scripts, launcher/TUI TypeScript sources, local

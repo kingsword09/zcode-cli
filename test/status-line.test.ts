@@ -12,6 +12,18 @@ const fields = [
 ];
 
 describe("TUI status line", () => {
+  test("shortens the model to keep the real permission mode visible in a narrow terminal", () => {
+    const status = new StatusLine();
+    status.setFields([
+      { text: "◈ provider/a-very-long-model-name-that-will-not-fit", required: true, priority: 100, minWidth: 3 },
+      { text: "◉ yolo", required: true, priority: 100 }
+    ]);
+    for (const width of [16, 24, 40]) {
+      const line = status.render(width)[0]!;
+      expect(line).toContain("◉ yolo");
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
   test("shows all session metadata when space is available", () => {
     const status = new StatusLine();
     status.setFields(fields, " ─ ");

@@ -9,6 +9,7 @@ export interface StatusLineField {
   compactText?: string;
   priority: number;
   required?: boolean;
+  minWidth?: number;
 }
 
 interface RenderedField extends StatusLineField {
@@ -47,6 +48,13 @@ export class StatusLine implements Component {
       fields.splice(removable.index, 1);
     }
 
+    for (const field of fields) {
+      const overflow = this.width(fields) - availableWidth;
+      if (overflow <= 0) break;
+      if (field.minWidth === undefined) continue;
+      field.renderedText = truncateToWidth(field.renderedText,
+        Math.max(field.minWidth, visibleWidth(field.renderedText) - overflow), "…");
+    }
     const line = fields.map((field) => field.renderedText).join(this.separator);
     return [` ${truncateToWidth(line, availableWidth, "…")}`];
   }

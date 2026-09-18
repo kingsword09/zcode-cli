@@ -1,4 +1,4 @@
-import { readUserConfig, updateUserConfig } from "../../../src/model-access.ts";
+import { readCliSettings, updateCliSettings } from "../../../src/model-access.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -14,7 +14,7 @@ function configuredCopyOnSelect(config: unknown): boolean | undefined {
 export async function readCopyOnSelect(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<boolean> {
-  const config = await readUserConfig(env);
+  const config = await readCliSettings(env);
   return configuredCopyOnSelect(config) ?? true;
 }
 
@@ -22,7 +22,7 @@ export async function writeCopyOnSelect(
   enabled: boolean,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string> {
-  return await updateUserConfig((config) => {
+  return await updateCliSettings((config) => {
     const ui = record(config.ui) ?? {};
     ui.copyOnSelect = enabled;
     config.ui = ui;

@@ -17,12 +17,19 @@ const requiredPaths = [
   "LICENSE",
   "README.md",
   "bin/zcode.js",
-  "config.example.json",
+  "setting.example.json",
+  "provider.example.json",
+  "docs/CONFIGURATION.md",
+  "docs/CONFIGURATION.zh-CN.md",
+  "docs/PROVIDER_CONFIG.md",
+  "docs/PROVIDER_CONFIG.zh-CN.md",
   "package.json",
   "vendor/extraction.json",
   "vendor/node_modules/@zcode/tui/dist/index.js",
   "vendor/node_modules/@zcode/tui/package.json",
   "vendor/zcode.cjs",
+  "vendor/cli-config.cjs",
+  "vendor/provider/zcode-builtin.json",
   "zcode-runtime.lock.json"
 ];
 
@@ -138,7 +145,7 @@ describe("release package", () => {
         url: "git+https://github.com/kingsword09/zcode-cli.git"
       },
       bin: { zcode: "bin/zcode.js" },
-      files: ["bin/zcode.js", "vendor", "config.example.json", "zcode-runtime.lock.json", "README.md", "LICENSE"],
+      files: ["bin/zcode.js", "vendor", "setting.example.json", "provider.example.json", "docs/CONFIGURATION.md", "docs/CONFIGURATION.zh-CN.md", "docs/PROVIDER_CONFIG.md", "docs/PROVIDER_CONFIG.zh-CN.md", "zcode-runtime.lock.json", "README.md", "LICENSE"],
       publishConfig: { access: "public", provenance: true },
       dependencies: {
         "@earendil-works/pi-tui": "^0.80.6",
@@ -151,11 +158,16 @@ describe("release package", () => {
       dependencies: { "@earendil-works/pi-tui": "^0.80.6" }
     };
     const files: Record<string, string> = {
+      "docs/CONFIGURATION.md": "# Fixture documentation\n",
+      "docs/CONFIGURATION.zh-CN.md": "# Fixture documentation\n",
+      "docs/PROVIDER_CONFIG.md": "# Fixture documentation\n",
+      "docs/PROVIDER_CONFIG.zh-CN.md": "# Fixture documentation\n",
       "LICENSE": "license",
       "README.md": "readme",
       "bin/zcode.js": "#!/usr/bin/env node\nimport { spawn } from \"node:child_process\";\n",
       "bin/zcode.ts": "export {};\n",
-      "config.example.json": "{}\n",
+      "setting.example.json": "{}\n",
+      "provider.example.json": "{}\n",
       "package.json": `${JSON.stringify(packageJson)}\n`,
       "src/app-server-client.ts": "export {};\n",
       "src/command.ts": "export {};\n",
@@ -185,6 +197,8 @@ describe("release package", () => {
       })}\n`,
       "vendor/node_modules/@zcode/tui/dist/index.js": "export const value = 1;\n",
       "vendor/node_modules/@zcode/tui/package.json": `${JSON.stringify(tuiPackage)}\n`,
+      "vendor/cli-config.cjs": "module.exports={};\n",
+      "vendor/provider/zcode-builtin.json": "{}\n",
       "vendor/zcode.cjs": "console.log('runtime');\n",
       "zcode-runtime.lock.json": `${JSON.stringify(lock)}\n`
     };

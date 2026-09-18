@@ -26,7 +26,7 @@ describe("TUI mode resolution", () => {
     const env = { HOME: home, USERPROFILE: home };
     try {
       await mkdir(configDir, { recursive: true });
-      const configPath = join(configDir, "config.json");
+      const configPath = join(configDir, "setting.json");
       await Bun.write(configPath, JSON.stringify({ model: { main: "zai/glm-5.2" }, ui: { tuiMode: "fullscreen" } }));
       expect(await readTuiMode(env)).toBe("fullscreen");
       await writeTuiMode("regular", env);

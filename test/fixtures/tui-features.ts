@@ -20,6 +20,7 @@ if (process.argv[2] === "login") {
 
 let model = "alpha/model";
 let effort = "low";
+let defaultModel = "alpha/model";
 let backgroundStatus = "running";
 let agentStatus = "failed";
 let agentMessageCount = 0;
@@ -43,6 +44,7 @@ let resolveFeatureTurnFinished!: () => void;
 const featureTurnFinished = new Promise<void>((resolve) => {
   resolveFeatureTurnFinished = resolve;
 });
+let permissionMode = "build", planEnabled = false;
 let goal = {
   status: "active",
   tokenBudget: 50_000,
@@ -276,6 +278,8 @@ await runTui({
     { alias: "main", id: "alpha/model", name: "Alpha" },
     { alias: "lite", id: "beta/model", name: "Beta" }
   ],
+  readDefaultModel: async () => defaultModel,
+  setDefaultModel: async (modelId: string) => { defaultModel = model = modelId; return { model: modelId }; },
   setTransientModel: async (modelId: string) => {
     model = modelId;
     return { model: modelId };
@@ -317,7 +321,8 @@ await runTui({
   readRuntimeProjection: async () => ({
     id: "feature-session",
     status: "idle",
-    mode: "build",
+    mode: permissionMode,
+    planEnabled,
     turnCount: 4,
     totalTokenCount: 18_500,
     contextUsed: 32_000,
@@ -1106,7 +1111,8 @@ await runTui({
       model = input.slice("/model ".length);
       return {
         response: `Model switched to ${model}.`,
-        mode: "build",
+        mode: permissionMode,
+    planEnabled,
         model,
         thoughtLevel: effort,
         effortOptions: [{ id: "low", label: "Low" }, { id: "high", label: "High" }]
@@ -1114,7 +1120,8 @@ await runTui({
     }
     if (input.startsWith("/effort ")) {
       effort = input.slice("/effort ".length);
-      return { response: `Reasoning effort switched to ${effort}.`, mode: "build", model, thoughtLevel: effort };
+      return { response: `Reasoning effort switched to ${effort}.`, mode: permissionMode,
+    planEnabled, model, thoughtLevel: effort };
     }
     if (input === "/mcp connect docs") return { response: "MCP connected: docs." };
     if (input === "/workflows") return { response: "", workflowPanel: workflowPanel() };
@@ -1124,7 +1131,9 @@ await runTui({
     }
     return { response: `Handled ${input}.`, model, thoughtLevel: effort };
   },
-  setMode: async (nextMode) => ({ mode: nextMode })
+  readExecutionState: async () => ({ mode: permissionMode, planEnabled }),
+  setPlanEnabled: async (enabled) => { planEnabled = enabled; return { mode: permissionMode, planEnabled }; },
+  setMode: async (nextMode) => { permissionMode = nextMode; return { mode: permissionMode, planEnabled }; }
 });
 
 if (process.env.ZCODE_TUI_FEATURE_SMOKE === "1") {
