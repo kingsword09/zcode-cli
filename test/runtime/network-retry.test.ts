@@ -168,7 +168,7 @@ async function runNetworkFixture(options: {
     "--surface",
     "terminal",
     "--mode",
-    "plan"
+    "build"
   ];
   const child = Bun.spawn([node, ...runtimeArgs], {
     cwd: root,
