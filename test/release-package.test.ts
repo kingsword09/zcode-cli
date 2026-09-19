@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
+import { parse } from "yaml";
 
 import { validatePackageTree } from "../scripts/check-package.ts";
 import { runtimePatchPlan } from "../scripts/sync-runtime.ts";
@@ -81,6 +82,8 @@ describe("release package", () => {
     expect(packageJson.scripts["test:all"]).toContain("test:unit");
     expect(packageJson.scripts["test:all"]).toContain("test:tui");
     expect(packageJson.scripts["test:all"]).toContain("test:runtime");
+    expect(packageJson.scripts["test:all"]).toContain("test:node");
+    expect(packageJson.scripts["test:node"]).toBe("node --test test/node/*.test.cjs");
     expect(packageJson.bin.zcode).toBe("bin/zcode.js");
     expect(packageJson.engines).toEqual({ node: ">=22.19.0" });
     expect(packageJson.dependencies.zigpty).toBeUndefined();
@@ -93,6 +96,28 @@ describe("release package", () => {
       url: "git+https://github.com/kingsword09/zcode-cli.git"
     });
     expect(packageJson.keywords).toEqual(expect.arrayContaining(["cli", "node", "terminal", "tui", "zcode"]));
+  });
+
+  test("pins one Bun toolchain and tests the validated artifact with real Node versions", async () => {
+    const packageJson = await Bun.file(new URL("../package.json", import.meta.url)).json();
+    expect(packageJson.packageManager).toBe("bun@1.4.1");
+    expect(packageJson.devDependencies["bun-types"]).toBe("1.4.1");
+    for (const name of ["ci", "prepare-release", "publish"]) {
+      const workflow = parse(await Bun.file(new URL(`../.github/workflows/${name}.yml`, import.meta.url)).text());
+      for (const job of Object.values(workflow.jobs) as { steps?: { uses?: string; with?: Record<string, unknown> }[] }[]) {
+        for (const step of job.steps ?? []) {
+          if (step.uses?.startsWith("oven-sh/setup-bun@")) expect(step.with?.["bun-version"]).toBe("1.4.1");
+        }
+      }
+      if (name === "ci") {
+        const matrix = workflow.jobs["node-runtime"];
+        expect(matrix.needs).toBe("validate");
+        expect(matrix.strategy.matrix.node).toEqual(["22.19.0", "24", "26"]);
+        expect(matrix.strategy.matrix.include).toContainEqual({ os: "macos-latest", node: "24" });
+        expect(matrix.steps.some((step: { run?: string }) => step.run === "bun run test:node")).toBe(true);
+        expect(matrix.steps.some((step: { uses?: string }) => step.uses?.startsWith("actions/download-artifact@"))).toBe(true);
+      }
+    }
   });
 
   test("syncs the runtime before running runtime-backed integration tests", async () => {

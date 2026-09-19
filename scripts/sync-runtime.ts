@@ -1063,31 +1063,38 @@ export const sqliteBusyTimeoutMs = 10_000;
 
 const runtimeSqliteBusyTimeoutPragma = `pragma busy_timeout = ${sqliteBusyTimeoutMs}`;
 
-/** Detect the busy-timeout pragma on the shared session-DB connection. */
+/** Verify both successful store-open paths, not an unrelated pragma string. */
 export function hasRuntimeSqliteBusyTimeout(runtime: string): boolean {
-  return runtime.includes(runtimeSqliteBusyTimeoutPragma);
+  const pragma = escapeRegExpName(runtimeSqliteBusyTimeoutPragma);
+  const sync = new RegExp(`try\\{[A-Za-z_$][\\w$]*!==[A-Za-z_$][\\w$]*&&\\([A-Za-z_$][\\w$]*\\(this\\.db,this\\.dbPath,[A-Za-z_$][\\w$]*\\),this\\.db\\.exec\\("${pragma}"\\)\\)\\}catch`, "gu");
+  const startup = new RegExp(`try\\{return await [A-Za-z_$][\\w$]*\\(([A-Za-z_$][\\w$]*)\\.db,\\1\\.dbPath,[A-Za-z_$][\\w$]*\\),\\1\\.db\\.exec\\("${pragma}"\\),\\1\\}catch`, "gu");
+  return countRegExpMatches(runtime, sync) === 1 && countRegExpMatches(runtime, startup) === 1;
 }
 
 /**
  * Concurrent zcode processes share ~/.zcode/cli/db/db.sqlite. The runtime opens
- * it with node:sqlite, whose default busy timeout is 0: lock contention between
- * writers surfaces as an immediate SQLITE_BUSY ("database is locked") that
- * kills the turn instead of waiting. Set an explicit busy_timeout (longer than
- * the open-site `timeout`, which only newer Node runtimes honor) so writers
- * wait for the lock instead of failing the turn.
+ * it with a 5s timeout. Async startup temporarily uses a short timeout for
+ * migration retries and resets it in finally. Apply the steady-state timeout
+ * AFTER either migration path succeeds, preserving startup's lock budget and
+ * cleanup. This bounds ordinary write contention; it is not a transaction or
+ * whole-turn retry, and cannot guarantee success under sustained contention.
  */
 export function patchRuntimeSqliteBusyTimeout(runtime: string): string {
   if (hasRuntimeSqliteBusyTimeout(runtime)) return runtime;
-  // The session store is the only DatabaseSync construction site in the
-  // bundle; migrations and every session write reuse this connection.
-  const connectionPattern = /this\.db=new ([A-Za-z_$][\w$]*)\.DatabaseSync\(this\.dbPath(?:,\{([^{}]*)\})?\)/u;
-  if (!connectionPattern.test(runtime)) {
-    throw new Error("ZCode runtime is incompatible with the SQLite busy-timeout patch (session DB connection anchor missing).");
+  const sync = /try\{([A-Za-z_$][\w$]*)!==([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)\(this\.db,this\.dbPath,([A-Za-z_$][\w$]*)\)\}catch/gu;
+  const startup = /try\{return await ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\.db,\2\.dbPath,([A-Za-z_$][\w$]*)\),\2\}catch/gu;
+  if (countRegExpMatches(runtime, sync) !== 1 || countRegExpMatches(runtime, startup) !== 1) {
+    throw new Error("ZCode runtime is incompatible with the SQLite busy-timeout patch (store migration anchors missing or ambiguous).");
   }
-  return runtime.replace(
-    connectionPattern,
-    (_match, sqlite: string, options: string | undefined) => `this.db=new ${sqlite}.DatabaseSync(this.dbPath${options === undefined ? "" : `,{${options}}`}),this.db.exec("${runtimeSqliteBusyTimeoutPragma}")`
+  const patched = runtime.replace(
+    sync,
+    (_match, mode: string, deferred: string, migrate: string, timeout: string) => `try{${mode}!==${deferred}&&(${migrate}(this.db,this.dbPath,${timeout}),this.db.exec("${runtimeSqliteBusyTimeoutPragma}"))}catch`
+  ).replace(
+    startup,
+    (_match, migrate: string, store: string, options: string) => `try{return await ${migrate}(${store}.db,${store}.dbPath,${options}),${store}.db.exec("${runtimeSqliteBusyTimeoutPragma}"),${store}}catch`
   );
+  if (!hasRuntimeSqliteBusyTimeout(patched)) throw new Error("SQLite busy-timeout patch failed postcondition verification.");
+  return patched;
 }
 
 function escapeRegExpName(value: string): string {
