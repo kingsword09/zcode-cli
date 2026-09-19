@@ -12,6 +12,7 @@ import {
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
+  hasRuntimeSqliteBusyTimeout,
   hasRuntimeStreamEofFinishGuard,
   installRuntimeProviderConfig,
   manifestUrl,
@@ -26,6 +27,7 @@ import {
   patchRuntimeLoginModelDefaults,
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOAuthHttpErrors,
+  patchRuntimeSqliteBusyTimeout,
   patchRuntimeStreamEofFinishGuard,
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge,
@@ -36,6 +38,7 @@ import {
   selectRuntimeLock,
   serviceManifestUrl,
   serviceReleasePlatform,
+  sqliteBusyTimeoutMs,
   supportsMultiMessageFileRewind,
   writeRuntimeCompatibilityFailure
 } from "../scripts/sync-runtime.ts";
@@ -297,6 +300,66 @@ describe("runtime synchronization", () => {
       "runtime without the HTTP wrapper"
     );
     expect(hasRuntimeHttpNoContentGuard("runtime without the HTTP wrapper")).toBe(false);
+  });
+
+  test("sets the SQLite write timeout after both migration paths without changing startup budgets", async () => {
+    const runtime = [
+      'const deferred=Symbol();class Store{constructor(t={},n){this.dbPath=t.dbPath??"fixture.sqlite";let r=t.startupLockTimeoutMs??5e3;',
+      'this.db=new sqlite.DatabaseSync(this.dbPath,{timeout:r});',
+      'try{n!==deferred&&migrateSync(this.db,this.dbPath,r)}catch(e){this.db.close();throw e}}',
+      'static async openStartup(t={},n={}){let o=new Store(t,deferred);try{return await migrateAsync(o.db,o.dbPath,n),o}catch(e){try{o.close()}catch{}throw e}}',
+      'close(){this.db.close()}}'
+    ].join("");
+    const patched = patchRuntimeSqliteBusyTimeout(runtime);
+    expect(hasRuntimeSqliteBusyTimeout(runtime)).toBe(false);
+    expect(hasRuntimeSqliteBusyTimeout(patched)).toBe(true);
+    expect(hasRuntimeSqliteBusyTimeout(`unrelated "pragma busy_timeout = ${sqliteBusyTimeoutMs}"`)).toBe(false);
+    const opened: { options: unknown; path: string }[] = [];
+    const statements: string[] = [];
+    let migrationFailure = false;
+    type Database = { exec: (sql: string) => void; close: () => void };
+    const sqlite = {
+      DatabaseSync: function DatabaseSync(this: Database, path: string, options: unknown) {
+        opened.push({ options, path });
+        this.exec = (sql: string) => statements.push(sql);
+        this.close = () => { statements.push("close"); };
+      }
+    };
+    const Store = new Function("sqlite", "migrateSync", "migrateAsync", `${patched};return Store;`)(
+      sqlite,
+      (_db: Database, _path: string, timeout: number) => {
+        statements.push(`sync migration budget: ${timeout}`);
+        if (migrationFailure) throw new Error("migration failed");
+      },
+      async (db: Database) => {
+        db.exec("pragma busy_timeout = 25");
+        try { if (migrationFailure) throw new Error("migration failed"); }
+        finally { db.exec("pragma busy_timeout = 5000"); }
+      }
+    );
+    new Store({ startupLockTimeoutMs: 2500 });
+    expect(opened).toEqual([{ options: { timeout: 2500 }, path: "fixture.sqlite" }]);
+    expect(statements).toEqual(["sync migration budget: 2500", `pragma busy_timeout = ${sqliteBusyTimeoutMs}`]);
+    statements.length = 0;
+    await Store.openStartup();
+    expect(statements).toEqual(["pragma busy_timeout = 25", "pragma busy_timeout = 5000", `pragma busy_timeout = ${sqliteBusyTimeoutMs}`]);
+
+    // Failed migration paths must close the connection, not hand it to callers.
+    migrationFailure = true;
+    statements.length = 0;
+    await expect(Store.openStartup()).rejects.toThrow("migration failed");
+    expect(statements).toEqual(["pragma busy_timeout = 25", "pragma busy_timeout = 5000", "close"]);
+    statements.length = 0;
+    expect(() => new Store()).toThrow("migration failed");
+    expect(statements).toEqual(["sync migration budget: 5000", "close"]);
+    expect(patchRuntimeSqliteBusyTimeout(patched)).toBe(patched);
+    expect(() => patchRuntimeSqliteBusyTimeout("incompatible runtime")).toThrow(/migration anchors/);
+    expect(() => patchRuntimeSqliteBusyTimeout(runtime.replace("await migrateAsync", "await changed"))).not.toThrow();
+    expect(() => patchRuntimeSqliteBusyTimeout(runtime.replace("o.dbPath,n", "o.dbPath"))).toThrow(/migration anchors/);
+    expect(() => patchRuntimeSqliteBusyTimeout(runtime + runtime)).toThrow(/ambiguous/);
+    const partial = patched.replace(`,o.db.exec("pragma busy_timeout = ${sqliteBusyTimeoutMs}")`, "");
+    expect(hasRuntimeSqliteBusyTimeout(partial)).toBe(false);
+    expect(() => patchRuntimeSqliteBusyTimeout(partial)).toThrow(/migration anchors/);
   });
 
   test("classifies wrapped transport failures without retrying in place after output", () => {

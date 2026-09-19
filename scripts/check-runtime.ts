@@ -13,12 +13,14 @@ import {
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
+  hasRuntimeSqliteBusyTimeout,
   hasRuntimeStreamEofFinishGuard,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOfficialMcpAvailability,
+  patchRuntimeSqliteBusyTimeout,
   patchRuntimeStreamEofFinishGuard,
   parseRuntimePatchReports,
   runtimePatchPlan,
@@ -77,6 +79,8 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeHttpNoContentGuard(runtimeSource)
   || patchRuntimeNetworkRetryClassification(runtimeSource) !== runtimeSource
   || !hasRuntimeNetworkRetryGuard(runtimeSource)
+  || patchRuntimeSqliteBusyTimeout(runtimeSource) !== runtimeSource
+  || !hasRuntimeSqliteBusyTimeout(runtimeSource)
   || patchRuntimeStreamEofFinishGuard(runtimeSource) !== runtimeSource
   || !hasRuntimeStreamEofFinishGuard(runtimeSource)
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
