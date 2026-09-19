@@ -1059,6 +1059,37 @@ export function patchRuntimeHttpNoContent(runtime: string): string {
   return changed ? patched : runtime;
 }
 
+export const sqliteBusyTimeoutMs = 10_000;
+
+const runtimeSqliteBusyTimeoutPragma = `pragma busy_timeout = ${sqliteBusyTimeoutMs}`;
+
+/** Detect the busy-timeout pragma on the shared session-DB connection. */
+export function hasRuntimeSqliteBusyTimeout(runtime: string): boolean {
+  return runtime.includes(runtimeSqliteBusyTimeoutPragma);
+}
+
+/**
+ * Concurrent zcode processes share ~/.zcode/cli/db/db.sqlite. The runtime opens
+ * it with node:sqlite, whose default busy timeout is 0: lock contention between
+ * writers surfaces as an immediate SQLITE_BUSY ("database is locked") that
+ * kills the turn instead of waiting. Set an explicit busy_timeout (longer than
+ * the open-site `timeout`, which only newer Node runtimes honor) so writers
+ * wait for the lock instead of failing the turn.
+ */
+export function patchRuntimeSqliteBusyTimeout(runtime: string): string {
+  if (hasRuntimeSqliteBusyTimeout(runtime)) return runtime;
+  // The session store is the only DatabaseSync construction site in the
+  // bundle; migrations and every session write reuse this connection.
+  const connectionPattern = /this\.db=new ([A-Za-z_$][\w$]*)\.DatabaseSync\(this\.dbPath(?:,\{([^{}]*)\})?\)/u;
+  if (!connectionPattern.test(runtime)) {
+    throw new Error("ZCode runtime is incompatible with the SQLite busy-timeout patch (session DB connection anchor missing).");
+  }
+  return runtime.replace(
+    connectionPattern,
+    (_match, sqlite: string, options: string | undefined) => `this.db=new ${sqlite}.DatabaseSync(this.dbPath${options === undefined ? "" : `,{${options}}`}),this.db.exec("${runtimeSqliteBusyTimeoutPragma}")`
+  );
+}
+
 function escapeRegExpName(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
@@ -1529,6 +1560,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeStreamEofFinishGuard,
     verify: hasRuntimeStreamEofFinishGuard
+  },
+  {
+    id: "sqlite-busy-timeout",
+    requirement: "required",
+    apply: patchRuntimeSqliteBusyTimeout,
+    verify: hasRuntimeSqliteBusyTimeout
   },
   {
     id: "oauth-http-errors",

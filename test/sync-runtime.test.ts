@@ -12,6 +12,7 @@ import {
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
+  hasRuntimeSqliteBusyTimeout,
   hasRuntimeStreamEofFinishGuard,
   installRuntimeProviderConfig,
   manifestUrl,
@@ -26,6 +27,7 @@ import {
   patchRuntimeLoginModelDefaults,
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOAuthHttpErrors,
+  patchRuntimeSqliteBusyTimeout,
   patchRuntimeStreamEofFinishGuard,
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge,
@@ -36,6 +38,7 @@ import {
   selectRuntimeLock,
   serviceManifestUrl,
   serviceReleasePlatform,
+  sqliteBusyTimeoutMs,
   supportsMultiMessageFileRewind,
   writeRuntimeCompatibilityFailure
 } from "../scripts/sync-runtime.ts";
@@ -297,6 +300,71 @@ describe("runtime synchronization", () => {
       "runtime without the HTTP wrapper"
     );
     expect(hasRuntimeHttpNoContentGuard("runtime without the HTTP wrapper")).toBe(false);
+  });
+
+  test("waits for the shared session DB lock instead of failing with SQLITE_BUSY", async () => {
+    const runtime = [
+      'class Store{constructor(t={}){this.dbPath=t.dbPath??"~/.zcode/cli/db/db.sqlite";let r=t.startupLockTimeoutMs??5e3;',
+      'try{this.db=new FNt.DatabaseSync(this.dbPath,{timeout:r})}catch(n){throw new Error(`Failed to open SQLite session database at ${this.dbPath}`)}',
+      'this.db.exec("pragma foreign_keys = on")}}'
+    ].join("");
+    const patched = patchRuntimeSqliteBusyTimeout(runtime);
+    expect(hasRuntimeSqliteBusyTimeout(runtime)).toBe(false);
+    expect(hasRuntimeSqliteBusyTimeout(patched)).toBe(true);
+    const opened: { options: unknown; path: string }[] = [];
+    const statements: string[] = [];
+    const FNt = {
+      DatabaseSync: function DatabaseSync(this: { exec: (sql: string) => void }, path: string, options: unknown) {
+        opened.push({ options, path });
+        this.exec = (sql: string) => statements.push(sql);
+      }
+    };
+    const Store = new Function("FNt", `${patched};return Store;`)(FNt) as new (options?: {
+      dbPath?: string;
+      startupLockTimeoutMs?: number;
+    }) => { db: { exec: (sql: string) => void } };
+    new Store({ startupLockTimeoutMs: 2500 });
+    // The pragma must land on the connection right after open, before any
+    // other statement, regardless of the open-site timeout option.
+    expect(opened).toEqual([{ options: { timeout: 2500 }, path: "~/.zcode/cli/db/db.sqlite" }]);
+    expect(statements).toEqual([`pragma busy_timeout = ${sqliteBusyTimeoutMs}`, "pragma foreign_keys = on"]);
+    expect(patchRuntimeSqliteBusyTimeout(patched)).toBe(patched);
+    expect(() => patchRuntimeSqliteBusyTimeout("incompatible runtime")).toThrow(/connection anchor/);
+
+    // Without a busy timeout, node:sqlite's default is 0: a second writer on a
+    // WAL database fails immediately with ERR_SQLITE_ERROR ("database is
+    // locked"), the fatal turn.failed cause from the field reports. With the
+    // pragma the same open blocks for the configured window instead.
+    const { DatabaseSync } = require("node:sqlite") as {
+      DatabaseSync: new (path: string, options?: { timeout?: number }) => {
+        exec: (sql: string) => void;
+        close: () => void;
+      };
+    };
+    const dbPath = join(tmpdir(), `zcode-busy-${process.pid}-${Date.now()}.sqlite`);
+    const holder = new DatabaseSync(dbPath);
+    holder.exec("create table t(x)");
+    holder.exec("pragma journal_mode = wal");
+    holder.exec("begin immediate");
+    try {
+      const immediate = new DatabaseSync(dbPath);
+      let startedAt = Date.now();
+      expect(() => immediate.exec("begin immediate")).toThrow("database is locked");
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      immediate.close();
+
+      const waiting = new DatabaseSync(dbPath);
+      waiting.exec("pragma busy_timeout = 250");
+      startedAt = Date.now();
+      expect(() => waiting.exec("begin immediate")).toThrow("database is locked");
+      // SQLITE_BUSY only surfaces once the full busy window has elapsed.
+      expect(Date.now() - startedAt).toBeGreaterThan(150);
+      waiting.close();
+    } finally {
+      holder.exec("rollback");
+      holder.close();
+      await rm(dbPath, { force: true });
+    }
   });
 
   test("classifies wrapped transport failures without retrying in place after output", () => {
