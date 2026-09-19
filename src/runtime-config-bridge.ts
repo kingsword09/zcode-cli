@@ -3,6 +3,8 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { cliSettingsPath, legacyCliConfigPath, providerConfigPath, providerMigrationMarkerPath, readDesktopSettings } from "./config-paths.ts";
 
+export { assertSessionModelReady, readSessionModelState } from "./session-model-recovery.ts";
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }

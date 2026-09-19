@@ -47,6 +47,39 @@ Ctrl+C cancellation remain responsive during rapid Bash progress output. The
 scenarios advance from observed terminal output instead of fixed timers and do
 not make model API calls.
 
+## Reproduce invalid models in resumed sessions (#160)
+
+Build the current CLI, then start an isolated reproduction:
+
+```bash
+bun run sync:local # macOS with /Applications/ZCode.app; otherwise use bun run sync:locked
+bun scripts/repro-session-model.ts
+```
+
+The script creates a real SQLite session, writes the stale model selection from
+#160, and resumes it in the real CLI. Model requests go to a local mock server;
+no real API key or user configuration is used. Temporary data is removed on exit.
+
+The expected behavior is an immediate **Select a replacement model** dialog.
+Choose `zai/glm-5.3`, then send a prompt to receive `SESSION_MODEL_REPLY`.
+Cancelling preserves the saved selection and blocks prompts until `/model`
+repairs it. A successful switch saves the selection for future resumes and
+leaves the shared default unchanged.
+
+Other cases and surfaces:
+
+```bash
+bun scripts/repro-session-model.ts --case model-casing --fullscreen
+bun scripts/repro-session-model.ts --case missing-model
+bun scripts/repro-session-model.ts --case missing-reasoning
+bun scripts/repro-session-model.ts --headless
+bun test test/runtime/session-model-recovery.test.ts
+```
+
+Headless recovery exits with the invalid provider/model and instructions to
+resume interactively; it sends no model request. The regression tests also
+cover `/resume` inside the TUI and restarting after a repair.
+
 ## OAuth login
 
 For the OAuth path, run the launcher directly with the login subcommand:
