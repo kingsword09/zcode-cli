@@ -543,6 +543,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const cliModeOverrideBridge = /([A-Za-z_$][\w$]*)\.setMode=async ([A-Za-z_$][\w$]*)=>\(\{mode:await [A-Za-z_$][\w$]*\(\2\)\}\)/u;
   const transientModelBridgePattern = /\.setTransientModel=async/u;
   const transientModelOptionPattern = /setTransientModel:[A-Za-z_$][\w$]*\.setTransientModel/u;
+  const sessionModelStateMarker = ".readSessionModel=async()=>{let $zSessionModelApp=";
   const alreadyPatched = runtime.includes(".loadSessionTranscript=async()=>await(await")
     && runtime.includes(".readGoal=async()=>await(await")
     && runtime.includes(".readTodos=async()=>await(await")
@@ -587,6 +588,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && runtime.includes("...$zExecutionState")
     && transientModelBridgePattern.test(runtime)
     && transientModelOptionPattern.test(runtime)
+    && runtime.includes(sessionModelStateMarker)
     && sessionEventsBridgePattern.test(runtime)
     && sessionEventsOptionPattern.test(runtime)
     && taskMessageBridgePattern.test(runtime)
@@ -805,8 +807,15 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".setTransientModel=async")) {
     assignments.push(`${bridge}.setTransientModel=async e=>{if(e==="main"){e=await ${bridge}.readDefaultModel();if(!e)throw new Error("No default model is configured.")}let t=await ${getApp}(),r=await t.setModel(e);return{...r,thoughtLevel:t.getThoughtLevel(),effortOptions:t.listThoughtLevels()}}`);
   }
-  if (!patched.includes(".readSessionModel=async")) {
-    assignments.push(`${bridge}.readSessionModel=async()=>{let t=await ${getApp}(),o=t.sessionStore??t.runtime?.sessionStore,r=await o?.sessionEntries?.({sessionID:t.sessionId,type:"runtime/model_selection"}),n=Array.isArray(r)?r.at(-1)?.data:void 0;if(!n||typeof n.providerId!=="string"||typeof n.modelId!=="string")return;await t.setModel({providerId:n.providerId,modelId:n.modelId,...n.options?{options:n.options}:{}},{transient:!0});return{model:n.providerId+"/"+n.modelId,thoughtLevel:t.getThoughtLevel?.(),effortOptions:t.listThoughtLevels?.()??[]}}`);
+  if (!patched.includes(sessionModelStateMarker)) {
+    const assignment = `${bridge}.readSessionModel=async()=>{let $zSessionModelApp=await ${getApp}(),s=await $zSessionModelApp.readSessionModelState();if(s?.selection&&!s.issue)await $zSessionModelApp.setModel(s.selection,{transient:!0});return s}`;
+    const start = patched.indexOf(`${bridge}.readSessionModel=async`);
+    if (start < 0) assignments.push(assignment);
+    else {
+      const end = patched.indexOf(`,${bridge}.`, start);
+      if (end < 0) throw new Error("ZCode runtime is incompatible with session model recovery (bridge boundary missing).");
+      patched = patched.slice(0, start) + assignment + patched.slice(end);
+    }
   }
   if (!sessionEventsBridgePattern.test(patched)) {
     assignments.push(`${bridge}.subscribeSessionEvents=e=>{let t=!1,r;${getApp}().then(o=>{t||(r=o.runtime?.subscribeEvents?.({onSessionEvent:e}))});return()=>{t=!0,r?.()}}`);
@@ -982,6 +991,22 @@ export function patchRuntimeSharedConfig(runtime: string): string {
     // plugin migration cannot accidentally persist inherited Desktop values.
     .replace(validation[0], validation[0].replace(`${validation[2]}(${loader[3]})`, `${validation[2]}(${bridge}.mergeDesktopSettings(${loader[3]},${loader[2]},process.env))`))
     .replace(main[0], `${main[0]}if(process.env.ZCODE_CLI_MIGRATE_CONFIG==="1"){try{${initRepository}();${initImporter}();await ${bridge}.migrateLegacyProviders({Repository:${repository[1]},importLegacy:${importer[1]},env:process.env})}catch($zError){process.stderr.write(($zError instanceof Error?$zError.message:"CLI configuration migration failed")+"\\n"),process.exitCode=1}return}`);
+}
+
+/** Keep invalid saved selections inspectable and reject prompts before the generic model-creation wrapper. */
+export function patchRuntimeSessionModelRecovery(runtime: string): string {
+  const marker = "$zRestoredSessionModel";
+  if (runtime.includes(marker) && runtime.includes('"readSessionModelState"')) return runtime;
+  const facade = /getModelOption:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)=>[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*)\.providerRegistry,\2\),"getModelOption"\)/u.exec(runtime);
+  const restore = /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)\.validateSelection\(\2\);return ([A-Za-z_$][\w$]*)\(\)\.setSessionModelSelection\(\1\?\.ok\?\2:void 0\),\2\},"restorePersistedModelSelection"/u.exec(runtime);
+  const boundary = /([A-Za-z_$][\w$]*)\(async ([A-Za-z_$][\w$]*)=>\{await ([A-Za-z_$][\w$]*)\.prepareUserExecutionBoundary\(\2\)\},"preparePromptBoundary"\)/u.exec(runtime);
+  if (!facade || !restore || !boundary) throw new Error("ZCode runtime is incompatible with session model recovery (restore/facade anchors missing).");
+  const helper = 'require(require("node:path").join(__dirname,"cli-config.cjs"))';
+  const context = facade[3], getRuntime = `${restore[4]}()`, inputContext = boundary[3], inputOptions = boundary[2];
+  return runtime
+    .replace(facade[0], `${facade[0]},readSessionModelState:${facade[1]}(async()=>await ${helper}.readSessionModelState({registry:${context}.providerRegistry,sessionStore:${context}.sessionStore,sessionId:${context}.sessionId}),"readSessionModelState")`)
+    .replace(restore[0], restore[0].replace(";return ", `;${getRuntime}.${marker}={selection:${restore[2]},registry:${restore[3]}};return `))
+    .replace(boundary[0], boundary[0].replace('},"preparePromptBoundary")', `;${helper}.assertSessionModelReady({registry:${inputContext}.runtime.${marker}?.registry,sessionId:${inputContext}.sessionId,currentSelection:${inputOptions}?.intent?.modelSelection??${inputContext}.runtime.getSessionModelSelection(),restored:${inputContext}.runtime.${marker}})},"preparePromptBoundary")`));
 }
 
 export function patchRuntimeTuiExecutionState(runtime: string): string {
@@ -1466,6 +1491,10 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeSharedConfig,
     verify: runtime => runtime.includes('ZCODE_CLI_MIGRATE_CONFIG==="1"') && runtime.includes('="setting.json",')
+  },
+  {
+    id: "session-model-recovery", requirement: "required", apply: patchRuntimeSessionModelRecovery,
+    verify: runtime => runtime.includes("$zRestoredSessionModel") && runtime.includes('"readSessionModelState"')
   },
   {
     id: "official-mcp-availability",

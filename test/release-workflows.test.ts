@@ -72,6 +72,34 @@ async function runInlineVersionComparator(source: string, left: string, right: s
 }
 
 describe("release workflows", () => {
+  test("publishes the tested commit tarball without npm publishing credentials", async () => {
+    const { source, workflow } = await readWorkflow("release-commit.yml");
+    const steps = workflow.jobs.preview!.steps;
+    const checkout = findAction(steps, "actions/checkout", actionShas.checkout);
+    const build = steps.findIndex(step => step.run === "bun run release:build");
+    const pack = steps.findIndex(step => step.id === "pack");
+    const publish = steps.findIndex(step => step.name === "Publish commit package");
+    expect(workflow.on).toHaveProperty("pull_request");
+    expect(workflow.on).toHaveProperty("push");
+    expect(workflow.on).toHaveProperty("workflow_dispatch");
+    expect(workflow.on).not.toHaveProperty("pull_request_target");
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(checkout?.with?.["persist-credentials"]).toBe(false);
+    expect(checkout?.with?.ref).toBe("${{ github.event.pull_request.head.sha || github.sha }}");
+    expect(build).toBeGreaterThan(-1);
+    expect(pack).toBeGreaterThan(build);
+    expect(publish).toBeGreaterThan(pack);
+    expect(steps[pack]?.run).toBe("bun run release:pack");
+    expect(steps[publish]?.env?.PREVIEW_TARBALL).toBe("${{ steps.pack.outputs.tarball }}");
+    expect(steps[publish]?.run).toContain('bun run pkg-pr-new publish "$PREVIEW_TARBALL"');
+    expect(steps[publish]?.run).toContain("--commentWithSha");
+    expect(steps[publish]?.run).toContain("--bin");
+    expect(source).not.toContain("NPM_TOKEN");
+    expect(source).not.toContain("npm publish");
+    expect(source).not.toContain("id-token: write");
+    expect(source).not.toContain("bunx");
+  });
+
   test("runs read-only CI with pinned actions and cancels superseded checks", async () => {
     const { source, workflow } = await readWorkflow("ci.yml");
     const job = workflow.jobs.validate!;

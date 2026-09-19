@@ -64,6 +64,32 @@ are compiled to JavaScript with `tsdown`; its launcher banner adds the Node.js
 shebang directly, with no post-build rewrite. The compiled TUI is injected into
 `vendor/` before publication.
 
+## Commit preview packages
+
+`.github/workflows/release-commit.yml` builds previews for pull requests, pushes
+to `main`, and manual workflow runs. It checks out the PR's head commit, builds
+the locked runtime, runs the release checks, and install-tests the npm tarball.
+The exact tested tarball is uploaded to pkg.pr.new without repacking it.
+
+Install the [pkg-pr-new GitHub App](https://github.com/apps/pkg-pr-new) on this
+repository before the first preview publication. No npm token or npm publish
+permission is needed. The publisher is pinned in `devDependencies` and `bun.lock`.
+
+The app updates a PR comment with a commit-specific preview link. The workflow
+summary also gives the command to test an existing session:
+
+```bash
+npx --yes https://pkg.pr.new/zcode-app-cli@<commit-sha> --resume <session-id>
+```
+
+Use the exact URL emitted by the successful workflow. This runs the preview
+without replacing the globally installed CLI. It uses the user's normal session
+store, so the tester can verify their affected sessions. Record the preview URL
+with the test result: preview tarballs retain the source package version, while
+their URLs identify the commit. They do not update npm's `latest` tag or create
+a release tag. The tested tarball is also retained as a workflow artifact for
+14 days, including when pkg.pr.new publication fails.
+
 ## Versioning
 
 Package versions use `<app-version>-<build>`, for example `3.3.5-2`. The prefix

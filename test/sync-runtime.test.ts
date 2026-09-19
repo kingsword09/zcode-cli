@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
+import { assertSessionModelReady } from "../src/session-model-recovery.ts";
 
 import {
   applyRuntimePatchPlan,
@@ -26,6 +27,7 @@ import {
   patchRuntimeLoginModelDefaults,
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOAuthHttpErrors,
+  patchRuntimeSessionModelRecovery,
   patchRuntimeStreamEofFinishGuard,
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge,
@@ -47,6 +49,32 @@ import {
 } from "../scripts/release-version.ts";
 
 describe("runtime synchronization", () => {
+  test("adds session recovery at native restore and execution boundaries and can run twice", async () => {
+    const runtime = 'async function app(options){let read=()=>runtime,restore=label(async()=>{let ok=saved&&registry.validateSelection(saved);return read().setSessionModelSelection(ok?.ok?saved:void 0),saved},"restorePersistedModelSelection"),prepare=label(async args=>{await options.prepareUserExecutionBoundary(args)},"preparePromptBoundary");return{restore,prepare,getModelOption:label(model=>lookup(context.providerRegistry,model),"getModelOption")}}';
+    const patched = patchRuntimeSessionModelRecovery(runtime);
+    expect(patched).toContain('readSessionModelState:label(async()=>await');
+    expect(patched).toContain('read().$zRestoredSessionModel={selection:saved,registry:registry}');
+    expect(patched).toContain('assertSessionModelReady({registry:options.runtime.$zRestoredSessionModel?.registry');
+    expect(patchRuntimeSessionModelRecovery(patched)).toBe(patched);
+    expect(() => patchRuntimeSessionModelRecovery(runtime.replace('"restorePersistedModelSelection"', '"renamed"')))
+      .toThrow("restore/facade anchors missing");
+    const saved = { providerId: "old", modelId: "model" };
+    const registry = {
+      validateSelection: (selection: { providerId: string }) => selection.providerId === "valid" ? { ok: true } : { ok: false, code: "provider-not-found" },
+      getModel: () => undefined
+    };
+    let current: unknown;
+    const core = { getSessionModelSelection: () => current, setSessionModelSelection: (value: unknown) => { current = value; } };
+    const create = new Function("label", "registry", "saved", "runtime", "require", "__dirname", patched + ";return app;")(
+      (fn: unknown) => fn, registry, saved, core,
+      (id: string) => id === "node:path" ? { join } : { assertSessionModelReady }, "/fixture"
+    );
+    // The input facade does not receive providerRegistry; the restore closure owns it.
+    const facade = await create({ runtime: core, sessionId: "test", prepareUserExecutionBoundary: async () => { await facade.restore(); } });
+    await expect(facade.prepare({})).rejects.toThrow("the provider is unavailable");
+    await expect(facade.prepare({ intent: { modelSelection: { providerId: "valid", modelId: "model" } } })).resolves.toBeUndefined();
+  });
+
   test("projects native planEnabled separately from permission mode", async () => {
     const source = 'const a=fn=>fn;const modes=["plan","build","edit","yolo"];a(format,"formatAvailableCommandCenterModes");function format(){return modes.join(", ")}const planning=()=>e.runtime.getPlanEnabled();const app={getMode:a(()=>e.runtime.getMode(),"getMode"),setMode:a(async mode=>{let previous=e.runtime.getMode();await e.runtime.setExecutionState({mode:mode},e.traceContext);return{mode:e.runtime.getMode(),previousMode:previous,traceId:e.traceContext.traceId}},"setMode")};';
     let mode = "edit", planEnabled = false;
@@ -755,8 +783,8 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("listSkills:g.listSkills");
     expect(patched).toContain("setMode:g.setMode");
     expect(patched).toContain("readSessionModel:g.readSessionModel");
-    expect(patched).toContain('type:"runtime/model_selection"');
-    expect(patched).toContain('...n.options?{options:n.options}:{}');
+    expect(patched).toContain("await $zSessionModelApp.readSessionModelState()");
+    expect(patched).toContain('setModel(s.selection,{transient:!0})');
     expect(patched).not.toContain('modelRef:String(e)');
     expect(patched).toContain("subscribeSessionEvents:g.subscribeSessionEvents");
     expect(patched).toContain("sendBackgroundTaskMessage:g.sendBackgroundTaskMessage");
