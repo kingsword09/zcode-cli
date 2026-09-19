@@ -90,6 +90,7 @@ describe("release workflows", () => {
     expect(pack).toBeGreaterThan(build);
     expect(publish).toBeGreaterThan(pack);
     expect(steps[pack]?.run).toBe("bun run release:pack");
+    expect(steps.find(step => step.name === "Upload tested package")?.with?.["include-hidden-files"]).toBe(true);
     expect(steps[publish]?.env?.PREVIEW_TARBALL).toBe("${{ steps.pack.outputs.tarball }}");
     expect(steps[publish]?.run).toContain('bun run pkg-pr-new publish "$PREVIEW_TARBALL"');
     expect(steps[publish]?.run).toContain("--commentWithSha");
