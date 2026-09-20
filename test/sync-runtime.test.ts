@@ -390,8 +390,8 @@ describe("runtime synchronization", () => {
     expect(() => patchRuntimeSqliteBusyTimeout(partial)).toThrow(/migration anchors/);
   });
 
-  test("classifies wrapped transport failures without retrying in place after output", () => {
-    const runtime = [
+  test.each(["legacy", "budgeted"])("classifies transport failures without retrying after output (%s)", budget => {
+    let runtime = [
       "var yt2={ModelRequestFailed:'model_request_failed',ProviderNotConfigured:'provider_not_configured'},",
       "it2={Cancelled:'cancelled',NetworkError:'network_error',AuthFailed:'auth_failed',ServerError:'server_error',Unknown:'unknown'},",
       "nn2={NetworkError:'network_error',AuthRefresh:'auth_refresh',ServerError:'server_error'},",
@@ -424,12 +424,18 @@ describe("runtime synchronization", () => {
       "function* walk(e){let t=e,r=new WeakSet;for(let n=0;n<=6;n+=1){if(!t||typeof t!=='object'||r.has(t))return;r.add(t);yield t;t=t.cause}}",
       "function recoverable(e){for(let t of walk(e)){if(t.retryable===!0)return!0;let r=pP(t.context);if(r.retryable===!0)return!0}return!1}"
     ].join("");
+    if (budget === "budgeted") runtime = runtime.replace(
+      "function z9o(e){return e.emittedRetryBoundaryEvent||e.attempt>=e.maxAttempts",
+      'function budgetAllows(budget,attempt,max){return budget==="unbounded"||attempt<max}function inspectError(error){return {providerErrorCode:error.code}}function z9o(e){let code=inspectError(e.error).providerErrorCode;return e.emittedRetryBoundaryEvent||!budgetAllows(e.retryBudget,e.attempt,e.maxAttempts)'
+    );
     const patched = patchRuntimeNetworkRetryClassification(runtime);
 
     expect(hasRuntimeNetworkRetryGuard(runtime)).toBe(false);
     expect(hasRuntimeNetworkRetryGuard(patched)).toBe(true);
     expect(patched).toContain("function $zTransportChain(e,t){");
-    expect(patched).toContain("return e.emittedRetryBoundaryEvent||e.attempt>=e.maxAttempts");
+    expect(patched).toContain(budget === "legacy"
+      ? "return e.emittedRetryBoundaryEvent||e.attempt>=e.maxAttempts"
+      : "return e.emittedRetryBoundaryEvent||!budgetAllows(e.retryBudget,e.attempt,e.maxAttempts)");
     expect(patched).not.toContain("e.emittedRetryBoundaryEvent&&!$zTransportChain");
     expect(() => new Function(patched)).not.toThrow();
     expect(patchRuntimeNetworkRetryClassification(patched)).toBe(patched);
@@ -488,6 +494,10 @@ describe("runtime synchronization", () => {
     expect(gate(beforeOutput)).toBe(true);
     expect(gate({ ...beforeOutput, emittedRetryBoundaryEvent: true })).toBe(false);
     expect(gate({ ...beforeOutput, attempt: 6 })).toBe(false);
+    if (budget === "budgeted") {
+      expect(gate({ ...beforeOutput, attempt: 6, retryBudget: "unbounded" })).toBe(true);
+      expect(gate({ ...beforeOutput, attempt: 6, retryBudget: "unbounded", emittedRetryBoundaryEvent: true })).toBe(false);
+    }
     expect(gate({ ...beforeOutput, failure: { ...failure, reason: "cancelled" } })).toBe(false);
     expect(recoverable({ cause: wrapped, context: { retryable: failure.retryable } })).toBe(true);
 
@@ -1363,6 +1373,14 @@ describe("runtime synchronization", () => {
     expect(nativeSteerPatched).toContain('l1t(await(X.result??X.completion),Q,R5(t))');
     expect(nativeSteerPatched).not.toContain('l1t(X.result,Q,R5(t))');
     expect(patchRuntimeTuiBridge(nativeSteerPatched)).toBe(nativeSteerPatched);
+    const presentationSteerRuntime = nativeSteerRuntime.replace(
+      "input:A,inputId:$?.inputId",
+      'input:A,inputPresentation:$?.inputPresentation??($?.inputSource?void 0:"user_steer"),inputId:$?.inputId'
+    );
+    const presentationSteerPatched = patchRuntimeTuiBridge(presentationSteerRuntime);
+    expect(presentationSteerPatched).toContain('inputPresentation:$?.inputPresentation??($?.inputSource?void 0:"user_steer")');
+    expect(presentationSteerPatched).not.toContain('pendingInputId:$?.pendingInputId');
+    expect(patchRuntimeTuiBridge(presentationSteerPatched)).toBe(presentationSteerPatched);
     expect(() => patchRuntimeTuiBridge(
       nativeSteerRuntime.replace(
         "return t.runtime.admitPrompt(A,[],{...$,delivery:d,traceContext:$?.traceContext})",
@@ -1657,7 +1675,7 @@ describe("runtime synchronization", () => {
     expect(() => patchRuntimeGoalFailurePause("incompatible runtime")).toThrow(/incompatible/);
   });
 
-  test("reclassifies registry stream EOF as retryable", () => {
+  test.each(["legacy", "budgeted"])("reclassifies registry stream EOF as retryable (%s)", budget => {
     const runtime = [
       "function detectFallback(e){return}",
       "function findProviderError(e){return}",
@@ -1678,10 +1696,14 @@ describe("runtime synchronization", () => {
       "await Ac({...k,attempt:u,durationMs:de-c,requestHeaderCount:U,requestHeaders:F,responseHeaderCount:Object.keys(le).length,responseHeaders:le,providerRequestId:m2e(le),finishReason:x.finishReason,usage:x.usage,timeToFirstProviderEventMs:Z,timeToFirstContentMs:J,timeToFirstTextMs:Q,streamMaxIdleMs:X||void 0,streamStallCount:V,streamOutputCommitted:z,timestamp:new Date(de).toISOString(),type:\"model_request_completed\"},_A(e)),O=!0}",
       "r&&P&&await Yrt({modelIoFullRetentionEnabled:e.modelIoFullRetentionEnabled,attempt:u,debugDir:e.debugDir,isDev:n,normalizedToolCalls:S.snapshotNormalizedToolCalls(),options:P,recordModelIO:r,request:b,requestId:k.requestId,resolved:H,result:W,startedAt:c});return}"
     ].join("");
-    const source = `${runtime}${runner.replace(
+    let source = `${runtime}${runner.replace(
       'providerId:String(k.model.providerId),providerKind:k.providerKind,source:x.lastErrorChunk??x.lastFinishChunk})',
       'providerId:String(k.providerId),providerKind:H.providerKind,source:x.lastErrorChunk??x.lastFinishChunk})??fallback({captcha:H.accountAccess?.mode==="start-plan",providerId:String(k.providerId),providerKind:H.providerKind})'
-    )}`;
+    )}label(streamRunner,"runStreamText");`;
+    if (budget === "budgeted") source = source.replace(
+      "let retryState=createRetryState({maxAttempts:e.retry.maxAttempts});",
+      "let retryBudget=e.request.modelRetryBudget,retryState=createRetryState({maxAttempts:e.retry.maxAttempts});"
+    );
 
     expect(hasRuntimeStreamEofFinishGuard(source)).toBe(false);
     const patched = patchRuntimeStreamEofFinishGuard(source);
@@ -1700,6 +1722,7 @@ describe("runtime synchronization", () => {
     expect(() => patchRuntimeStreamEofFinishGuard("incompatible runtime")).toThrow(
       /stream EOF guard patch/
     );
+    expect(() => patchRuntimeStreamEofFinishGuard(source.replace('label(streamRunner,"runStreamText");', ""))).toThrow(/label missing/);
 
     // The guard must classify the SDK's synthetic "other" finish (null
     // finish_reason) and a missing reason as EOF, while trusting a provider

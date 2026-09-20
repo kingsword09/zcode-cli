@@ -3,12 +3,16 @@ import { describe, expect, test } from "bun:test";
 import { patchRuntimeModelCatalogReload } from "../scripts/sync-runtime.ts";
 
 describe("runtime model catalog reload bridge", () => {
-  test("refreshes a registry in place and propagates refresh failures", async () => {
+  test.each(["inline", "attached"])("refreshes a registry in place and propagates failures (%s)", async layout => {
     const source = [
       'const kind="ProviderRegistryService";class Registry{refresh(reason="explicit"){}}',
       'function makeApp(ctx){return{listModels:label(()=>listRegistry(ctx.providerRegistry),"listModels")}}',
-      'function makeBridge(host){const bridge={},pending=Promise.resolve(host);const create=async()=>{let state=await pending,selection=state?.modelSelectionConfigRepository?await state.modelSelectionConfigRepository.read():undefined};bridge.listModelOptions=async()=>(await getApp()).listModels?.()??[];',
+      layout === "inline"
+        ? 'function makeBridge(host){const bridge={},pending=Promise.resolve(host);const create=async()=>{let state=await pending,selection=state?.modelSelectionConfigRepository?await state.modelSelectionConfigRepository.read():undefined};'
+        : 'const attach=label((bridge,getApp)=>{',
+      'bridge.listModelOptions=async()=>(await getApp()).listModels?.()??[];',
       'bridge.setTransientModel=async model=>(await getApp()).setModel(model,{transient:true});',
+      layout === "inline" ? "" : '},"attachTuiAppQueries");function makeBridge(host){const bridge={},state={providerRegistryRuntimePromise:Promise.resolve(host)};attach(bridge,getApp),bridge.subscribeSessionEvents=()=>{},bridge.close=async()=>{(await state.providerRegistryRuntimePromise)?.dispose()};',
       'return{listModelOptions:bridge.listModelOptions}}'
     ].join("");
     const patched = patchRuntimeModelCatalogReload(source);
