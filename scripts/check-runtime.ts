@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { formatVersionOutput, readDistributionVersion } from "../src/launcher.ts";
 import { capabilitiesFromExtractionMetadata } from "../src/runtime-capabilities.ts";
+import { requestAppServer } from "../src/app-server-client.ts";
 import {
   extractRuntimeCapabilities,
   hasRuntimeCliHelpContract,
@@ -193,18 +194,12 @@ if (version.code !== 0 || !/^\d+\.\d+\.\d+/.test(version.stdout.trim())) {
   throw new Error(`Version check failed: ${version.stderr || version.stdout}`);
 }
 
-const request = JSON.stringify({ id: 1, method: "session/list", params: {} });
-const protocol = await execute(node, [runtime, "app-server"], `${request}\n`);
-if (protocol.code !== 0) throw new Error(`app-server check failed: ${protocol.stderr}`);
-// New runtimes emit storage startup notifications before the RPC response.
-const response = protocol.stdout.trim().split("\n").map((line) => JSON.parse(line)).find(
-  (message) => message.id === 1
-) as {
-  id?: number;
-  result?: { sessions?: unknown[] };
-};
-if (!response || !Array.isArray(response.result?.sessions)) {
-  throw new Error(`Unexpected app-server response: ${protocol.stdout}`);
+const response = await requestAppServer({
+  method: "session/list", params: {},
+  transport: { command: node, args: [runtime, "app-server"], cwd: root, env: process.env }
+}) as { sessions?: unknown[] };
+if (!response || !Array.isArray(response.sessions)) {
+  throw new Error(`Unexpected app-server response: ${JSON.stringify(response)}`);
 }
 
 const tuiImport = await execute(node, [

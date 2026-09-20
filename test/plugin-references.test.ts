@@ -90,8 +90,9 @@ describe("runtime Plugin references", () => {
     await writeFile(runtime, `
       let input = "";
       process.stdin.setEncoding("utf8");
-      process.stdin.on("data", chunk => input += chunk);
-      process.stdin.on("end", () => {
+      process.stdin.on("data", chunk => {
+        input += chunk;
+        if (!input.includes("\\n")) return;
         const request = JSON.parse(input.trim());
         console.log(JSON.stringify({ id: request.id, result: {
           authority: "workspace",
