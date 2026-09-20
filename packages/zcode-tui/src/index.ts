@@ -681,6 +681,8 @@ class ZCodeTui {
   private readonly permissionRequests = new PermissionRequestQueue();
   private choiceDepth = 0;
   private settingSwitchInFlight = false;
+  private sessionModelIssue?: string;
+  private sessionModelRecovery?: Promise<void>;
   private fullscreenWelcomeVisible = true;
   private fullscreenWelcomeTransitionTimer?: ReturnType<typeof setTimeout>;
   private sessionHasContent = false;
@@ -904,6 +906,7 @@ class ZCodeTui {
           void this.refreshWorkflowFromEvent();
         }) ?? undefined;
       }
+      if (this.sessionModelIssue) void this.recoverSessionModel();
       await this.done;
     } finally {
       process.off("SIGINT", onSigint);
@@ -1562,7 +1565,9 @@ class ZCodeTui {
     const submission = queuedSubmission ?? protectSubmission(input);
     if (!input.startsWith("/") && !this.primaryTurnActive) {
       const allowed = await preflightSubmission({
-        validate: () => missingCodingPlanKey({
+        validate: () => this.sessionModelIssue
+          ? Promise.resolve(`${this.sessionModelIssue} Choose a model with /model before continuing.`)
+          : missingCodingPlanKey({
           model: this.model,
           workingDirectory: this.options.workspaceDirectory
         }),
@@ -2176,6 +2181,7 @@ class ZCodeTui {
     if (appliesToSetting(settingTarget, "model")
       && result.model !== undefined) {
       this.model = modelLabel(result.model);
+      this.sessionModelIssue = undefined;
     }
     if (typeof result.loginRequired === "boolean") {
       this.setLoginRequired(result.loginRequired);
@@ -2206,18 +2212,10 @@ class ZCodeTui {
     if (isRecord(result.selection)) await this.showSelection(result.selection);
     if (result.resetSessionProjection === true) {
       await this.refreshExecutionState();
-      try {
-        const persistedModel = await this.options.readSessionModel?.();
-        if (isRecord(persistedModel) && typeof persistedModel.model === "string") {
-          this.model = persistedModel.model;
-          this.thoughtLevel = asString(persistedModel.thoughtLevel);
-          if (Array.isArray(persistedModel.effortOptions)) this.effortOptions = persistedModel.effortOptions;
-        }
-      } catch {
-        // Model metadata is supplementary; the resume response remains usable.
-      }
+      await this.restoreSessionModel();
       this.updateMetadata();
       this.ui.requestRender();
+      if (this.sessionModelIssue) await this.recoverSessionModel();
     }
   }
 
@@ -3765,17 +3763,29 @@ class ZCodeTui {
   /** Switch this session while preserving the shared default model. */
   private async showModelPicker(): Promise<boolean> {
     await this.refreshModelOptions();
+    if (this.stopped) return true;
     const picker = modelPicker(this.modelOptions, this.model);
-    if (picker.items.length === 0) return false;
+    if (picker.items.length === 0) {
+      if (!this.sessionModelIssue) return false;
+      this.addNotice(`${this.sessionModelIssue} No models are available. Run /login or configure a provider in /settings, then use /model.`, "warning");
+      return true;
+    }
     const selected = await this.showChoice({
-      title: "Select model",
-      prompt: `Current model: ${this.model}. · session only — saved defaults are unchanged`,
+      title: this.sessionModelIssue ? "Select a replacement model" : "Select model",
+      prompt: this.sessionModelIssue
+        ? `${this.sessionModelIssue} Choose a model for this session.`
+        : `Current model: ${this.model}. · session only — saved defaults are unchanged`,
       help: "Up/Down choose · Enter switch · Esc cancel",
       items: picker.items.map((item) => ({ ...item, payload: item.value })),
       selectedIndex: picker.selectedIndex
     });
     const modelId = selected?.payload;
-    if (typeof modelId !== "string") return true;
+    if (typeof modelId !== "string") {
+      if (this.sessionModelIssue && !this.stopped) {
+        this.addNotice("Model selection unchanged. Choose a model with /model before continuing.", "warning");
+      }
+      return true;
+    }
 
     await this.switchTransientModel(modelId);
     return true;
@@ -3793,9 +3803,10 @@ class ZCodeTui {
     this.settingSwitchInFlight = true;
     try {
       const previousModel = this.model;
+      const recovering = this.sessionModelIssue !== undefined;
       const result = await this.options.setTransientModel(modelId);
       await this.handleResult(result, false);
-      const status = this.model === previousModel ? "already active" : "now";
+      const status = !recovering && this.model === previousModel ? "already active" : "now";
       this.addNotice(
         `Session model ${status}: ${this.model} · saved defaults unchanged.`,
         "muted"
@@ -5184,16 +5195,29 @@ class ZCodeTui {
         this.addNotice(`Unable to restore session transcript: ${message}`, "warning");
       }
     }
+    await this.restoreSessionModel();
+  }
+
+  private async restoreSessionModel(): Promise<void> {
+    this.sessionModelIssue = undefined;
     try {
-      const persistedModel = await this.options.readSessionModel?.();
-      if (isRecord(persistedModel) && typeof persistedModel.model === "string") {
-          this.model = persistedModel.model;
-          this.thoughtLevel = asString(persistedModel.thoughtLevel);
-          if (Array.isArray(persistedModel.effortOptions)) this.effortOptions = persistedModel.effortOptions;
-        }
-    } catch {
-      // Model metadata is supplementary; transcript restoration remains authoritative.
+      const saved = await this.options.readSessionModel?.();
+      if (!isRecord(saved)) return;
+      if (typeof saved.model === "string") this.model = saved.model;
+      this.thoughtLevel = asString(saved.thoughtLevel);
+      if (Array.isArray(saved.effortOptions)) this.effortOptions = saved.effortOptions;
+      if (isRecord(saved.issue)) this.sessionModelIssue = asString(saved.issue.message);
+    } catch (error) {
+      this.addNotice(`Unable to inspect the saved session model: ${error instanceof Error ? error.message : String(error)}`, "warning");
     }
+  }
+
+  private recoverSessionModel(): Promise<void> {
+    if (this.sessionModelRecovery) return this.sessionModelRecovery;
+    this.sessionModelRecovery = this.showModelPicker().then(() => {}).finally(() => {
+      this.sessionModelRecovery = undefined;
+    });
+    return this.sessionModelRecovery;
   }
 
   private updateMetadata(): void {
