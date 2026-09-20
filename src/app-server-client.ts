@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import type { Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 
 const maximumOutputBytes = 16 * 1024 * 1024;
 const forceTerminationDelayMilliseconds = 500;
@@ -83,7 +84,7 @@ function processError(message: string, code: number): AppServerProcessError {
   return new AppServerProcessError(message, code);
 }
 
-async function readBounded(stream: Readable | null, onOverflow: () => void): Promise<string> {
+async function readBounded(stream: Readable | null, onOverflow: () => void, onChunk?: (chunk: Buffer) => void): Promise<string> {
   if (!stream) return "";
   const chunks: Buffer[] = [];
   let bytes = 0;
@@ -95,6 +96,7 @@ async function readBounded(stream: Readable | null, onOverflow: () => void): Pro
       throw new Error(`App-server output exceeded ${maximumOutputBytes} bytes.`);
     }
     chunks.push(buffer);
+    onChunk?.(buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
 }
@@ -156,12 +158,25 @@ export async function requestAppServer(request: AppServerRequest): Promise<unkno
   if (request.signal?.aborted) onAbort();
 
   child.stdin.on("error", () => {});
-  child.stdin.end(`${JSON.stringify({ id: 1, method: request.method, params: request.params })}\n`);
+  // 3.14 treats stdin EOF as client disconnection and cancels outstanding work.
+  // Send one NDJSON request, but keep the transport alive until its response.
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  const stdoutPromise = readBounded(child.stdout, terminateForOverflow, chunk => {
+    pending += decoder.write(chunk);
+    let newline: number;
+    while ((newline = pending.indexOf("\n")) >= 0) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      if (responseEnvelope(line) && !child.stdin.writableEnded) child.stdin.end();
+    }
+  });
+  child.stdin.write(`${JSON.stringify({ id: 1, method: request.method, params: request.params })}\n`);
 
   try {
     const [code, stdout, stderr] = await Promise.all([
       exited,
-      readBounded(child.stdout, terminateForOverflow),
+      stdoutPromise,
       readBounded(child.stderr, terminateForOverflow)
     ]);
     if (request.signal?.aborted) throw cancellationError(request.signal);

@@ -506,7 +506,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const activeTranscriptPattern = /sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u;
   const activeTurnSteerPattern = /(\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\2\?\.inputId,queryId:\2\?\.queryId,expectedTurnId:\2\?\.expectedTurnId,)(?:delivery:"guide",)?(?:pendingInputId:\2\?\.pendingInputId,)?input:/u;
   const activeTurnGuidePattern = /\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\1\?\.inputId,queryId:\1\?\.queryId,expectedTurnId:\1\?\.expectedTurnId,delivery:"guide",pendingInputId:\1\?\.pendingInputId,input:/u;
-  const nativeActiveTurnSteerPattern = /([A-Za-z_$][\w$]*)\?\.delivery==="steer_active_turn".{0,700}?\.steerTurn\(\{commandKind:\1\?\.commandKind,delivery:[^,}]+,expectedTurnId:\1\?\.expectedTurnId,input:[^,}]+,inputId:\1\?\.inputId,intent:.{1,160}?,queryId:\1\?\.queryId,/u;
+  const nativeActiveTurnSteerPattern = /([A-Za-z_$][\w$]*)\?\.delivery==="steer_active_turn".{0,700}?\.steerTurn\(\{commandKind:\1\?\.commandKind,delivery:[^,}]+,expectedTurnId:\1\?\.expectedTurnId,input:[^,}]+,(?:inputPresentation:[^,}]+,)?inputId:\1\?\.inputId,intent:.{1,160}?,queryId:\1\?\.queryId,/u;
   const nativePromptAdmissionPattern = /\.runtime\.admitPrompt\([^{}]{0,500}\{\.\.\.([A-Za-z_$][\w$]*),delivery:[A-Za-z_$][\w$]*,traceContext:\1\?\.traceContext/u;
   const legacyStartedTurnResultPattern = /return ([A-Za-z_$][\w$]*)\.kind!=="started_turn"\?\1:([A-Za-z_$][\w$]*)\(\1\.result,([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\)/u;
   const supportsActiveTurnSteer = (value: string): boolean => (
@@ -581,7 +581,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && listModelOptionsOptionPattern.test(runtime)
     && modeBridgePattern.test(runtime)
     && modeOptionPattern.test(runtime)
-    && !cliModeOverrideBridge.test(runtime)
+    && (!cliModeOverrideBridge.test(runtime) || runtime.includes("$zTuiBridge.setMode=async"))
     && runtime.includes(".readExecutionState=async")
     && runtime.includes(".setPlanEnabled=async")
     && runtime.includes("...$zExecutionState")
@@ -701,7 +701,19 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const assignment = assignmentPattern.exec(patched);
   if (!assignment) throw new Error("ZCode runtime is incompatible with the TUI bridge (adapter assignment anchor missing).");
 
-  const [recallAssignment, bridge, , getApp] = assignment;
+  const [recallAssignment, originalBridge, , originalGetApp] = assignment;
+  let bridge = originalBridge!, getApp = originalGetApp!;
+  const queryHelperPattern = new RegExp(`([A-Za-z_$][\\w$]*)=[A-Za-z_$][\\w$]*\\(\\(${escapeRegExpName(bridge)},${escapeRegExpName(getApp)}\\)=>\\{`, "gu");
+  const queryHelper = runtime.includes('"attachTuiAppQueries"')
+    ? [...patched.slice(0, assignment.index).matchAll(queryHelperPattern)].at(-1) : undefined;
+  if (queryHelper) {
+    // The extracted helper uses short parameter names that collide with the
+    // locals in generated methods. Capture stable aliases in that scope.
+    const capture = `const $zTuiBridge=${bridge},$zTuiGetApp=${getApp};`;
+    if (!patched.includes(capture)) patched = patched.replace(queryHelper[0], queryHelper[0] + capture);
+    bridge = "$zTuiBridge";
+    getApp = "$zTuiGetApp";
+  }
   const assignments: string[] = [];
   // Persisted background-agent restore: after a CLI restart + session resume the
   // in-memory runtimeTaskRegistry is empty, so /tasks lists nothing and
@@ -722,7 +734,18 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     if (!listSkillsFactory) {
       throw new Error("ZCode runtime is incompatible with the TUI bridge (skill-list adapter anchor missing).");
     }
-    assignments.push(`${bridge}.listSkills=async()=>await ${listSkillsFactory[1]}(${listSkillsFactory[2]})`);
+    if (queryHelper) {
+      // Skill discovery needs the submitter's host (env/cwd/hooks), not the
+      // extracted query helper's identically named bridge parameter.
+      const callPattern = new RegExp(`${escapeRegExpName(queryHelper[1]!)}\\(([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*)\\),\\1\\.subscribeSessionEvents=`, "u");
+      const call = callPattern.exec(patched);
+      if (!call || countRegExpMatches(patched, callPattern) !== 1) {
+        throw new Error("ZCode runtime is incompatible with the TUI bridge (skill-list host anchor missing).");
+      }
+      patched = patched.replace(call[0], `${call[1]}.listSkills=async()=>await ${listSkillsFactory[1]}(${listSkillsFactory[2]}),${call[0]}`);
+    } else {
+      assignments.push(`${bridge}.listSkills=async()=>await ${listSkillsFactory[1]}(${listSkillsFactory[2]})`);
+    }
   }
   const interruptAssignment = `${bridge}.interruptTurn=async e=>{let t=await ${getApp}(),r=e?.reservationId??"tui-steer-interrupt",o=(Array.isArray(e?.pendingInputIds)?e.pendingInputIds:[]).filter(Boolean),n=[],i=async()=>{for(let a of n)await t.releaseQueueItemReservation?.(a,r);n=[]};try{if(t.reserveQueueItem&&t.releaseQueueItemReservation)for(let a of o)if(await t.reserveQueueItem(a,r))n.push(a);else{await i();break}let a=t.runtime?.stopActiveForegroundExecution?.({preserveQueueAutoDrainOnCancel:o.length>0&&n.length===o.length,reason:e?.reason??"TUI steer interrupt"})??{kind:"unsupported"};if(a.kind==="stopped"&&e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId){let u=Date.now()+5e3;for(;t.runtime.getActiveForegroundExecutionId()!==void 0;){if(Date.now()>=u)throw new Error("Timed out waiting for background result processing to stop.");await new Promise(l=>setTimeout(l,25))}}return a.kind!=="stopped"&&await i(),a}catch(a){await i();throw a}}`;
   const promotionAssignment = `${bridge}.promoteQueuedInput=async(e,t,r)=>{let o=await ${getApp}(),n=r?.pendingInputReservationId??r?.queryId??r?.inputId??"tui-promotion",i=(Array.isArray(t)?t:[t]).filter(Boolean);if(i.length===0||!o.reserveQueueItem||!o.markQueueItemPromoting||!o.releaseQueueItemReservation||!o.removeQueueItem)return ${bridge}.sendInput(e,{...r,delivery:"start_turn"});let a=[],u=!1;try{for(let l of i){if(await o.markQueueItemPromoting(l,n)){a.push(l);continue}if(!await o.reserveQueueItem(l,n))throw new Error("TUI queued input is already reserved: "+l);a.push(l);if(!await o.markQueueItemPromoting(l,n))throw new Error("TUI queued input promotion failed: "+l)}let c=await ${bridge}.sendInput(e,{...r,delivery:"start_turn"});if(c?.kind==="rejected")return c;u=!0;for(let l of a)if(!await o.removeQueueItem(l,{reason:"promoted",reservationId:n}))throw new Error("TUI queued input promotion commit failed: "+l);return c}finally{if(!u)for(let l of a)await o.releaseQueueItemReservation(l,n)}}`;
@@ -790,8 +813,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   // The upstream CLI shim turns every switch into a permanent --mode override,
   // which prevents later resumes from loading their saved execution state.
-  patched = patched.replace(cliModeOverrideBridge, `${bridge}.setMode=async e=>{return await(await ${getApp}()).setMode(e)}`);
-  if (!modeBridgePattern.test(patched)) {
+  if (!queryHelper) patched = patched.replace(cliModeOverrideBridge, `${bridge}.setMode=async e=>{return await(await ${getApp}()).setMode(e)}`);
+  if (queryHelper || !modeBridgePattern.test(patched)) {
     assignments.push(`${bridge}.setMode=async e=>{return await(await ${getApp}()).setMode(e)}`);
   }
   if (!patched.includes(".readExecutionState=async")) {
@@ -947,7 +970,21 @@ export function patchRuntimeModelCatalogReload(runtime: string): string {
   if (list && option && registryList) {
     const [, bridge, getApp] = list;
     const [, label, , context] = registryList;
-    const registry = /let ([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*),[A-Za-z_$][\w$]*=\1\?\.modelSelectionConfigRepository\?await \1\.modelSelectionConfigRepository\.read\(\)/u.exec(runtime.slice(factoryStart, list.index))?.[2];
+    let registry = /let ([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*),[A-Za-z_$][\w$]*=\1\?\.modelSelectionConfigRepository\?await \1\.modelSelectionConfigRepository\.read\(\)/u.exec(runtime.slice(factoryStart, list.index))?.[2];
+    if (!registry) {
+      // 3.14 attaches queries in a separate helper. Its registry promise lives
+      // in the owning submitter, so pass a lazy accessor instead of capturing
+      // a minifier variable from a different lexical scope.
+      const helperPattern = new RegExp(`([A-Za-z_$][\\w$]*)=[A-Za-z_$][\\w$]*\\(\\(${escapeRegExpName(bridge!)},${escapeRegExpName(getApp!)}\\)=>\\{`, "gu");
+      const helper = [...runtime.slice(0, list.index).matchAll(helperPattern)].at(-1)?.[1];
+      const callPattern = helper && new RegExp(`${escapeRegExpName(helper)}\\(([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*)\\),\\1\\.subscribeSessionEvents=`, "u");
+      const call = callPattern && callPattern.exec(runtime);
+      const owner = call && /\(await ([A-Za-z_$][\w$]*)\.providerRegistryRuntimePromise\)\?\.dispose\(\)/u.exec(runtime.slice(call.index, call.index + 2000))?.[1];
+      if (call && owner && runtime.includes('"attachTuiAppQueries"') && countRegExpMatches(runtime, callPattern!) === 1) {
+        runtime = runtime.replace(call[0], `${call[1]}.$zReadProviderRegistryRuntime=()=>${owner}.providerRegistryRuntimePromise,${call[0]}`);
+        registry = `${bridge}.$zReadProviderRegistryRuntime()`;
+      }
+    }
     // 3.12+ owns catalog discovery and personal config in the registry service.
     // Refresh that same service so active sessions keep their model selection.
     if (!registry || !runtime.includes('"ProviderRegistryService"') || !/refresh\([^)]*="explicit"\)/u.test(runtime)) {
@@ -1106,6 +1143,10 @@ function countRegExpMatches(source: string, pattern: RegExp): number {
   return Array.from(source.matchAll(new RegExp(pattern.source, flags))).length;
 }
 
+// 3.14 delegates the attempt limit to its bounded/unbounded retry-budget helper.
+// Neither form may retry in place once output has crossed the visible boundary.
+const runtimeStreamRetryGatePattern = /function [A-Za-z_$][\w$]*\(e\)\{(?:let [A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\(e\.error\)\.providerErrorCode;)?return e\.emittedRetryBoundaryEvent\|\|(?:e\.attempt>=e\.maxAttempts|![A-Za-z_$][\w$]*\(e\.retryBudget,e\.attempt,e\.maxAttempts\))\|\|e\.failure\.reason===[A-Za-z_$][\w$]*\.Cancelled\?!1:/u;
+
 /** Detect the local transport classifier while preserving the emitted-output retry boundary. */
 export function hasRuntimeNetworkRetryGuard(runtime: string): boolean {
   return runtime.includes("var $zTransportCodes=[")
@@ -1114,7 +1155,7 @@ export function hasRuntimeNetworkRetryGuard(runtime: string): boolean {
     && /if\(\$zTransportChain\(e,new WeakSet\)\)return!0;return [A-Za-z_$][\w$]*\(e\)\}/u.test(runtime)
     && /\|\|\$zTransportChain\([A-Za-z_$][\w$]*,new WeakSet\)\)return\{code:/u.test(runtime)
     && /\|\|\$zTransportChain\([A-Za-z_$][\w$]*,new WeakSet\)\)return!0;if\(t!==void 0\)return!1;/u.test(runtime)
-    && /function [A-Za-z_$][\w$]*\(e\)\{return e\.emittedRetryBoundaryEvent\|\|e\.attempt>=e\.maxAttempts\|\|e\.failure\.reason===[A-Za-z_$][\w$]*\.Cancelled\?!1:/u.test(runtime);
+    && countRegExpMatches(runtime, runtimeStreamRetryGatePattern) === 1;
 }
 
 /**
@@ -1132,7 +1173,6 @@ export function patchRuntimeNetworkRetryClassification(runtime: string): string 
   const whitelistPattern = /function ([A-Za-z_$][\w$]*)\(e\)\{let t=e\?\.toUpperCase\(\);return t==="ECONNRESET"\|\|t==="ECONNREFUSED"\|\|t==="EAI_AGAIN"\|\|t==="ENOTFOUND"\|\|t==="ENETUNREACH"\|\|t==="EHOSTUNREACH"\|\|t==="UND_ERR_SOCKET"\|\|t==="UND_ERR_CONNECT_TIMEOUT"\}/u;
   const extractorPattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return ([A-Za-z_$][\w$]*)\(e,new WeakSet\)\}function \2\(e,t\)\{if\(([A-Za-z_$][\w$]*)\(e,t\)\)return;let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(e\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\4,"code"\);if\(\6\)return \6;let [A-Za-z_$][\w$]*=\4\.cause;if\([A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*!==e\)return \2\([A-Za-z_$][\w$]*,t\)\}/u;
   const classifierPattern = /function ([A-Za-z_$][\w$]*)\(e,t\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(e\),[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\(\2\),([A-Za-z_$][\w$]*)=EXTRACTOR\(\2\),/u;
-  const streamGatePattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e\.emittedRetryBoundaryEvent\|\|e\.attempt>=e\.maxAttempts\|\|e\.failure\.reason===([A-Za-z_$][\w$]*)\.Cancelled\?!1:/u;
 
   const whitelistMatch = whitelistPattern.exec(runtime);
   const extractorMatch = extractorPattern.exec(runtime);
@@ -1192,7 +1232,7 @@ export function patchRuntimeNetworkRetryClassification(runtime: string): string 
     [networkBranchPattern, "classifier network branch"],
     [retryDecisionPattern, "final retry decision"],
     [staleStreamPattern, "stale stream detector"],
-    [streamGatePattern, "emitted-output stream gate"]
+    [runtimeStreamRetryGatePattern, "emitted-output stream gate"]
   ] as const) {
     if (countRegExpMatches(runtime, pattern) !== 1) {
       throw new Error(`ZCode runtime is incompatible with the network retry patch (${label} is not unique).`);
@@ -1301,23 +1341,21 @@ export function patchRuntimeStreamEofFinishGuard(runtime: string): string {
   // synthetic `other` finish with no raw reason is treated as EOF.
   // "async " precedes the generator declaration; anchor on it so the guard
   // lands before the `async` keyword instead of splitting it.
-  const runStreamTextPattern = /async function\*([A-Za-z_$][\w$]*)\(e\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(/u;
+  const runStreamTextLabel = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"runStreamText"\)/u;
+  const runStreamTextName = runStreamTextLabel.exec(runtime)?.[1];
+  if (!runStreamTextName || countRegExpMatches(runtime, runStreamTextLabel) !== 1) {
+    throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (runStreamText label missing or ambiguous).");
+  }
+  const runStreamTextPattern = new RegExp(`async function\\*${escapeRegExpName(runStreamTextName)}\\(`, "u");
   const runStreamText = runStreamTextPattern.exec(runtime);
   if (!runStreamText || countRegExpMatches(runtime, runStreamTextPattern) !== 1) {
     throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (runStreamText anchor missing).");
   }
-  const runStreamTextAnchor = runStreamText[0]!;
   // Providers that die mid-stream (or map a null finish_reason) surface the
   // AI SDK's "other" finish reason with no raw reason. Only content-bearing
   // or unfinished tool-input streams are treated as partial output here;
   // the existing empty-completion path owns truly empty responses.
-  let patched = runtime.replace(
-    runStreamTextAnchor,
-    `${runtimeStreamEofFinishGuard}async function*${runStreamText[1]}(e){let ${runStreamText[2]}=${runStreamText[3]}(`
-  );
-  if (patched === runtime) {
-    throw new Error("ZCode runtime is incompatible with the stream EOF guard patch (runStreamText anchor missing).");
-  }
+  let patched = runtime.slice(0, runStreamText.index) + runtimeStreamEofFinishGuard + runtime.slice(runStreamText.index);
 
   // Do not emit `model_request_completed` for an EOF without a provider
   // finish reason. The idle-timeout-shaped failure is classified by the

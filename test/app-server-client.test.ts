@@ -24,7 +24,8 @@ describe("app-server NDJSON client", () => {
       let input = "";
       process.stdin.setEncoding("utf8");
       process.stdin.on("data", chunk => input += chunk);
-      process.stdin.on("end", () => {
+      process.stdin.on("data", () => {
+        if (!input.includes("\\n")) return;
         const request = JSON.parse(input.trim());
         console.log(JSON.stringify({ id: request.id, result: { method: request.method, params: request.params } }));
       });
@@ -43,7 +44,7 @@ describe("app-server NDJSON client", () => {
   test("surfaces protocol errors with code and data", async () => {
     const script = `
       process.stdin.resume();
-      process.stdin.on("end", () => console.log(JSON.stringify({
+      process.stdin.once("data", () => console.log(JSON.stringify({
         id: 1,
         error: { code: -32602, message: "Invalid params", data: { field: "source" } }
       })));
@@ -64,7 +65,7 @@ describe("app-server NDJSON client", () => {
       await requestAppServer({
         method: "plugins/overview",
         params: {},
-        transport: transport("process.stdin.resume(); process.stdin.on('end', () => process.exit(7));")
+        transport: transport("process.stdin.resume(); process.stdin.once('data', () => process.exit(7));")
       });
       throw new Error("Expected request to fail.");
     } catch (error) {
@@ -77,7 +78,7 @@ describe("app-server NDJSON client", () => {
     await expect(requestAppServer({
       method: "plugins/list",
       params: {},
-      transport: transport("process.stdin.resume(); process.stdin.on('end', () => console.log('not-json')); ")
+      transport: transport("process.stdin.resume(); process.stdin.once('data', () => {console.log('not-json');process.exit(0)}); ")
     })).rejects.toThrow(/did not return a response envelope/u);
 
     const controller = new AbortController();
@@ -88,6 +89,26 @@ describe("app-server NDJSON client", () => {
       signal: controller.signal,
       transport: transport("")
     })).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  test("keeps stdin open through unrelated messages and a chunked UTF-8 response", async () => {
+    expect(await requestAppServer({
+      method: "session/list", params: {}, transport: transport(`
+        let responded = false;
+        process.stdin.resume();
+        process.stdin.on("end", () => { if (!responded) process.exit(9); });
+        process.stdin.once("data", () => {
+          console.log(JSON.stringify({method:"startup/storageState",params:{phase:"ready"}}));
+          console.log(JSON.stringify({id:2,result:{ignored:true}}));
+          const response = Buffer.from(JSON.stringify({id:1,result:{sessions:[{title:"你好，世界"}]}}) + "\\n");
+          const split = response.indexOf(Buffer.from("界")) + 1;
+          setTimeout(() => {
+            process.stdout.write(response.subarray(0, split));
+            setTimeout(() => {responded=true;process.stdout.write(response.subarray(split));}, 30);
+          }, 150);
+        });
+      `)
+    })).toEqual({ sessions: [{ title: "你好，世界" }] });
   });
 
   test("finishes cancellation when the app-server ignores SIGTERM", async () => {
