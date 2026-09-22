@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { nextBuildVersion } from "./release-version.ts";
+import { runtimeTestEnv } from "./runtime-test-env.ts";
 
 const root = join(import.meta.dir, "..");
 const runtime = join(root, "vendor", "zcode.cjs");
@@ -17,6 +18,7 @@ if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode ru
 const decoder = new TextDecoder();
 let output = "";
 const temporaryHome = await mkdtemp(join(tmpdir(), "zcode-cli-smoke-"));
+const smokeEnv = { ...runtimeTestEnv(temporaryHome, root), ZCODE_NODE: node };
 const configPath = join(temporaryHome, ".zcode", "cli", "setting.json");
 const updateCachePath = join(temporaryHome, ".zcode", "cli", "version.json");
 const smokeSkillPath = join(temporaryHome, ".agents", "skills", "smoke-review", "SKILL.md");
@@ -61,12 +63,9 @@ await writeFile(smokeSkillPath, [
 const child = Bun.spawn(command, {
   cwd: root,
   env: {
-    ...process.env,
+    ...smokeEnv,
     CI: "0",
-    HOME: temporaryHome,
-    ZCODE_DATA_BASE_DIR: temporaryHome,
     NO_UPDATE_NOTIFIER: "0",
-    USERPROFILE: temporaryHome,
     ZCODE_DISABLE_UPDATE_CHECK: "0",
     TERM: "xterm-256color"
   },
@@ -123,12 +122,9 @@ async function verifyLauncherSighup(): Promise<void> {
   const signalChild = Bun.spawn(command, {
     cwd: root,
     env: {
-      ...process.env,
+      ...smokeEnv,
       CI: "1",
-      HOME: temporaryHome,
-    ZCODE_DATA_BASE_DIR: temporaryHome,
       NO_UPDATE_NOTIFIER: "1",
-      USERPROFILE: temporaryHome,
       TERM: "xterm-256color"
     },
     terminal: signalTerminal

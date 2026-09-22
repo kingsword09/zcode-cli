@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -29,10 +30,8 @@ await writeFile(configPath, JSON.stringify({ ui: { tuiMode: "fullscreen" } }, nu
 const child = Bun.spawn([process.execPath, fixture], {
   cwd: root,
   env: {
-    ...process.env,
+    ...runtimeTestEnv(temporaryHome, root),
     CI: "1",
-    HOME: temporaryHome,
-    USERPROFILE: temporaryHome,
     TERM: "xterm-256color",
     TERM_PROGRAM: "iTerm.app",
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,

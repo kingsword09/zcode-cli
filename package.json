@@ -38,6 +38,11 @@
     "docs/CONFIGURATION.zh-CN.md",
     "docs/PROVIDER_CONFIG.md",
     "docs/PROVIDER_CONFIG.zh-CN.md",
+    "docs/THIRD_PARTY_CONTENT.md",
+    "LICENSES/Apache-2.0.txt",
+    "LICENSES/README.md",
+    "LICENSES/ZCode-NOTICE.md",
+    "LICENSES/ZCode-THIRD-PARTY-NOTICES.md",
     "zcode-runtime.lock.json",
     "README.md",
     "LICENSE"

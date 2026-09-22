@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,10 +35,8 @@ async function runPhase(options: { copyOnSelect: boolean; multiplexer?: boolean 
   const child = Bun.spawn([process.execPath, fixture], {
     cwd: root,
     env: {
-      ...process.env,
+      ...runtimeTestEnv(temporaryHome, root),
       CI: "1",
-      HOME: temporaryHome,
-      USERPROFILE: temporaryHome,
       TERM: "xterm-256color",
       ...(options.multiplexer ? { TMUX: "1" } : {}),
       ZCODE_TUI_MODE: "fullscreen",

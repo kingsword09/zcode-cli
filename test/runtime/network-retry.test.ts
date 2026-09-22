@@ -1,4 +1,5 @@
 import { writeProviderFixture } from "../fixtures/provider-config.ts";
+import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 import { afterEach, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
@@ -110,6 +111,7 @@ async function runNetworkFixture(options: {
     ...options.serverEnv
   });
   const home = await mkdtemp(join(tmpdir(), options.temporaryPrefix));
+  const env = runtimeTestEnv(home);
   temporaryDirectories.push(home);
   const workspace = join(home, "workspace");
   await mkdir(workspace, { recursive: true });
@@ -124,7 +126,7 @@ async function runNetworkFixture(options: {
     skills: Record<string, unknown>;
     storage: Record<string, unknown>;
   };
-  await writeProviderFixture({ HOME: home, USERPROFILE: home }, {
+  await writeProviderFixture(env, {
     providerId: "zai", modelId: "glm-5.3", apiKey: "fixture-key", baseUrl: `http://127.0.0.1:${server.port}/v1`
   });
   config.storage = {
@@ -173,9 +175,7 @@ async function runNetworkFixture(options: {
   const child = Bun.spawn([node, ...runtimeArgs], {
     cwd: root,
     env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
+      ...env,
       NO_UPDATE_NOTIFIER: "1",
       ZCODE_DISABLE_UPDATE_CHECK: "1",
       ZCODE_MODEL_RETRY_BASE_DELAY_MS: "0",

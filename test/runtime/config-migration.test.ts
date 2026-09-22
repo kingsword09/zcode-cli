@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cliSettingsPath, legacyCliConfigPath, providerConfigPath, providerMigrationMarkerPath } from "../../src/config-paths.ts";
 import { writeProviderFixture } from "../fixtures/provider-config.ts";
+import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 
 test("startup migrates personal providers once using native schema and conflict rules", async () => {
   const home = await mkdtemp(join(tmpdir(), "zcode-shared-migration-"));
-  const env = { HOME: home, USERPROFILE: home };
+  const env = runtimeTestEnv(home);
   const old = legacyCliConfigPath(env), target = providerConfigPath(env);
   const legacy = {
     provider: {
@@ -30,7 +31,7 @@ test("startup migrates personal providers once using native schema and conflict 
   } } }));
   const run = async () => {
     const child = Bun.spawn([Bun.which("node")!, join(import.meta.dir, "../../bin/zcode.js"), "--help"], {
-      env: { ...process.env, ...env, ZCODE_DISABLE_UPDATE_CHECK: "1" }, cwd: home,
+      env, cwd: home,
       stdout: "pipe", stderr: "pipe"
     });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -65,7 +66,7 @@ test("startup migrates personal providers once using native schema and conflict 
 
 test.each(["invalid-json", JSON.stringify({ schemaVersion: 99, config: {} })])("migration preserves invalid shared configuration (%s)", async (contents) => {
   const home = await mkdtemp(join(tmpdir(), "zcode-migration-invalid-"));
-  const env = { ...process.env, HOME: home, USERPROFILE: home, ZCODE_DATA_BASE_DIR: home, ZCODE_CLI_MIGRATE_CONFIG: "1" };
+  const env = { ...runtimeTestEnv(home), ZCODE_CLI_MIGRATE_CONFIG: "1" };
   try {
     await mkdir(dirname(legacyCliConfigPath(env)), { recursive: true });
     await writeFile(legacyCliConfigPath(env), JSON.stringify({ provider: {
@@ -87,7 +88,7 @@ test.each(["invalid-json", JSON.stringify({ schemaVersion: 99, config: {} })])("
 
 test("concurrent startup migration cannot duplicate personal providers", async () => {
   const home = await mkdtemp(join(tmpdir(), "zcode-migration-concurrent-"));
-  const env = { ...process.env, HOME: home, USERPROFILE: home, ZCODE_DATA_BASE_DIR: home, ZCODE_CLI_MIGRATE_CONFIG: "1" };
+  const env = { ...runtimeTestEnv(home), ZCODE_CLI_MIGRATE_CONFIG: "1" };
   try {
     await mkdir(dirname(legacyCliConfigPath(env)), { recursive: true });
     await writeFile(legacyCliConfigPath(env), JSON.stringify({ provider: {

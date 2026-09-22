@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,13 +36,11 @@ async function verifyWidth(
   const child = Bun.spawn([process.execPath, fixture], {
     cwd: root,
     env: {
-      ...process.env,
+      ...runtimeTestEnv(temporaryHome, root),
       CI: "1",
       COLORFGBG: colorFgBg,
-      HOME: temporaryHome,
       NO_COLOR: noColor ? "1" : "",
       TERM: "xterm-256color",
-      USERPROFILE: temporaryHome,
       ZCODE_TUI_TEST_THEME: theme ?? "auto",
       ZCODE_TUI_NOTIFICATION_METHOD: "none"
     },

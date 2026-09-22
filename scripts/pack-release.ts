@@ -5,9 +5,9 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { smokePackagedCli } from "./smoke-package.ts";
+import { attributionFiles, pluginLicenseFiles } from "./package-contents.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const destination = join(root, ".release");
 
 export interface PackFile {
   path: string;
@@ -33,6 +33,8 @@ interface PackageIdentity {
 
 const requiredFiles = [
   "LICENSE",
+  ...attributionFiles,
+  ...pluginLicenseFiles,
   "README.md",
   "bin/zcode.js",
   "setting.example.json",
@@ -52,6 +54,7 @@ const requiredFiles = [
 ];
 const allowedRoots = new Set([
   "LICENSE",
+  ...attributionFiles,
   "README.md",
   "bin/zcode.js",
   "setting.example.json",
@@ -97,13 +100,15 @@ export function validatePackResult(result: PackResult, packageJson: PackageIdent
   if (!bin || (bin.mode & 0o111) === 0) throw new Error("npm tarball zcode bin is not executable.");
 }
 
-export async function packRelease(): Promise<void> {
+export async function packRelease(base = root): Promise<void> {
+  base = resolve(base);
+  const destination = join(base, ".release");
   await rm(destination, { recursive: true, force: true });
   await mkdir(destination, { recursive: true });
   const npm = Bun.which("npm");
   if (!npm) throw new Error("npm is required to create the release tarball.");
   const child = Bun.spawn([npm, "pack", "--json", "--pack-destination", destination], {
-    cwd: root,
+    cwd: base,
     stdin: "inherit",
     stdout: "pipe",
     stderr: "inherit"
@@ -115,21 +120,21 @@ export async function packRelease(): Promise<void> {
   if (code !== 0) throw new Error(`npm pack exited with status ${code}`);
 
   const result = parsePackResult(stdout);
-  const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as PackageIdentity;
+  const packageJson = JSON.parse(await readFile(join(base, "package.json"), "utf8")) as PackageIdentity;
   validatePackResult(result, packageJson);
   const tarball = join(destination, result.filename);
   const release = {
     name: result.name,
     version: result.version,
-    tarball: relative(root, tarball).split("\\").join("/"),
+    tarball: relative(base, tarball).split("\\").join("/"),
     size: result.size,
     unpackedSize: result.unpackedSize,
     integrity: result.integrity,
     shasum: result.shasum,
     files: result.files.length
   };
-  await writeFile(join(destination, "release.json"), `${JSON.stringify(release, null, 2)}\n`);
   await smokePackagedCli(tarball);
+  await writeFile(join(destination, "release.json"), `${JSON.stringify(release, null, 2)}\n`);
 
   if (process.env.GITHUB_OUTPUT) {
     await appendFile(process.env.GITHUB_OUTPUT, `tarball=${release.tarball}\n`);

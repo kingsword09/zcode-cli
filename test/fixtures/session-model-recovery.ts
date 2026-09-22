@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 
 import { cliSettingsPath, ensureCliSettings } from "../../src/model-access.ts";
 import { writeProviderFixture } from "./provider-config.ts";
+import { runtimeTestEnv } from "./runtime-env.ts";
 
 export const sessionModelCases = {
   "legacy-provider": {
@@ -36,10 +37,7 @@ export async function createSessionModelFixture(kind: SessionModelCase = "legacy
     );
     return new Response(`${chunks.join("")}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   } });
-  const env = { ...process.env, HOME: directory, USERPROFILE: directory, ZCODE_DATA_BASE_DIR: directory,
-    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: join(directory, "providers.json"),
-    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: join(root, "vendor/provider/zcode-builtin.json"),
-    ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE: "", ZCODE_DISABLE_UPDATE_CHECK: "1",
+  const env = { ...runtimeTestEnv(directory),
     ZCODE_TUI_MODE: "regular", ZCODE_NODE: node, TERM: "xterm-256color", CI: "0" };
   const dispose = async () => { server.stop(true); await rm(directory, { recursive: true, force: true }); };
   try {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { ensureCliSettings, cliSettingsPath } from "../../src/model-access.ts";
 import { writeProviderFixture } from "../fixtures/provider-config.ts";
+import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 import { requestAppServer } from "../../src/app-server-client.ts";
 
 function plainText(text: string): string {
@@ -15,7 +16,7 @@ function plainText(text: string): string {
 test.skipIf(process.platform === "win32").each([false, true])("registry TUI starts and reloads personal models (first install: %p)", async (firstInstall) => {
   const node = Bun.which("node")!;
   const home = await mkdtemp(join(tmpdir(), "zcode-registry-tui-"));
-  const env = { HOME: home, USERPROFILE: home };
+  const env = runtimeTestEnv(home);
   await ensureCliSettings(env);
   const config = JSON.parse(await readFile(cliSettingsPath(env), "utf8"));
   const requestedModels: string[] = [];
@@ -48,10 +49,8 @@ test.skipIf(process.platform === "win32").each([false, true])("registry TUI star
   const terminal = new Bun.Terminal({ cols: 110, rows: 36, name: "xterm-256color",
     data(_terminal, data) { output += decoder.decode(data, { stream: true }); }
   });
-  const runtimeEnv = { ...process.env, ...env, TERM: "xterm-256color", CI: "0", ZCODE_DATA_BASE_DIR: home,
-      ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: join(import.meta.dir, "..", "..", "vendor", "provider", "zcode-builtin.json"),
+  const runtimeEnv = { ...env, TERM: "xterm-256color", CI: "0",
       ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalPath,
-      ZCODE_DISABLE_MODEL_CATALOG_REFRESH: "1", ZCODE_DISABLE_UPDATE_CHECK: "1",
       ZCODE_TUI_MODE: "regular", ZCODE_NODE: node };
   const start = (args: string[] = []) => Bun.spawn([node, join(import.meta.dir, "../../bin/zcode.js"), ...args], {
     cwd: home, terminal, env: runtimeEnv

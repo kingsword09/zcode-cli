@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,10 +23,8 @@ const terminal = new Bun.Terminal({
 const child = Bun.spawn([process.execPath, fixture], {
   cwd: root,
   env: {
-    ...process.env,
+    ...runtimeTestEnv(temporaryHome, root),
     CI: "1",
-    HOME: temporaryHome,
-    USERPROFILE: temporaryHome,
     TERM: "xterm-256color",
     TERM_PROGRAM: "iTerm.app",
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,
@@ -71,6 +70,14 @@ async function sendAndSettle(input: string): Promise<void> {
   await Bun.sleep(renderSettleMilliseconds);
 }
 
+async function waitForLoginRefresh(label: string, start: number): Promise<void> {
+  // Resuming the UI redraws earlier login notices before the new login finishes.
+  // Wait for the completed turn indicator before submitting another command.
+  await waitFor(label,
+    /External login command completed\.[\s\S]*Model access configured via[\s\S]*config\.json[\s\S]*\[ ✓ [^\]]+\]/i,
+    start);
+}
+
 const timeout = setTimeout(() => child.kill("SIGKILL"), 45_000);
 
 let interactionError: unknown;
@@ -104,17 +111,17 @@ try {
   await sendAndWait("feature-secret-api-key", "masked API key value", /\*{20,}/i);
   await sendAndWait("\r", "API key setup", /Configured Z\.AI Coding Plan\./i);
   const overrideLoginStart = await sendAndWait("/login\r", "suspended login command", /External login command completed\./i);
-  await waitFor("refreshed login state", /Model access configured via[\s\S]*config\.json/i, overrideLoginStart);
+  await waitForLoginRefresh("refreshed login state", overrideLoginStart);
   await sendAndWait("/disable-login-override\r", "disable login override", /Login override disabled\./i);
   await sendAndWait("/login\r", "reopened login setup picker", /Set Up Coding Plan/i);
   const defaultLoginStart = await sendAndWait("\x1b[B\r", "default suspended OAuth command", /External login command completed\./i);
-  await waitFor("default OAuth login refresh", /Model access configured via[\s\S]*config\.json/i, defaultLoginStart);
+  await waitForLoginRefresh("default OAuth login refresh", defaultLoginStart);
   const directLoginStart = await sendAndWait(
     "/login zai-coding-plan\r",
     "direct suspended OAuth command",
     /External login command completed\./i
   );
-  await waitFor("direct OAuth login refresh", /Model access configured via[\s\S]*config\.json/i, directLoginStart);
+  await waitForLoginRefresh("direct OAuth login refresh", directLoginStart);
   await sendAndWait("/prepare-failing-login\r", "prepare OAuth failure", /Failing login prepared\./i);
   await sendAndWait("/login\r", "failure login setup picker", /Set Up Coding Plan/i);
   await sendAndWait("\x1b[B\r", "restored OAuth failure", /Login failed: OAuth HTTP error 404 \(empty or non-JSON response\)/i);
