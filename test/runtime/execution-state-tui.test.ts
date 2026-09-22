@@ -5,16 +5,15 @@ import { join } from "node:path";
 import { cliSettingsPath, ensureCliSettings } from "../../src/model-access.ts";
 import { requestAppServer } from "../../src/app-server-client.ts";
 import { writeProviderFixture } from "../fixtures/provider-config.ts";
+import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 import { TerminalScreen } from "../tui/harness/terminal-screen.ts";
 
 test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])("Plan and permissions remain independent in %s TUI and after resume", async (display) => {
   const home = await mkdtemp(join(tmpdir(), "zcode-execution-state-"));
   const node = Bun.which("node")!;
   const root = join(import.meta.dir, "../..");
-  const env = { ...process.env, HOME: home, USERPROFILE: home, ZCODE_DATA_BASE_DIR: home,
-    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: join(home, "providers.json"),
-    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: join(root, "vendor/provider/zcode-builtin.json"),
-    ZCODE_DISABLE_UPDATE_CHECK: "1", ZCODE_TUI_MODE: display, ZCODE_NODE: node, TERM: "xterm-256color", CI: "0" };
+  const env = { ...runtimeTestEnv(home),
+    ZCODE_TUI_MODE: display, ZCODE_NODE: node, TERM: "xterm-256color", CI: "0" };
   await ensureCliSettings(env);
   const settings = JSON.parse(await readFile(cliSettingsPath(env), "utf8"));
   settings.plugins.enabled = false;

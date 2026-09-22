@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 
 const root = join(import.meta.dir, "../..");
 
@@ -29,7 +30,7 @@ async function probeRegistry(personal: unknown, body: string): Promise<void> {
       runtime._compile(source, file);
     `;
     const child = Bun.spawn([Bun.which("node")!, "--eval", script], {
-      cwd: home, env: { ...process.env, HOME: home, USERPROFILE: home, ZCODE_DATA_BASE_DIR: home,
+      cwd: home, env: { ...runtimeTestEnv(home),
         ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalPath, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinPath,
         ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE: "" },
       stdout: "pipe", stderr: "pipe"

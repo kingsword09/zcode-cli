@@ -4,17 +4,22 @@
 [![npm downloads](https://img.shields.io/npm/dm/zcode-app-cli.svg)](https://www.npmjs.com/package/zcode-app-cli)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Unofficial terminal client for the official agent runtime shipped with ZCode Desktop.
+Unofficial terminal client for the ZCode agent runtime.
 
-The project extracts the upstream `resources/glm` runtime, injects a local
-`@zcode/tui` implementation based on
+The official ZCode source is available at
+[zai-org/ZCode](https://github.com/zai-org/ZCode), with first-party source under
+Apache-2.0 and separate terms for third-party content.
+
+This community client packages the runtime from a pinned ZCode Desktop release,
+applies compatibility patches, and supplies a terminal interface based on
 [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi/tree/main/packages/tui),
-and launches it as a Node.js child process that directly inherits the user's
-terminal.
+running as a Node.js child process in your terminal. The npm package includes
+the runtime; installing ZCode Desktop is not required for normal terminal use.
+Local development can also extract the runtime from an installed Desktop app.
 
-This project is not affiliated with or endorsed by Z.ai. ZCode and its bundled
-runtime remain subject to their upstream terms. Confirm that you are allowed to
-redistribute the extracted runtime before publishing the npm package.
+This project is not affiliated with or endorsed by Z.ai. Its own code is MIT;
+bundled upstream content retains its respective licenses. See
+[License and attribution](#license-and-attribution).
 
 ![zcode-app-cli TUI demo](./docs/assets/demo.svg)
 
@@ -49,6 +54,7 @@ Node.js example, terminal/PTY requirements, and compatibility rules.
 
 - [Quick start](#quick-start)
 - [Host integration](#host-integration)
+- [Relationship to the official project](#relationship-to-the-official-project)
 - [Install and update](#install-and-update)
 - [Architecture](#architecture)
 - [Features](#features)
@@ -58,7 +64,25 @@ Node.js example, terminal/PTY requirements, and compatibility rules.
 - [Configuration](#configuration)
 - [Local development](#local-development)
 - [Contributing](#contributing)
-- [License](#license)
+- [License and attribution](#license-and-attribution)
+
+## Relationship to the official project
+
+The [official repository](https://github.com/zai-org/ZCode) contains Desktop,
+Web, backend services, and the Agent CLI/runtime in `apps/zcode-cli`. It also
+contains an official TUI implemented with OpenTUI and React. Follow its README
+for official build and installation instructions.
+
+`zcode-app-cli` supplies its own pi-tui interface and npm packaging. Its release
+pipeline still extracts compiled Desktop artifacts using
+`zcode-runtime.lock.json`; it does not build the newly published source tree.
+`vendor/extraction.json` records the artifact origin and local patches. The
+public source revision and the extracted release are separate provenance records.
+
+Provider configuration is shared with Desktop by default. Session storage and
+feature compatibility depend on the runtime version and configured paths;
+sharing providers does not guarantee that every client discovers the same
+sessions. See [Configuration](./docs/CONFIGURATION.md).
 
 ## Install and update
 
@@ -90,6 +114,11 @@ Node.js npm launcher (config / login / version metadata)
           └─ local @zcode/tui adapter
               └─ @earendil-works/pi-tui
 ```
+
+`@zcode/tui` is the interface package loaded by the upstream runtime. During
+synchronization this project installs its local implementation from
+`packages/zcode-tui`, built on `@earendil-works/pi-tui`. This is separate from
+the official OpenTUI implementation in `apps/zcode-cli/packages/tui`.
 
 The official agent, model, session, tool, plugin, MCP, credential store and
 provider-configuration logic remains in the extracted runtime. The local
@@ -317,9 +346,9 @@ entire message at once. `Esc` leaves search or transcript navigation.
 
 ## Plugin management
 
-Built-in Plugins such as Browser Use, document skills and Skill Creator are
-seeded by the official runtime. Existing installed-plugin commands continue to
-use the runtime directly:
+Built-in Plugins such as Browser Use, Image Search and Skill Creator are seeded
+by the official runtime. Existing installed-plugin commands continue to use the
+runtime directly:
 
 ```bash
 zcode plugins list --json
@@ -327,6 +356,11 @@ zcode plugins enable <plugin-id>
 zcode plugins disable <plugin-id>
 zcode plugins uninstall <plugin-id> --force
 ```
+
+The npm package includes the document, PDF, presentation and spreadsheet skill
+Plugins with their original license files. Their bundled skills retain the
+upstream personal, educational and non-commercial use terms.
+See [Third-party content](./docs/THIRD_PARTY_CONTENT.md).
 
 The npm launcher adds marketplace operations by calling the runtime's public
 `app-server` protocol; it does not patch or reimplement the Plugin subsystem.
@@ -460,6 +494,18 @@ Please open an issue first to discuss substantial changes. See
 [Development](./docs/DEVELOPMENT.md) for the local setup and validation
 commands, and [Releasing](./docs/RELEASING.md) for the release flow.
 
-## License
+## License and attribution
 
-MIT — see [LICENSE](./LICENSE).
+This project's launcher, local TUI and other original source are MIT — see
+[LICENSE](./LICENSE). That license does not relicense bundled dependencies,
+upstream code or plugin assets.
+
+ZCode's public first-party source is Apache-2.0. The npm package includes
+[the license text](./LICENSES/Apache-2.0.txt), copies of upstream notices, and
+[their source revision](./LICENSES/README.md). The extracted runtime has a
+modification notice; `vendor/extraction.json` records its compatibility patches.
+
+Plugin manifests and embedded dependencies have their own license declarations.
+The four document-related plugin packages are included in npm releases with
+their original non-commercial skill licenses. See [Third-party content](./docs/THIRD_PARTY_CONTENT.md)
+for the scope of these notices and the distribution policy.

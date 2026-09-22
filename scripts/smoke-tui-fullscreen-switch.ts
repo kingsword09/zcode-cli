@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,10 +23,8 @@ const terminal = new Bun.Terminal({
 const child = Bun.spawn([process.execPath, fixture], {
   cwd: root,
   env: {
-    ...process.env,
+    ...runtimeTestEnv(temporaryHome, root),
     CI: "1",
-    HOME: temporaryHome,
-    USERPROFILE: temporaryHome,
     TERM: "xterm-256color",
     TERM_PROGRAM: "iTerm.app",
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,

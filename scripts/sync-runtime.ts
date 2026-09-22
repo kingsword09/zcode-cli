@@ -13,6 +13,7 @@ import {
   type RuntimeCliOptionCapability
 } from "../src/runtime-capabilities.ts";
 import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts";
+import { markRuntimeModified } from "./runtime-attribution.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cdnRoot = "https://cdn-zcode.z.ai/zcode/electron/releases";
@@ -1707,7 +1708,7 @@ async function installTuiBridge(nextVendor: string): Promise<RuntimePatchReport[
   const runtimePath = join(nextVendor, "zcode.cjs");
   const runtime = await readFile(runtimePath, "utf8");
   const result = applyRuntimePatchPlan(runtime);
-  await writeFile(runtimePath, result.runtime);
+  await writeFile(runtimePath, markRuntimeModified(result.runtime));
   return result.reports;
 }
 

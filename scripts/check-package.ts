@@ -9,21 +9,10 @@ import { fileURLToPath } from "node:url";
 import { parseRuntimeCapabilities } from "../src/runtime-capabilities.ts";
 import { parseReleaseVersion } from "./release-version.ts";
 import { parseRuntimeLock, parseRuntimePatchReports, runtimePatchPlan } from "./sync-runtime.ts";
+import { attributionFiles, pluginLicenseFiles, publishedFiles } from "./package-contents.ts";
+import { runtimeModificationNotice } from "./runtime-attribution.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const publishedFiles = [
-  "bin/zcode.js",
-  "vendor",
-  "setting.example.json",
-  "provider.example.json",
-  "docs/CONFIGURATION.md",
-  "docs/CONFIGURATION.zh-CN.md",
-  "docs/PROVIDER_CONFIG.md",
-  "docs/PROVIDER_CONFIG.zh-CN.md",
-  "zcode-runtime.lock.json",
-  "README.md",
-  "LICENSE"
-];
 
 interface PackageManifest {
   author?: unknown;
@@ -82,6 +71,8 @@ function sameStringArray(left: unknown, right: string[]): boolean {
 export async function validatePackageTree(base = root): Promise<void> {
   const required = [
     "LICENSE",
+    ...attributionFiles,
+    ...pluginLicenseFiles,
     "README.md",
     "bin/zcode.js",
     "bin/zcode.ts",
@@ -208,6 +199,10 @@ export async function validatePackageTree(base = root): Promise<void> {
   }
   if (process.platform !== "win32" && (nodeLauncher.mode & 0o111) === 0) {
     throw new Error("The public zcode launcher is not executable.");
+  }
+
+  if (!(await readFile(join(base, "vendor", "zcode.cjs"), "utf8")).includes(runtimeModificationNotice)) {
+    throw new Error("The bundled runtime is missing its modification notice; synchronize it again.");
   }
 
   console.log(`Package tree checks passed for ${String(packageJson.name)}@${String(packageJson.version)}.`);

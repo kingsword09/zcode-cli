@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readRuntimeVersion } from "../../src/launcher.ts";
+import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 
 let home = "";
 const node = Bun.which("node");
@@ -23,9 +24,7 @@ async function run(args: string[], input = "", environment: Record<string, strin
   const child = Bun.spawn([process.execPath, "bin/zcode.ts", ...args], {
     cwd: root,
     env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
+      ...runtimeTestEnv(environment.HOME ?? home),
       ZCODE_NODE: node,
       ...environment
     },
@@ -70,7 +69,10 @@ describe("launcher/runtime integration", () => {
     await chmod(fakeNode, 0o755);
     try {
       const result = await run(["--cwd", directory, "--prompt", "offline test"], "", {
-        HOME: directory, USERPROFILE: directory, ZCODE_NODE: fakeNode, ANTHROPIC_API_KEY: ""
+        HOME: directory, USERPROFILE: directory, ZCODE_NODE: fakeNode, ANTHROPIC_API_KEY: "",
+        // Preflight deliberately defers when explicit model/config environment overrides exist.
+        ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: "", ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: "",
+        ZCODE_DISABLE_MODEL_CATALOG_REFRESH: ""
       });
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("No model request was sent");

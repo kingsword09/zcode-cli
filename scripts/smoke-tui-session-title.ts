@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+
+import { runtimeTestEnv } from "./runtime-test-env.ts";
 // Verify terminal session-title lifecycle behavior through a real PTY.
 
 import { mkdtemp, rm } from "node:fs/promises";
@@ -22,10 +24,8 @@ const terminal = new Bun.Terminal({
 const child = Bun.spawn([process.execPath, fixture], {
   cwd: root,
   env: {
-    ...process.env,
+    ...runtimeTestEnv(temporaryHome, root),
     CI: "1",
-    HOME: temporaryHome,
-    USERPROFILE: temporaryHome,
     TERM: "xterm-256color",
     TERM_PROGRAM: "iTerm.app",
     ZCODE_TUI_LOGIN_CMD: "true"

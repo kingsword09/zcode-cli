@@ -1,11 +1,13 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 import { parse } from "yaml";
 
 import { validatePackageTree } from "../scripts/check-package.ts";
+import { attributionFiles, pluginLicenseFiles, publishedFiles } from "../scripts/package-contents.ts";
+import { markRuntimeModified, runtimeModificationNotice } from "../scripts/runtime-attribution.ts";
 import { runtimePatchPlan } from "../scripts/sync-runtime.ts";
 import {
   type PackFile,
@@ -16,6 +18,10 @@ import {
 
 const requiredPaths = [
   "LICENSE",
+  "LICENSES/Apache-2.0.txt",
+  "LICENSES/README.md",
+  "LICENSES/ZCode-NOTICE.md",
+  "LICENSES/ZCode-THIRD-PARTY-NOTICES.md",
   "README.md",
   "bin/zcode.js",
   "setting.example.json",
@@ -24,6 +30,7 @@ const requiredPaths = [
   "docs/CONFIGURATION.zh-CN.md",
   "docs/PROVIDER_CONFIG.md",
   "docs/PROVIDER_CONFIG.zh-CN.md",
+  "docs/THIRD_PARTY_CONTENT.md",
   "package.json",
   "vendor/extraction.json",
   "vendor/node_modules/@zcode/tui/dist/index.js",
@@ -31,6 +38,10 @@ const requiredPaths = [
   "vendor/zcode.cjs",
   "vendor/cli-config.cjs",
   "vendor/provider/zcode-builtin.json",
+  "vendor/packages/documents-plugin/skills/docx/LICENSE.txt",
+  "vendor/packages/pdf-plugin/skills/pdf/LICENSE.txt",
+  "vendor/packages/presentations-plugin/skills/pptx/LICENSE.txt",
+  "vendor/packages/spreadsheets-plugin/skills/xlsx/LICENSE.txt",
   "zcode-runtime.lock.json"
 ];
 
@@ -52,6 +63,26 @@ function result(files = requiredPaths.map(packFile)): PackResult {
 }
 
 describe("release package", () => {
+  test("requires upstream notices and original plugin licenses in the tarball", async () => {
+    const manifest = await Bun.file(new URL("../package.json", import.meta.url)).json();
+    expect(manifest.files).toEqual(publishedFiles);
+    for (const path of [...attributionFiles, ...pluginLicenseFiles]) {
+      expect(() => validatePackResult(result(requiredPaths.filter(file => file !== path).map(packFile)), {
+        name: "zcode-app-cli", version: "3.3.5-1"
+      })).toThrow(`missing: ${path}`);
+    }
+  });
+
+  test("marks modified runtime bundles without removing the shebang or upstream text", () => {
+    const body = '"use strict";\n// Original upstream copyright\nreturn 42;\n';
+    for (const shebang of ["", "#!/usr/bin/env node\n"]) {
+      const marked = markRuntimeModified(shebang + body);
+      expect(marked).toBe(shebang + runtimeModificationNotice + body);
+      expect(new Function(marked.slice(shebang.length))()).toBe(42);
+      expect(markRuntimeModified(marked)).toBe(marked);
+    }
+  });
+
   test("parses npm 11 and npm 12 JSON after named tsdown build logs", () => {
     const expected = result();
     const output = `$ tsdown\nℹ [launcher] Build complete\nℹ [tui] Build complete\n${JSON.stringify([expected])}`;
@@ -146,7 +177,7 @@ describe("release package", () => {
     )).toThrow(/not executable/);
   });
 
-  test("rejects a compiled TUI that was not injected into vendor", async () => {
+  test("rejects a missing runtime notice or a compiled TUI that was not injected into vendor", async () => {
     const directory = await mkdtemp(join(tmpdir(), "zcode-package-check-"));
     const lock = {
       schemaVersion: 1,
@@ -170,7 +201,7 @@ describe("release package", () => {
         url: "git+https://github.com/kingsword09/zcode-cli.git"
       },
       bin: { zcode: "bin/zcode.js" },
-      files: ["bin/zcode.js", "vendor", "setting.example.json", "provider.example.json", "docs/CONFIGURATION.md", "docs/CONFIGURATION.zh-CN.md", "docs/PROVIDER_CONFIG.md", "docs/PROVIDER_CONFIG.zh-CN.md", "zcode-runtime.lock.json", "README.md", "LICENSE"],
+      files: publishedFiles,
       publishConfig: { access: "public", provenance: true },
       dependencies: {
         "@earendil-works/pi-tui": "^0.80.6",
@@ -183,10 +214,16 @@ describe("release package", () => {
       dependencies: { "@earendil-works/pi-tui": "^0.80.6" }
     };
     const files: Record<string, string> = {
+      ...Object.fromEntries(pluginLicenseFiles.map(path => [path, "original plugin license\n"])),
       "docs/CONFIGURATION.md": "# Fixture documentation\n",
       "docs/CONFIGURATION.zh-CN.md": "# Fixture documentation\n",
       "docs/PROVIDER_CONFIG.md": "# Fixture documentation\n",
       "docs/PROVIDER_CONFIG.zh-CN.md": "# Fixture documentation\n",
+      "docs/THIRD_PARTY_CONTENT.md": "# Fixture documentation\n",
+      "LICENSES/Apache-2.0.txt": "license\n",
+      "LICENSES/README.md": "notice provenance\n",
+      "LICENSES/ZCode-NOTICE.md": "upstream notice\n",
+      "LICENSES/ZCode-THIRD-PARTY-NOTICES.md": "dependency notices\n",
       "LICENSE": "license",
       "README.md": "readme",
       "bin/zcode.js": "#!/usr/bin/env node\nimport { spawn } from \"node:child_process\";\n",
@@ -235,11 +272,67 @@ describe("release package", () => {
         await writeFile(destination, content);
       }
       await chmod(join(directory, "bin", "zcode.js"), 0o755);
+      await expect(validatePackageTree(directory)).rejects.toThrow(/modification notice/);
+      await writeFile(join(directory, "vendor", "zcode.cjs"), markRuntimeModified(files["vendor/zcode.cjs"]!));
       await expect(validatePackageTree(directory)).resolves.toBeUndefined();
+      for (const path of pluginLicenseFiles) {
+        await rm(join(directory, path));
+        await expect(validatePackageTree(directory)).rejects.toThrow(`Release file is missing: ${path}`);
+        await writeFile(join(directory, path), files[path]!);
+      }
       await writeFile(join(directory, "vendor", "node_modules", "@zcode", "tui", "dist", "index.js"), "stale\n");
       await expect(validatePackageTree(directory)).rejects.toThrow(/stale/);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  test.each([false, true])("writes release.json only after installation checks pass (valid plugins: %p)", async (validPlugins) => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-release-finalize-"));
+    try {
+      for (const path of requiredPaths) {
+        await mkdir(join(directory, path, ".."), { recursive: true });
+        await writeFile(join(directory, path), "fixture\n");
+      }
+      await writeFile(join(directory, "package.json"), JSON.stringify({
+        name: "zcode-app-cli", version: "3.3.5-1", type: "module",
+        files: publishedFiles, bin: { zcode: "bin/zcode.js" }
+      }));
+      await writeFile(join(directory, "vendor/extraction.json"), JSON.stringify({ cliVersion: "0.15.2" }));
+      await writeFile(join(directory, "vendor/zcode.cjs"), runtimeModificationNotice);
+      const plugins = validPlugins
+        ? ["browser-use", "documents", "pdf", "presentations", "spreadsheets"].map(name => ({ name, enabled: true }))
+        : [];
+      await writeFile(join(directory, "bin/zcode.js"), [
+        "#!/usr/bin/env node",
+        `console.log(process.argv.includes("--version") ? "zcode-app-cli 3.3.5-1\\nzcode-runtime 0.15.2" : ${JSON.stringify(JSON.stringify(plugins))});`,
+        ""
+      ].join("\n"));
+      await chmod(join(directory, "bin/zcode.js"), 0o755);
+      const moduleUrl = new URL("../scripts/pack-release.ts", import.meta.url).href;
+      const packageDirectory = validPlugins ? directory : relative(process.cwd(), directory);
+      const child = Bun.spawn([process.execPath, "--eval",
+        `import { packRelease } from ${JSON.stringify(moduleUrl)}; await packRelease(${JSON.stringify(packageDirectory)});`
+      ], {
+        env: { ...process.env, GITHUB_OUTPUT: undefined },
+        stdout: "pipe", stderr: "pipe", timeout: 30_000, killSignal: "SIGKILL"
+      });
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()
+      ]);
+      const manifestPath = join(directory, ".release/release.json");
+      if (validPlugins) {
+        expect(code, stderr || stdout).toBe(0);
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+        expect(manifest).toMatchObject({ name: "zcode-app-cli", version: "3.3.5-1" });
+        expect(await Bun.file(join(directory, manifest.tarball)).exists()).toBe(true);
+      } else {
+        expect(code).not.toBe(0);
+        expect(stderr).toContain("Installed package cannot initialize its built-in plugin: browser-use");
+        expect(await Bun.file(manifestPath).exists()).toBe(false);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 35_000);
 });
