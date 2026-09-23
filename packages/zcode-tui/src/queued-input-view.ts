@@ -24,12 +24,14 @@ function firstFitting(candidates: string[], width: number): string {
 export class QueuedInputView implements Component {
   private pendingSteers: string[] = [];
   private queuedInputs: string[] = [];
+  private paused = false;
 
   constructor(private readonly theme: ZCodeTheme) {}
 
   setState(state: QueuedInputViewState): void {
     this.pendingSteers = state.pendingSteers.map(oneLine).filter(Boolean);
     this.queuedInputs = state.queuedInputs.map(oneLine).filter(Boolean);
+    this.paused = state.paused === true;
   }
 
   render(width: number): string[] {
@@ -59,7 +61,7 @@ export class QueuedInputView implements Component {
       const visible = this.queuedInputs.slice(-maxVisibleInputs);
       const summary = `${this.queuedInputs.length} ${this.queuedInputs.length === 1 ? "input" : "inputs"}`;
       lines.push(
-        ` ${this.theme.bold("Queued next turn")} ${this.theme.muted(`· ${summary}`)}`,
+        ` ${this.theme.bold(this.paused ? "Queue paused" : "Queued next turn")} ${this.theme.muted(`· ${summary}`)}`,
         ...visible.map((input) => `  ${this.theme.muted("↳")} ${this.theme.bold(input)}`)
       );
       if (hidden > 0) lines.splice(sectionStart + 1, 0, this.theme.muted(`  … ${hidden} earlier`));

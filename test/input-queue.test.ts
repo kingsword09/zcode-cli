@@ -34,6 +34,33 @@ function queueHarness() {
 }
 
 describe("TUI input queue", () => {
+  test("stable draft ids support reorder and removal without touching admitted input", () => {
+    const { queue } = queueHarness();
+    queue.queueFollowUp(submission("first"));
+    queue.queueFollowUp(submission("second"));
+    queue.queueFollowUp({ ...submission("accepted"), pendingInputIds: ["runtime-owned"] });
+    const [first, second, accepted] = queue.entries();
+    expect(queue.move(second!.id, -1)).toBeTrue();
+    expect(queue.entries().map((entry) => entry.id)).toEqual([second!.id, first!.id, accepted!.id]);
+    expect(queue.move(first!.id, 1)).toBeFalse();
+    expect(queue.remove(accepted!.id)).toBeUndefined();
+    expect(queue.remove(first!.id)?.input).toBe("first");
+    expect(queue.remove(first!.id)).toBeUndefined();
+    expect(queue.takeNextFollowUp()?.input).toBe("second");
+  });
+
+  test("explicit pause survives turn resets and resume preserves recovery hold", () => {
+    const { queue, states } = queueHarness();
+    queue.paused = true;
+    queue.resetAutoSend();
+    expect(queue.autoSend).toBeFalse();
+    expect(states.at(-1)?.paused).toBeTrue();
+    queue.autoSend = false;
+    queue.paused = false;
+    expect(queue.autoSend).toBeFalse();
+    queue.resetAutoSend();
+    expect(queue.autoSend).toBeTrue();
+  });
   test("publishes every editable follow-up transition", () => {
     const { queue, states } = queueHarness();
 

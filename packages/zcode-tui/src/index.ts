@@ -1375,6 +1375,9 @@ class ZCodeTui {
       { name: "paste-image", description: "Attach an image from the system clipboard" },
       { name: "attachments", description: "Manage or clear pending attachments", argumentHint: "[clear]" },
       { name: "activity", description: "Inspect every active tool and open task" },
+      { name: "queue", description: "Manage queued drafts", argumentHint: "[pause|resume]" },
+      { name: "edit-message", description: "Restore an earlier question for editing" },
+      { name: "retry", description: "Retry an earlier question from a conversation rewind" },
       {
         name: "tasks",
         description: "Inspect, message or recover background tasks",
@@ -1491,7 +1494,7 @@ class ZCodeTui {
         return { consume: true };
       }
       if (matchesKey(data, "tab")
-        && this.turnAbortController
+        && (this.turnAbortController || this.inputQueue.paused)
         && Boolean(this.editor.getText().trim())
         && !this.editor.isShowingAutocomplete()) {
         this.queueCurrentEditorInput();
@@ -1628,6 +1631,21 @@ class ZCodeTui {
     }
     if (input === "/activity") {
       await this.showActivityDetails();
+      return;
+    }
+    if (input === "/queue" || input === "/queue list") {
+      await this.manageInputQueue();
+      return;
+    }
+    if (input === "/queue pause" || input === "/queue resume") {
+      this.inputQueue.paused = input === "/queue pause";
+      if (!this.inputQueue.paused) this.inputQueue.resetAutoSend();
+      this.addNotice(this.inputQueue.paused ? "Queue paused. Use /queue resume to continue." : "Queue resumed.", "muted");
+      this.drainInputAfterBackgroundHandoff();
+      return;
+    }
+    if (input === "/edit-message" || input === "/retry") {
+      await this.editOrRetryMessage(input === "/retry");
       return;
     }
     if (input === "/tasks" || input === "/tasks list") {
@@ -3251,11 +3269,108 @@ class ZCodeTui {
   private queueCurrentEditorInput(): void {
     const input = this.editor.getText().trim();
     if (!input) return;
+    if (this.pendingAttachments.length > 0) {
+      this.addNotice("Send or remove pending images before queueing a text draft.", "warning");
+      return;
+    }
     this.editor.setText("");
     this.inputQueue.queueFollowUp(protectSubmission(input));
   }
 
+  private async manageInputQueue(): Promise<void> {
+    const wasPaused = this.inputQueue.paused;
+    this.inputQueue.paused = true;
+    try {
+      while (true) {
+        const entries = this.inputQueue.entries();
+        if (!entries.length) { this.addNotice("No queued inputs.", "muted"); return; }
+        const selected = await this.showChoice({
+          title: "Queued inputs", prompt: "Select a draft. Sending pauses while this panel is open.",
+          items: entries.map((entry) => ({ value: String(entry.id), label: entry.displayInput,
+            description: entry.editable ? "Editable draft" : "Accepted by runtime · cannot edit here" }))
+        });
+        if (!selected) return;
+        const entry = entries.find((entry) => String(entry.id) === selected.value);
+        if (!entry?.editable) { this.addNotice("This input is already owned by the runtime.", "warning"); continue; }
+        const action = await this.showChoice({
+          title: "Queued draft", prompt: "Choose an action.", items: [
+            { value: "edit", label: "Move to editor" },
+            { value: "up", label: "Move earlier" },
+            { value: "down", label: "Move later" },
+            { value: "delete", label: "Delete draft" },
+            { value: "back", label: "Back" }
+          ]
+        });
+        if (!action || action.value === "back") continue;
+        if (action.value === "edit" && (this.editor.getText().trim() || this.pendingAttachments.length > 0)) {
+          this.addNotice("Save or clear the current draft before editing a queued input.", "warning");
+          return;
+        }
+        if (action.value === "up" || action.value === "down") {
+          if (!this.inputQueue.move(entry.id, action.value === "up" ? -1 : 1)) this.addNotice("The draft cannot move further in that direction.", "muted");
+        } else {
+          const removed = this.inputQueue.remove(entry.id);
+          if (!removed) { this.addNotice("The queued input changed. Select it again.", "warning"); continue; }
+          if (action.value === "edit") {
+            this.editor.setText(removed.input);
+            this.focusEditor();
+            return;
+          }
+        }
+      }
+    } finally {
+      this.inputQueue.paused = wasPaused;
+      this.drainInputAfterBackgroundHandoff();
+    }
+  }
+
+  private async editOrRetryMessage(retry: boolean): Promise<void> {
+    if (this.activeSubmissions > 0 || this.backgroundTaskEvents.hasActiveHandoffs()) {
+      this.addNotice("Wait for the active turn before changing conversation history.", "warning");
+      return;
+    }
+    if (this.editor.getText().trim() || this.pendingAttachments.length > 0) {
+      this.addNotice("Save or clear the current draft before changing conversation history.", "warning");
+      return;
+    }
+    if (!this.options.loadSessionTranscript) {
+      this.addNotice("Message history is unavailable in this runtime.", "warning");
+      return;
+    }
+    try {
+      const targets = rewindTargets(await this.options.loadSessionTranscript());
+      if (!targets.length) { this.addNotice("No earlier questions to select.", "muted"); return; }
+      const selected = await this.showChoice({
+        title: retry ? "Retry a question" : "Edit an earlier question",
+        prompt: "Select the question to return to.",
+        items: targets.map((target) => ({ value: target.messageId, label: rewindTargetLabel(target.text) }))
+      });
+      const target = targets.find((target) => target.messageId === selected?.value);
+      if (!target) return;
+      const confirmation = await this.showChoice({
+        title: retry ? "Retry this question?" : "Edit this question?",
+        prompt: "Later conversation turns will be removed. Workspace files stay as they are. "
+          + (retry ? "Only question text will be sent again; original images are not included."
+            : "Only question text is restored; reattach any images before sending."),
+        items: [{ value: "cancel", label: "Cancel" }, { value: "confirm", label: retry ? "Rewind and send again" : "Rewind and move to editor" }]
+      });
+      if (confirmation?.value !== "confirm") return;
+      if (this.activeSubmissions > 0 || this.backgroundTaskEvents.hasActiveHandoffs()) {
+        this.addNotice("The conversation became active. Wait for it to finish and select the question again.", "warning");
+        return;
+      }
+      await this.applyConversationRewind(target, "conversation");
+      if (retry) { this.editor.setText(""); await this.submit(target.text); }
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+    }
+  }
+
   private editLatestQueuedFollowUp(): void {
+    if (this.pendingAttachments.length > 0) {
+      this.addNotice("Send or remove pending images before restoring a queued draft.", "warning");
+      return;
+    }
     const submission = this.inputQueue.editLatestFollowUp();
     if (!submission) return;
     this.editor.setText(submission.input);
