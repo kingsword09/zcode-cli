@@ -80,6 +80,16 @@ Headless recovery exits with the invalid provider/model and instructions to
 resume interactively; it sends no model request. The regression tests also
 cover `/resume` inside the TUI and restarting after a repair.
 
+## Runtime refresh regression
+
+`bun test test/runtime-context-cache.test.ts test/tui/runtime-refresh.test.ts`
+verifies that text/reasoning deltas do not schedule runtime queries and that
+tool activity polling reuses a compact, session-scoped token summary. Completed
+requests, history changes and changed projection usage invalidate the summary.
+In-flight reads from a previous session or revision cannot overwrite newer
+statistics. Full message bodies are read for statistics only after invalidation
+or when the user opens `/context`; they are not retained in the cache.
+
 ## OAuth login
 
 For the OAuth path, run the launcher directly with the login subcommand:
