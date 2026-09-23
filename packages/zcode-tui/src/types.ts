@@ -71,6 +71,10 @@ export type ListPluginReferences = () => Promise<unknown>;
 
 /** Stable boundary consumed by the local TUI; upstream details stay in the bridge. */
 export interface RuntimeAdapter {
+  listWorkflowRuns?: () => Promise<unknown>;
+  replayWorkflowRuns?: (input: { excludeRunIds: ReadonlySet<string> }) => Promise<unknown>;
+  reduceWorkflowRuns?: (state: unknown, event: unknown) => unknown;
+  getMainSessionId?: () => string | undefined;
   loadSessionTranscript?: () => Promise<unknown>;
   loadSessionContextMessages?: () => Promise<unknown>;
   listPluginReferences?: ListPluginReferences;

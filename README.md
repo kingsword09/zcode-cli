@@ -304,6 +304,7 @@ picker to return to input selection, then `Esc` again to close rewind.
 /status                       inspect detailed runtime and session status
 /rename <title>               rename the current session
 /activity                     inspect every active tool and open task
+/workflows                    inspect workflow progress, artifacts and recovery
 /tasks                        inspect and manage background tasks
 /tasks message <id> <text>    send guidance to a running background agent
 /tasks resume <id> [text]     resume a stopped or failed background agent

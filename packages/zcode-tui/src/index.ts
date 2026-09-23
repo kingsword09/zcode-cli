@@ -167,6 +167,7 @@ import { isVisibleProtocolPart, ProtocolPartView } from "./protocol-part-view.ts
 import { InputQueue, type QueuedSubmission } from "./input-queue.ts";
 import { QueuedInputView } from "./queued-input-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
+import { DynamicWorkflows, workflowRunDetail } from "./dynamic-workflows.ts";
 import {
   runtimeActivityActive,
   runtimePollInterval,
@@ -676,6 +677,9 @@ class ZCodeTui {
   private readonly turnWork = new TurnWorkTracker();
   private readonly backgroundCoordinatorMessageIds = new Set<string>();
   private workflowPanel?: Record<string, unknown>;
+  private readonly dynamicWorkflows: DynamicWorkflows;
+  private dynamicWorkflowView?: Text;
+  private selectedDynamicWorkflow?: string;
   private workflowView?: Markdown;
   private workflowRefreshInFlight = false;
   private readonly permissionRequests = new PermissionRequestQueue();
@@ -723,6 +727,7 @@ class ZCodeTui {
   private removeStreamErrorGuards?: () => void;
 
   constructor(private readonly options: TuiOptions) {
+    this.dynamicWorkflows = new DynamicWorkflows(options);
     this.animateTurnTimer = turnTimerAnimationEnabled();
     this.colorsEnabled = !options.noColor && !process.env.NO_COLOR;
     this.themePreference = themePreference(options.theme);
@@ -900,6 +905,7 @@ class ZCodeTui {
           this.onSessionEvent(event);
         }) ?? undefined;
       }
+      void this.dynamicWorkflows.hydrate().then(() => this.renderDynamicWorkflow());
       if (this.options.subscribeWorkflowEvents) {
         this.unsubscribeWorkflow = this.options.subscribeWorkflowEvents((event) => {
           this.debugEvent("workflow", event);
@@ -1375,6 +1381,7 @@ class ZCodeTui {
       { name: "paste-image", description: "Attach an image from the system clipboard" },
       { name: "attachments", description: "Manage or clear pending attachments", argumentHint: "[clear]" },
       { name: "activity", description: "Inspect every active tool and open task" },
+      { name: "workflows", description: "Inspect workflow progress, results and recovery" },
       {
         name: "tasks",
         description: "Inspect, message or recover background tasks",
@@ -1595,6 +1602,7 @@ class ZCodeTui {
     if (input === "/cls") {
       this.clearTranscriptProjection();
       this.workflowView = undefined;
+      this.dynamicWorkflowView = undefined;
       this.ui.requestRender(true);
       return;
     }
@@ -1628,6 +1636,10 @@ class ZCodeTui {
     }
     if (input === "/activity") {
       await this.showActivityDetails();
+      return;
+    }
+    if (input === "/workflows" || input === "/workflows list") {
+      await this.showDynamicWorkflows();
       return;
     }
     if (input === "/tasks" || input === "/tasks list") {
@@ -2154,6 +2166,9 @@ class ZCodeTui {
   ): Promise<void> {
     if (!isRecord(result)) return;
     if (result.resetSessionProjection === true) {
+      this.dynamicWorkflows.reset();
+      this.dynamicWorkflowView = undefined;
+      this.selectedDynamicWorkflow = undefined;
       this.executionStateRevision++;
       this.clearTranscriptProjection();
       this.workflowView = undefined;
@@ -2216,6 +2231,7 @@ class ZCodeTui {
       this.updateMetadata();
       this.ui.requestRender();
       if (this.sessionModelIssue) await this.recoverSessionModel();
+      void this.dynamicWorkflows.hydrate().then(() => this.renderDynamicWorkflow());
     }
   }
 
@@ -2224,6 +2240,7 @@ class ZCodeTui {
     if (turnEpoch !== undefined && turnEpoch !== this.activeTurnEpoch) return;
     const event = normalizeEvent(value);
     if (!event || this.isForeignSessionEvent(event)) return;
+    if (this.handleDynamicWorkflowEvent(value, event.type)) return;
     const taskScoped = this.backgroundTaskEvents.isTaskScoped(event);
     this.applyBackgroundTaskEvent(event);
     if (!taskScoped && event.kind && toolLifecycleEventKinds.has(event.kind)) this.turnHadWorkActivity = true;
@@ -2399,12 +2416,79 @@ class ZCodeTui {
     this.debugEvent("session-subscription", value);
     const event = normalizeEvent(value);
     if (!event || this.isForeignSessionEvent(event)) return;
+    if (this.handleDynamicWorkflowEvent(value, event.type)) return;
     this.applyBackgroundTaskEvent(event);
     this.scheduleRuntimeRefresh();
   }
 
   private isForeignSessionEvent(event: StreamEvent): boolean {
-    return Boolean(this.sessionId && event.sessionId && event.sessionId !== this.sessionId);
+    const sessionId = this.options.getMainSessionId?.() ?? this.sessionId;
+    return Boolean(sessionId && event.sessionId && event.sessionId !== sessionId);
+  }
+
+  private handleDynamicWorkflowEvent(value: unknown, type: string | undefined): boolean {
+    if (type !== "dynamic_workflow_run_progress" || !isRecord(value)) return false;
+    if (this.dynamicWorkflows.accept(value.payload)) this.renderDynamicWorkflow();
+    return true;
+  }
+
+  private renderDynamicWorkflow(): void {
+    if (!this.dynamicWorkflowView || !this.selectedDynamicWorkflow) return;
+    const run = this.dynamicWorkflows.runs().find((run) => run.runId === this.selectedDynamicWorkflow);
+    if (run) this.dynamicWorkflowView.setText(workflowRunDetail(run));
+    this.ui.requestRender();
+  }
+
+  private async showDynamicWorkflows(): Promise<void> {
+    if (!this.options.listWorkflowRuns) {
+      this.addNotice("Workflow inspection is unavailable in this runtime.", "warning");
+      return;
+    }
+    await this.dynamicWorkflows.hydrate();
+    if (this.dynamicWorkflows.error) this.addNotice(this.dynamicWorkflows.error, "warning");
+    const runs = this.dynamicWorkflows.runs();
+    if (runs.length === 0) {
+      this.addNotice("No workflow runs in this session.", "muted");
+      return;
+    }
+    const choice = await this.showChoice({
+      title: "Workflow runs", prompt: "Select a run to inspect its progress and results.",
+      items: runs.map((run) => ({ value: String(run.runId), label: asString(run.label) || String(run.runId),
+        description: [run.status, run.resumable === true ? "resumable" : undefined].filter(Boolean).join(" · ") }))
+    });
+    if (!choice) return;
+    this.selectedDynamicWorkflow = choice.value;
+    const run = this.dynamicWorkflows.runs().find((run) => run.runId === choice.value);
+    if (!run) {
+      this.addNotice("This run is no longer in the current workflow list. Open /workflows again.", "muted");
+      return;
+    }
+    this.dynamicWorkflowView = new Text(workflowRunDetail(run), 1, 0);
+    this.transcript.addBlock(this.dynamicWorkflowView);
+    this.ui.requestRender();
+    const action = await this.showChoice({
+      title: "Workflow actions", prompt: "Progress remains visible in the transcript.",
+      items: [
+        { value: "close", label: "Back to prompt" },
+        ...(["pending", "running"].includes(String(run.status)) ? [{ value: "cancel", label: "Stop workflow" }] : []),
+        ...(run.resumable === true ? [{ value: "resume", label: "Resume workflow" }] : [])
+      ]
+    });
+    if (!action || action.value === "close") return;
+    // The upstream command owns cancellation/resume validation and operates on
+    // this same app. Never spawn another app-server to control the live run.
+    if (!/^[A-Za-z0-9_.:-]+$/u.test(choice.value)) {
+      this.addNotice("This workflow ID cannot be passed to the runtime command.", "error");
+      return;
+    }
+    try {
+      const result = await this.options.submitPrompt(`/dwf ${action.value} ${choice.value}`, {});
+      await this.handleResult(result);
+      await this.dynamicWorkflows.hydrate();
+      this.renderDynamicWorkflow();
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+    }
   }
 
   private isBackgroundCoordinatorReasoning(event: StreamEvent): boolean {
