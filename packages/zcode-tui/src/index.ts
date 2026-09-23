@@ -1638,7 +1638,7 @@ class ZCodeTui {
       await this.showActivityDetails();
       return;
     }
-    if (input === "/workflows" || input === "/workflows list") {
+    if ((input === "/workflows" || input === "/workflows list") && this.options.listWorkflowRuns) {
       await this.showDynamicWorkflows();
       return;
     }
