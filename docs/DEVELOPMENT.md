@@ -25,6 +25,17 @@ without a manual build step.
 
 ## Validation
 
+Runtime TUI projection and background-agent messaging live in
+`src/runtime-tui-bridge.ts`; persisted task recovery lives in
+`src/runtime-background-restore.ts`. Both compile into the existing
+`vendor/cli-config.cjs` helper. Bundle patches capture the active app and delegate
+to these functions. Recovery reads optional metadata asynchronously and shares
+one in-flight restoration per app, so a concurrent send waits for registration.
+The runtime continues to own task lifecycle, registry state and message routing;
+the helper merges read models and preserves the existing restore/stop/send order.
+`test/runtime-tui-bridge.test.ts` tests these operations directly, while
+`test/sync-runtime.test.ts` exercises the injected calls and patch idempotency.
+
 Run all validation layers:
 
 ```bash
