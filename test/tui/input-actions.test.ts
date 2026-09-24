@@ -67,3 +67,20 @@ test("pending images cannot silently move into another queued or retried questio
   await session.assertScreenExcludes("no retry sent", /Sent: Original question/u);
   await session.exit();
 }, 20_000);
+
+test("resuming queued text preserves an image attached afterwards for the editor", async () => {
+  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-queued-images-" });
+  await using session = TerminalSession.start({ command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")], workspace });
+  await session.waitForScreen("ready", /Original answer/u);
+  await session.sendAndWait("/queue pause\r", "paused", /Queue paused/u);
+  session.send("Queued text");
+  await session.settle();
+  session.send("\t");
+  await session.waitForScreen("queued", /1 input/u);
+  await session.sendAndWait("/paste-image\r", "attached after queue", /1 image attached/u);
+  await session.sendAndWait("/queue resume\r", "text sent without image", /Sent: Queued text/u);
+  await session.waitForScreen("image remains", /\[Image #1\]/u);
+  await session.sendAndWait("Image question\r", "editor image sent", /Sent: Image question with original image/u);
+  await session.assertScreenExcludes("sent image leaves editor", /\[Image #1\]/u);
+  await session.exit();
+}, 20_000);

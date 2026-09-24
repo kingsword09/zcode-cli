@@ -1779,7 +1779,8 @@ class ZCodeTui {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
       return true;
     }
-    const attachments = !steering && !input.startsWith("/") ? [...this.pendingAttachments] : [];
+    // Pending images belong to the editor, never to a previously queued draft.
+    const attachments = !queuedSubmission && !steering && !input.startsWith("/") ? [...this.pendingAttachments] : [];
     if (steering && !this.options.sendInput) {
       this.inputQueue.queueFollowUp({ ...submission, recordHistory: false });
       return true;
