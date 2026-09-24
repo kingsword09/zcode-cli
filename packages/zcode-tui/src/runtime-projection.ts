@@ -383,28 +383,40 @@ export function mergeProjectionContextCache(
   projection: RuntimeProjectionSnapshot | undefined,
   messages: unknown
 ): RuntimeProjectionSnapshot | undefined {
-  const usage = projection?.contextUsage;
-  if (!projection || !usage) return projection;
+  return mergeProjectionContextSummary(projection, contextCacheUsage(messages));
+}
 
+/** Retain token statistics only; tool output and message bodies stay in storage. */
+export function contextCacheUsage(messages: unknown): RuntimeContextUsage["cache"] {
   const trend = extractContextCacheTrend(messages);
-  if (trend.wholeTree.requests === 0) return projection;
+  if (trend.wholeTree.requests === 0) return undefined;
   const latest = trend.turns.findLast((turn) => turn.inputTokens !== undefined);
   const summary = trend.wholeTree;
   return {
+    inputTokens: latest?.inputTokens,
+    cacheReadTokens: latest?.cacheReadTokens,
+    cacheWriteTokens: latest?.cacheWriteTokens,
+    latestHitRate: latest?.hitRate,
+    hitRate: summary.hitRate,
+    hitRateRequestCount: summary.requests,
+    totalInputTokens: summary.inputTokens,
+    totalCacheReadTokens: summary.cacheReadTokens,
+    totalCacheWriteTokens: summary.cacheWriteTokens
+  };
+}
+
+export function mergeProjectionContextSummary(
+  projection: RuntimeProjectionSnapshot | undefined,
+  cache: RuntimeContextUsage["cache"]
+): RuntimeProjectionSnapshot | undefined {
+  if (!projection?.contextUsage || !cache) return projection;
+  return {
     ...projection,
     contextUsage: {
-      ...usage,
+      ...projection.contextUsage,
       cache: {
-        ...usage.cache,
-        inputTokens: latest?.inputTokens ?? usage.cache?.inputTokens,
-        cacheReadTokens: latest?.cacheReadTokens ?? usage.cache?.cacheReadTokens,
-        cacheWriteTokens: latest?.cacheWriteTokens ?? usage.cache?.cacheWriteTokens,
-        latestHitRate: latest?.hitRate ?? usage.cache?.latestHitRate,
-        hitRate: summary.hitRate ?? usage.cache?.hitRate,
-        hitRateRequestCount: summary.requests,
-        totalInputTokens: summary.inputTokens,
-        totalCacheReadTokens: summary.cacheReadTokens,
-        totalCacheWriteTokens: summary.cacheWriteTokens
+        ...projection.contextUsage.cache,
+        ...Object.fromEntries(Object.entries(cache).filter(([, value]) => value !== undefined))
       }
     }
   };
