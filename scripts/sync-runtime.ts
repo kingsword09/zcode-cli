@@ -979,6 +979,18 @@ export function patchRuntimeModelCatalogReload(runtime: string): string {
   throw new Error("ZCode runtime is incompatible with model catalog reload (registry bridge anchor missing).");
 }
 
+/** Use the runtime's own workflow reducer so live and persisted progress agree. */
+export function patchRuntimeWorkflowReducer(runtime: string): string {
+  if (runtime.includes("reduceWorkflowRuns:(")) return runtime;
+  const reducer = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"reduceWorkflowRunsState"\)/u.exec(runtime);
+  const init = reducer && [...runtime.slice(0, reducer.index).matchAll(
+    /([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(\(\)=>\{/gu
+  )].at(-1)?.[1];
+  const option = /replayWorkflowRuns:([A-Za-z_$][\w$]*)\.replayWorkflowRuns/u.exec(runtime);
+  if (!reducer || !init || !option) throw new Error("ZCode runtime is incompatible with the workflow reducer bridge.");
+  return runtime.replace(option[0], `${option[0]},reduceWorkflowRuns:($zState,$zEvent)=>{${init}();return ${reducer[1]}($zState,$zEvent)}`);
+}
+
 export function patchRuntimeSharedConfig(runtime: string): string {
   if (runtime.includes('ZCODE_CLI_MIGRATE_CONFIG==="1"')) return runtime;
   const file = /([A-Za-z_$][\w$]*)="config.json",([A-Za-z_$][\w$]*)="~\/\.zcode\/cli"/u.exec(runtime);
@@ -1529,6 +1541,10 @@ const terminalProjectionMarkers = [
 ] as const;
 
 export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
+  {
+    id: "tui-workflow-reducer", requirement: "optional", apply: patchRuntimeWorkflowReducer,
+    verify: runtime => runtime.includes("reduceWorkflowRuns:(")
+  },
   {
     id: "tui-execution-state", requirement: "required", apply: patchRuntimeTuiExecutionState,
     verify: runtime => runtime.includes('"readExecutionState"') && runtime.includes('"setPlanEnabled"')
