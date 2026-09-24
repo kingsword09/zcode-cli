@@ -304,6 +304,10 @@ picker to return to input selection, then `Esc` again to close rewind.
 /status                       inspect detailed runtime and session status
 /rename <title>               rename the current session
 /activity                     inspect every active tool and open task
+/queue                        reorder, delete or edit queued drafts
+/queue pause|resume           pause or resume automatic draft submission
+/edit-message                 rewind to an earlier question and edit it
+/retry                        rewind to an earlier question and send it again
 /workflows                    inspect workflow progress, artifacts and recovery
 /tasks                        inspect and manage background tasks
 /tasks message <id> <text>    send guidance to a running background agent
@@ -320,6 +324,19 @@ picker to return to input selection, then `Esc` again to close rewind.
 `/cls` clears what the TUI displays without touching the session. The
 runtime's own `/clear` is an alias of `/new` and starts a fresh session, so it
 is forwarded to the runtime unchanged.
+
+`/queue` manages local next-turn drafts and pauses automatic sending while its
+picker is open. Inputs already accepted by the runtime cannot be edited here.
+`/queue pause` persists across turns until `/queue resume`. Moving a draft to
+the editor preserves its original text; Tab queues the edited draft again.
+
+`/edit-message` and `/retry` require an idle conversation and ask before removing
+later turns. Both use conversation-only rewind and keep workspace files as they
+are. Editing restores the selected question to the editor; retry sends it again
+with the current model. Existing `/fork` remains available for checkpoint-based
+branches that preserve the original conversation.
+These actions restore question text only; original image attachments are not
+resent. Use `/edit-message` and reattach images when they are needed.
 
 The task center keeps autonomous task output out of the foreground transcript.
 The main conversation receives only compact completion, reply and failure

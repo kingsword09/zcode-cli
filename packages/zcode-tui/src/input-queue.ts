@@ -20,6 +20,7 @@ export interface PendingSteerSubmission {
 export interface InputQueueState {
   pendingSteers: string[];
   queuedInputs: string[];
+  paused?: boolean;
 }
 
 export interface CommittedSteer {
@@ -46,6 +47,9 @@ export class InputQueue {
   private readonly pendingResolutions = new Map<string, PendingSteerResolution>();
   private readonly completedTurnIds = new Set<string>();
   private autoSendEnabled = true;
+  private pausedByUser = false;
+  private nextId = 1;
+  private readonly ids = new WeakMap<QueuedSubmission, number>();
 
   constructor(private readonly callbacks: InputQueueCallbacks) {}
 
@@ -78,6 +82,39 @@ export class InputQueue {
     return this.queuedFollowUps.length > 0;
   }
 
+  entries(): Array<{ id: number; displayInput: string; editable: boolean }> {
+    return this.queuedFollowUps.map((submission) => {
+      let id = this.ids.get(submission);
+      if (id === undefined) { id = this.nextId++; this.ids.set(submission, id); }
+      return { id, displayInput: submission.displayInput, editable: !submission.pendingInputIds?.length };
+    });
+  }
+
+  remove(id: number): QueuedSubmission | undefined {
+    const index = this.queuedFollowUps.findIndex((submission) => this.ids.get(submission) === id);
+    if (index < 0 || this.queuedFollowUps[index]?.pendingInputIds?.length) return undefined;
+    const [submission] = this.queuedFollowUps.splice(index, 1);
+    this.syncView();
+    return submission;
+  }
+
+  move(id: number, offset: -1 | 1): boolean {
+    const index = this.queuedFollowUps.findIndex((submission) => this.ids.get(submission) === id);
+    const next = index + offset;
+    if (index < 0 || next < 0 || next >= this.queuedFollowUps.length) return false;
+    if (this.queuedFollowUps[index]?.pendingInputIds?.length || this.queuedFollowUps[next]?.pendingInputIds?.length) return false;
+    [this.queuedFollowUps[index], this.queuedFollowUps[next]] = [this.queuedFollowUps[next]!, this.queuedFollowUps[index]!];
+    this.syncView();
+    return true;
+  }
+
+  get paused(): boolean { return this.pausedByUser; }
+
+  set paused(value: boolean) {
+    this.pausedByUser = value;
+    this.syncView();
+  }
+
   hasPendingSteers(): boolean {
     return this.pendingSteers.length > 0;
   }
@@ -91,7 +128,7 @@ export class InputQueue {
   // --- Auto-send flag ---
 
   get autoSend(): boolean {
-    return this.autoSendEnabled;
+    return this.autoSendEnabled && !this.pausedByUser;
   }
 
   set autoSend(value: boolean) {
@@ -314,7 +351,8 @@ export class InputQueue {
   private syncView(): void {
     this.callbacks.onStateChanged({
       pendingSteers: this.pendingSteers.map(({ submission }) => submission.displayInput),
-      queuedInputs: this.queuedFollowUps.map((submission) => submission.displayInput)
+      queuedInputs: this.queuedFollowUps.map((submission) => submission.displayInput),
+      ...(this.pausedByUser ? { paused: true } : {})
     });
   }
 }
