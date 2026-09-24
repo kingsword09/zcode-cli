@@ -308,6 +308,7 @@ picker to return to input selection, then `Esc` again to close rewind.
 /queue pause|resume           pause or resume automatic draft submission
 /edit-message                 rewind to an earlier question and edit it
 /retry                        rewind to an earlier question and send it again
+/workflows                    inspect workflow progress, artifacts and recovery
 /tasks                        inspect and manage background tasks
 /tasks message <id> <text>    send guidance to a running background agent
 /tasks resume <id> [text]     resume a stopped or failed background agent
