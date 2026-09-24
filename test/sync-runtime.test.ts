@@ -1,8 +1,10 @@
+import { restoreTuiBackgroundTasks } from "../src/runtime-background-restore.ts";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
+import { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage } from "../src/runtime-tui-bridge.ts";
 import { assertSessionModelReady } from "../src/session-model-recovery.ts";
 
 import {
@@ -50,6 +52,13 @@ import {
   parseReleaseVersion,
   syncedReleaseVersion
 } from "../scripts/release-version.ts";
+
+function bridgeFunction(...args: string[]): (...values: unknown[]) => unknown {
+  const body = args.pop()!;
+  const factory = new Function("require", "__dirname", ...args, body);
+  return factory.bind(null, (id: string) => id === "node:path" ? { join }
+    : { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage, restoreTuiBackgroundTasks }, "/fixture");
+}
 
 describe("runtime synchronization", () => {
   test("adds session recovery at native restore and execution boundaries and can run twice", async () => {
@@ -791,22 +800,8 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("E.listSkills=async()=>await H(e)");
     expect(patched).toContain("E.readGoal=async()=>await(await S()).readTarget?.()??null");
     expect(patched).toContain("E.readTodos=async()=>await(await S()).readTodos?.()??[]");
-    expect(patched).toContain("E.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await S();let $zExecutionState=await $zRuntimeProjectionBridge.readExecutionState();await E.$zRestorePersistedBackgroundTasks?.($zRuntimeProjectionBridge);let t=await $zRuntimeProjectionBridge.runtime?.getProjection?.();if(!t)return null;");
-    expect(patched).toContain(".filter(o=>o.isBackgrounded===!0).map(o=>");
-    expect(patched).toContain("backgroundTaskDetails:r");
     expect(patched).toContain("E.$zRestorePersistedBackgroundTasks=async $zApp=>");
-    expect(patched).toContain('$zApp.$zRestoredBackgroundTasksSession=$zApp.sessionId');
-    expect(patched).toContain("$zApp.loadSessionTranscript?.()");
-    expect(patched).toContain("error:typeof $zMetadata.error");
-    expect(patched).toContain('$zToolName!=="agent"&&$zToolName!=="subagent"&&$zToolName!=="task"');
-    expect(patched).toContain('childSessionId:"sess_subagent_"+$zAgentId');
-    expect(patched).toContain('$zOutput.includes("Async agent launched successfully.")');
-    expect(patched).toContain('.addAttachment?.("task_status"');
     expect(patched).toContain("E.$zSendInputWithoutBackgroundRestore=E.sendInput");
-    expect(patched).toContain("s[$zIndex]={...s[$zIndex]");
-    expect(patched).toContain("E.$zRestorePersistedBackgroundTasks?.(t)");
-    expect(patched).toContain('$zSpawn.status!=="async_launched"&&$zSpawn.status!=="backgrounded"');
-    expect(patched).toContain('status:$zStatus,taskType:"local_agent",type:"local_agent"');
     expect(patched).toContain('loadSessionContextMessages:a(async()=>await e.sessionStore.messages({sessionID:e.sessionId}),"loadSessionContextMessages")');
     expect(patched).toContain('role:"agent",model:{providerId:r.info.providerID,modelId:r.info.modelID}');
     expect(patched).not.toContain("$zRuntimeProjectionBridge.loadSessionContextMessages?.()");
@@ -815,9 +810,8 @@ describe("runtime synchronization", () => {
     expect(patched).toContain("E.cancelBackgroundTask=async e=>await(await S()).cancelBackgroundTask?.(e)??null");
     expect(patched).toContain("E.subscribeSessionEvents=e=>{let t=!1,r;S().then(o=>{t||(r=o.runtime?.subscribeEvents?.({onSessionEvent:e}))});return()=>{t=!0,r?.()}}");
     expect(patched).toContain("E.sendBackgroundTaskMessage=async e=>");
-    expect(patched).toContain('if(e?.restart===!0&&o.status==="running")');
-    expect(patched).toContain("await r.subagentPort.stopTask(e.taskId)");
-    expect(patched).toContain("r.subagentPort.sendMessage({sessionId:o.parentSessionId??r.getSessionId?.()");
+    expect(patched).toContain(".readTuiRuntimeProjection(");
+    expect(patched).toContain(".sendTuiBackgroundTaskMessage(");
     expect(patched).toContain("E.previewFileRewind=async e=>{let t=await S();return await t.runtime?.previewWorkspaceFileRewind?.({targetMessageIds:e})??null}");
     expect(patched).toContain("E.applyFileRewind=async e=>{let t=await S();return await t.runtime?.applyWorkspaceFileRewind?.({targetMessageIds:e})??null}");
     expect(patched).toContain("E.setMode=async e=>{return await(await S()).setMode(e)}");
@@ -866,7 +860,7 @@ describe("runtime synchronization", () => {
     const projectionEnd = patched.indexOf(",E.readSessionUsage=", projectionStart);
     const projectionAssignment = patched.slice(projectionStart, projectionEnd);
     const bridge: { readRuntimeProjection?: () => Promise<Record<string, unknown>> } = {};
-    const readRuntimeProjection = new Function(
+    const readRuntimeProjection = bridgeFunction(
       "E",
       "S",
       `${projectionAssignment};return E.readRuntimeProjection;`
@@ -892,7 +886,7 @@ describe("runtime synchronization", () => {
     });
 
     const liveProjectionBridge: { readRuntimeProjection?: () => Promise<Record<string, unknown>> } = {};
-    const liveReadRuntimeProjection = new Function(
+    const liveReadRuntimeProjection = bridgeFunction(
       "E",
       "S",
       `${projectionAssignment};return E.readRuntimeProjection;`
@@ -946,7 +940,7 @@ describe("runtime synchronization", () => {
     const restoreEnd = patched.indexOf(",E.recallPreviousInput=", restoreStart);
     expect(restoreStart).toBeGreaterThan(0);
     expect(restoreEnd).toBeGreaterThan(restoreStart);
-    const restoreBackgroundTasks = new Function(
+    const restoreBackgroundTasks = bridgeFunction(
       "E",
       `${patched.slice(restoreStart, restoreEnd)};return E.$zRestorePersistedBackgroundTasks;`
     )({}) as (app: unknown) => Promise<void>;
@@ -1313,7 +1307,7 @@ describe("runtime synchronization", () => {
         isBackgrounded: true
       });
     };
-    const taskMessage = new Function(
+    const taskMessage = bridgeFunction(
       "E",
       "S",
       `${patched.slice(taskMessageStart, taskMessageEnd)};return E.sendBackgroundTaskMessage;`
@@ -1336,13 +1330,8 @@ describe("runtime synchronization", () => {
     });
 
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
-    const unsafeBackgroundRestorePatch = patched.replace(
-      'if(!$zOutput.includes("Async agent launched successfully."))continue;',
-      ""
-    );
-    expect(patchRuntimeTuiBridge(unsafeBackgroundRestorePatch)).toContain(
-      '$zOutput.includes("Async agent launched successfully.")'
-    );
+    const legacyRestorePatch = patched.replace(".restoreTuiBackgroundTasks(", ".legacyRestore(");
+    expect(patchRuntimeTuiBridge(legacyRestorePatch)).toContain(".restoreTuiBackgroundTasks(");
     const previousInterruptPatch = patched.replace("e?.waitForIdle===!0", "e?.waitForIdle===!1");
     expect(patchRuntimeTuiBridge(previousInterruptPatch)).toContain("e?.waitForIdle===!0");
     expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);

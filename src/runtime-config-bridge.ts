@@ -4,6 +4,8 @@ import { dirname, resolve } from "node:path";
 import { cliSettingsPath, legacyCliConfigPath, providerConfigPath, providerMigrationMarkerPath, readDesktopSettings } from "./config-paths.ts";
 
 export { assertSessionModelReady, readSessionModelState } from "./session-model-recovery.ts";
+export { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage } from "./runtime-tui-bridge.ts";
+export { restoreTuiBackgroundTasks } from "./runtime-background-restore.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;

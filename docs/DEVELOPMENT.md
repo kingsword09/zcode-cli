@@ -25,6 +25,17 @@ without a manual build step.
 
 ## Validation
 
+Runtime TUI projection and background-agent messaging live in
+`src/runtime-tui-bridge.ts`; persisted task recovery lives in
+`src/runtime-background-restore.ts`. Both compile into the existing
+`vendor/cli-config.cjs` helper. Bundle patches capture the active app and delegate
+to these functions. Recovery reads optional metadata asynchronously and shares
+one in-flight restoration per app, so a concurrent send waits for registration.
+The runtime continues to own task lifecycle, registry state and message routing;
+the helper merges read models and preserves the existing restore/stop/send order.
+`test/runtime-tui-bridge.test.ts` tests these operations directly, while
+`test/sync-runtime.test.ts` exercises the injected calls and patch idempotency.
+
 Run all validation layers:
 
 ```bash
@@ -79,6 +90,16 @@ bun test test/runtime/session-model-recovery.test.ts
 Headless recovery exits with the invalid provider/model and instructions to
 resume interactively; it sends no model request. The regression tests also
 cover `/resume` inside the TUI and restarting after a repair.
+
+## Runtime refresh regression
+
+`bun test test/runtime-context-cache.test.ts test/tui/runtime-refresh.test.ts`
+verifies that text/reasoning deltas do not schedule runtime queries and that
+tool activity polling reuses a compact, session-scoped token summary. Completed
+requests, history changes and changed projection usage invalidate the summary.
+In-flight reads from a previous session or revision cannot overwrite newer
+statistics. Full message bodies are read for statistics only after invalidation
+or when the user opens `/context`; they are not retained in the cache.
 
 ## OAuth login
 

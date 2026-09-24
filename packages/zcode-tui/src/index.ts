@@ -168,8 +168,11 @@ import { InputQueue, type QueuedSubmission } from "./input-queue.ts";
 import { QueuedInputView } from "./queued-input-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
 import { DynamicWorkflows, workflowRunDetail } from "./dynamic-workflows.ts";
+import { RuntimeContextCache } from "./runtime-context-cache.ts";
 import {
   runtimeActivityActive,
+  runtimeContextChanged,
+  runtimeContextRefreshNeeded,
   runtimePollInterval,
   runtimeRefreshNeeded,
   runtimePollStateChanged,
@@ -193,7 +196,7 @@ import {
 import { SkillCatalog } from "./skills.ts";
 import {
   isActiveBackgroundJob,
-  mergeProjectionContextCache,
+  mergeProjectionContextSummary,
   normalizeRuntimeProjection,
   normalizeTodoGroups,
   normalizeTodos,
@@ -714,6 +717,7 @@ class ZCodeTui {
   private usageRefreshInFlight = false;
   private usageRefreshPending = false;
   private runtimeProjection?: RuntimeProjectionSnapshot;
+  private readonly runtimeContextCache = new RuntimeContextCache();
   private todos: RuntimeTodo[] = [];
   private todoGroups: RuntimeTodoGroup[] = [];
   private runtimeRefreshInFlight = false;
@@ -2165,10 +2169,12 @@ class ZCodeTui {
     settingTarget?: SettingTarget
   ): Promise<void> {
     if (!isRecord(result)) return;
+    this.runtimeContextCache.invalidate();
     if (result.resetSessionProjection === true) {
       this.dynamicWorkflows.reset();
       this.dynamicWorkflowView = undefined;
       this.selectedDynamicWorkflow = undefined;
+      this.runtimeContextCache.reset();
       this.executionStateRevision++;
       this.clearTranscriptProjection();
       this.workflowView = undefined;
@@ -2233,6 +2239,7 @@ class ZCodeTui {
       if (this.sessionModelIssue) await this.recoverSessionModel();
       void this.dynamicWorkflows.hydrate().then(() => this.renderDynamicWorkflow());
     }
+    this.scheduleRuntimeRefresh(0);
   }
 
   private onEvent(value: unknown, turnEpoch?: number): void {
@@ -2240,6 +2247,7 @@ class ZCodeTui {
     if (turnEpoch !== undefined && turnEpoch !== this.activeTurnEpoch) return;
     const event = normalizeEvent(value);
     if (!event || this.isForeignSessionEvent(event)) return;
+    if (runtimeContextRefreshNeeded(event)) this.runtimeContextCache.invalidate();
     if (this.handleDynamicWorkflowEvent(value, event.type)) return;
     const taskScoped = this.backgroundTaskEvents.isTaskScoped(event);
     this.applyBackgroundTaskEvent(event);
@@ -2416,9 +2424,10 @@ class ZCodeTui {
     this.debugEvent("session-subscription", value);
     const event = normalizeEvent(value);
     if (!event || this.isForeignSessionEvent(event)) return;
+    if (runtimeContextRefreshNeeded(event)) this.runtimeContextCache.invalidate();
     if (this.handleDynamicWorkflowEvent(value, event.type)) return;
     this.applyBackgroundTaskEvent(event);
-    this.scheduleRuntimeRefresh();
+    if (runtimeRefreshNeeded(event)) this.scheduleRuntimeRefresh();
   }
 
   private isForeignSessionEvent(event: StreamEvent): boolean {
@@ -5599,12 +5608,9 @@ class ZCodeTui {
       do {
         this.runtimeRefreshPending = false;
         const executionStateRevision = this.executionStateRevision;
-        const [projectionResult, todosResult, contextMessagesResult] = await Promise.allSettled([
+        const [projectionResult, todosResult] = await Promise.allSettled([
           this.options.readRuntimeProjection?.(),
-          this.options.readTodos?.(),
-          this.options.readRuntimeProjection && this.options.loadSessionContextMessages
-            ? this.options.loadSessionContextMessages()
-            : Promise.resolve(undefined)
+          this.options.readTodos?.()
         ]);
         if (executionStateRevision !== this.executionStateRevision) {
           this.runtimeRefreshPending = true;
@@ -5617,10 +5623,18 @@ class ZCodeTui {
         };
         if (projectionResult.status === "fulfilled" && projectionResult.value !== undefined) {
           const projection = normalizeRuntimeProjection(projectionResult.value);
-          next.projection = contextMessagesResult.status === "fulfilled"
-            && contextMessagesResult.value !== undefined
-            ? mergeProjectionContextCache(projection, contextMessagesResult.value) ?? next.projection
-            : projection ?? next.projection;
+          if (runtimeContextChanged(this.runtimeProjection, projection)) this.runtimeContextCache.invalidate();
+          const cache = this.options.loadSessionContextMessages
+            ? await this.runtimeContextCache.read(
+              projection?.sessionId ?? this.sessionId,
+              this.options.loadSessionContextMessages
+            ).catch(() => undefined)
+            : undefined;
+          if (executionStateRevision !== this.executionStateRevision) {
+            this.runtimeRefreshPending = true;
+            continue;
+          }
+          next.projection = mergeProjectionContextSummary(projection, cache) ?? next.projection;
           if (isRecord(projectionResult.value) && Array.isArray(projectionResult.value.todoGroups)) {
             next.todoGroups = normalizeTodoGroups(projectionResult.value);
           }

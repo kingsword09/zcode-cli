@@ -39,3 +39,24 @@ export function runtimeRefreshNeeded(
     && event.kind !== "reasoning_delta"
     && event.kind !== "tool_input_delta";
 }
+
+const contextChangeEvents = new Set([
+  "model_complete", "model.complete", "turn_complete", "turn.completed",
+  "turn_error", "turn.failed", "session_created", "session_resumed", "session_forked",
+  "session_compacted", "compact_boundary", "rewind_triggered", "rewind.triggered"
+]);
+
+export function runtimeContextRefreshNeeded(event: Pick<StreamEvent, "type">): boolean {
+  return event.type !== undefined && contextChangeEvents.has(event.type);
+}
+
+/** Polling also notices completed work from runtimes without session events. */
+export function runtimeContextChanged(
+  current: RuntimeProjectionSnapshot | undefined,
+  next: RuntimeProjectionSnapshot | undefined
+): boolean {
+  return current?.sessionId !== next?.sessionId
+    || current?.turnCount !== next?.turnCount
+    || current?.totalTokenCount !== next?.totalTokenCount
+    || current?.contextUsage?.used !== next?.contextUsage?.used;
+}
