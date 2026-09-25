@@ -5499,14 +5499,6 @@ class ZCodeTui {
         priority: 20
       });
     }
-    const backgroundCount = this.runtimeProjection?.backgroundJobs.filter(isActiveBackgroundJob).length ?? 0;
-    if (backgroundCount > 0) {
-      fields.push({
-        text: this.theme.accent(`${backgroundCount} in background`),
-        compactText: this.theme.accent(`bg ${backgroundCount}`),
-        priority: 80
-      });
-    }
     const search = this.transcript.searchStatus();
     if (search) {
       fields.push({
@@ -5598,9 +5590,11 @@ class ZCodeTui {
       this.turnStartedAt !== undefined && this.animateTurnTimer,
       this.turnStartedAt === undefined && this.turnTimingVisible
     ) ?? "";
-    const left = text
-      ? this.activity ? this.theme.accent(text) : this.theme.muted(text)
-      : "";
+    const backgroundCount = this.runtimeProjection?.backgroundJobs.filter(isActiveBackgroundJob).length ?? 0;
+    const left = [
+      text ? this.activity ? this.theme.accent(text) : this.theme.muted(text) : "",
+      backgroundCount > 0 ? this.theme.accent(`${backgroundCount} in background`) : ""
+    ].filter(Boolean).join(this.theme.muted(" · "));
     const goalText = goalStatusText(this.goal);
     const goalLabel = goalStatusLabel(this.goal);
     const goalStyle = this.goal?.status === "complete"
@@ -5667,7 +5661,7 @@ class ZCodeTui {
       },
       Boolean(this.options.readSessionUsage)
     );
-    this.updateRuntimeActivity(false);
+    this.updateTurnStatus(false);
   }
 
   /**
