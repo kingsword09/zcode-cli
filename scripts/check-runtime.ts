@@ -18,6 +18,7 @@ import {
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeSqliteBusyTimeout,
+  hasRuntimeSqliteWriteRecovery,
   hasRuntimeStreamEofFinishGuard,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
@@ -25,6 +26,7 @@ import {
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOfficialMcpAvailability,
   patchRuntimeSqliteBusyTimeout,
+  patchRuntimeSqliteWriteRecovery,
   patchRuntimeStreamEofFinishGuard,
   parseRuntimePatchReports,
   runtimePatchPlan,
@@ -85,6 +87,8 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeNetworkRetryGuard(runtimeSource)
   || patchRuntimeSqliteBusyTimeout(runtimeSource) !== runtimeSource
   || !hasRuntimeSqliteBusyTimeout(runtimeSource)
+  || patchRuntimeSqliteWriteRecovery(runtimeSource) !== runtimeSource
+  || !hasRuntimeSqliteWriteRecovery(runtimeSource)
   || patchRuntimeStreamEofFinishGuard(runtimeSource) !== runtimeSource
   || !hasRuntimeStreamEofFinishGuard(runtimeSource)
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))

@@ -1,47 +1,11 @@
 const assert = require("node:assert/strict");
-const { fork } = require("node:child_process");
-const { mkdtemp, rm } = require("node:fs/promises");
-const { tmpdir } = require("node:os");
-const path = require("node:path");
 const { test } = require("node:test");
 const { loadSessionStore, sessionInput } = require("../fixtures/sqlite-session-store.cjs");
+const { withDirectory, startWorker } = require("../fixtures/sqlite-contention.cjs");
 
 assert.equal(process.versions.bun, undefined, "Run with npm run test:node / node --test, not bun test");
 const Store = loadSessionStore();
-
-async function withDirectory(run) {
-  const directory = await mkdtemp(path.join(tmpdir(), "zcode-sqlite-runtime-"));
-  try { await run(directory, path.join(directory, "sessions.sqlite")); }
-  finally { await rm(directory, { recursive: true, force: true }); }
-}
-
-async function startWorker(mode, options) {
-  const child = fork(path.join(__dirname, "../fixtures/sqlite-session-store.cjs"), [mode, JSON.stringify(options)], {
-    execArgv: [], stdio: ["ignore", "ignore", "pipe", "ipc"], timeout: 20_000
-  });
-  let stderr = "";
-  child.stderr.on("data", chunk => { stderr += chunk; });
-  const exited = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
-  try {
-    await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("message", message => message?.type === "ready" ? resolve() : reject(new Error("Unexpected worker message")));
-      child.once("close", () => reject(new Error(`Worker exited before ready: ${stderr}`)));
-    });
-  } catch (error) {
-    child.kill();
-    await exited;
-    throw error;
-  }
-  return {
-    send(message) { if (child.connected) child.send(message); },
-    async wait() {
-      const result = await exited;
-      assert.equal(result.code, 0, `Worker failed (${result.signal}): ${stderr}`);
-    },
-    async stop(signal = "SIGTERM") { if (child.connected) child.kill(signal); await exited; }
-  };
-}
+const BoundedStore = loadSessionStore({ recoveryOptions: { writeBudgetMs: 250 } });
 
 test("real runtime keeps the write timeout after sync open, async startup and reopen", { timeout: 15_000 }, async t => {
   await withDirectory(async (_directory, dbPath) => {
@@ -66,7 +30,7 @@ test("a native session write survives a lock held beyond the old five-second win
     try {
       assert.equal(store.db.prepare("PRAGMA busy_timeout").get().timeout, 10_000);
       holder = await startWorker("hold", { dbPath, holdMs: 6500 });
-      // The independent process releases the lock even while DatabaseSync blocks this event loop.
+      // Keep the held interval independent of the writer's retry scheduling.
       holder.send("wait");
       const startedAt = performance.now();
       await store.createSession(sessionInput(directory, "waited-session"));
@@ -82,10 +46,10 @@ test("a native session write survives a lock held beyond the old five-second win
 
 test("lock timeout is bounded, writes nothing, and the same connection works after release", { timeout: 15_000 }, async () => {
   await withDirectory(async (directory, dbPath) => {
-    const store = await Store.openStartup({ dbPath });
+    const store = await BoundedStore.openStartup({ dbPath });
     let holder;
     try {
-      // Use a short test budget; the production budget is asserted separately above.
+      // Shorten both budgets for this failure test; production recovery is exercised above 10 seconds.
       store.db.exec("PRAGMA busy_timeout = 250");
       holder = await startWorker("hold", { dbPath });
       const startedAt = performance.now();

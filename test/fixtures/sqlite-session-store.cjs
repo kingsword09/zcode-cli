@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const Module = require("node:module");
 const path = require("node:path");
 
-function loadSessionStore() {
+function loadSessionStore(options = {}) {
   assert.equal(process.versions.bun, undefined, "SQLite runtime tests must execute in real Node.js");
   const file = path.resolve(process.env.ZCODE_TEST_RUNTIME || path.join(__dirname, "../../vendor/zcode.cjs"));
   let source = fs.readFileSync(file, "utf8");
@@ -17,6 +17,16 @@ function loadSessionStore() {
   const runtime = new Module(file, module);
   runtime.filename = file;
   runtime.paths = Module._nodeModulePaths(path.dirname(file));
+  if (options.recoveryOptions) {
+    const nativeRequire = runtime.require.bind(runtime);
+    const helperPath = path.join(path.dirname(file), "cli-config.cjs");
+    const helper = nativeRequire(helperPath);
+    const testHelper = {
+      ...helper,
+      installSqliteWriteRecovery: store => helper.installSqliteWriteRecovery(store, options.recoveryOptions)
+    };
+    runtime.require = id => id === helperPath ? testHelper : nativeRequire(id);
+  }
   runtime._compile(source, file);
   assert.equal(typeof runtime.exports.openStartup, "function");
   return runtime.exports;
@@ -52,7 +62,7 @@ async function worker(mode, options) {
     process.send({ type: "ready" });
     return;
   }
-  assert.equal(mode, "startup");
+  assert.ok(mode === "startup" || mode === "stress");
   await new Promise(resolve => {
     process.once("message", resolve);
     process.send({ type: "ready" });
@@ -62,6 +72,18 @@ async function worker(mode, options) {
   try {
     assert.equal(store.db.prepare("PRAGMA busy_timeout").get().timeout, 10_000);
     await store.createSession(sessionInput(path.dirname(options.dbPath), options.id));
+    if (mode === "stress") {
+      for (let index = 0; index < options.turns; index++) {
+        const id = `${options.id}-${index}`;
+        const now = Date.now();
+        await store.saveSessionInput({ id, sessionID: options.id, kind: "prompt", delivery: "queue", payload: { text: id } });
+        await store.promoteSessionInput({ id, sessionID: options.id,
+          message: { id: `message-${id}`, sessionID: options.id, role: "user", time: { created: now } },
+          parts: [{ id: `part-${id}`, messageID: `message-${id}`, sessionID: options.id, type: "text", text: id + "x".repeat(4096) }]
+        });
+        await store.upsertToolUsage({ id: `usage-${id}`, sessionID: options.id, toolCallID: `tool-${id}`, toolName: "Read", status: "completed", approvalStatus: "none", startedAt: now });
+      }
+    }
   } finally {
     store.close();
   }
