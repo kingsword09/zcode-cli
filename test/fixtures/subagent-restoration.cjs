@@ -2,7 +2,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const Module = require("node:module");
 const path = require("node:path");
-const { restoreTuiBackgroundTasks } = require("../../bin/runtime-config.cjs");
+// Matrix jobs restore the release tarball, which contains the bridge in vendor.
+const { restoreTuiBackgroundTasks } = require("../../vendor/cli-config.cjs");
 
 // Load the actual extracted query functions without starting the CLI or a model.
 const file = path.resolve(__dirname, "../../vendor/zcode.cjs");
