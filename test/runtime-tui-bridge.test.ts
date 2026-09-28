@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { fixtureSubagentQueries, subagentRestoreFixture } from "./fixtures/runtime-subagents.ts";
 import { restoreTuiBackgroundTasks } from "../src/runtime-background-restore.ts";
 import { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage, type RuntimeTask, type RuntimeTuiApp } from "../src/runtime-tui-bridge.ts";
 
@@ -73,28 +74,109 @@ test("task messaging retries restoration and rejects unsupported or invalid acti
   expect(sends).toBe(1);
 });
 
-test("concurrent task sends wait for an in-flight transcript restoration", async () => {
-  let release!: (messages: unknown[]) => void;
-  let reads = 0;
-  let sends = 0;
-  const tasks = new Map<string, RuntimeTask>();
-  const app: RuntimeTuiApp = {
-    sessionId: "parent", readExecutionState: () => ({}),
-    loadSessionTranscript: () => { reads++; return new Promise((resolve) => { release = resolve; }); },
-    runtime: {
-      runtimeTaskRegistry: { register: (task) => tasks.set(task.taskId, task), get: (id) => tasks.get(id) },
-      subagentPort: { sendMessage: async () => { sends++; return "sent"; } }
-    }
-  };
-  const restoration = restoreTuiBackgroundTasks(app);
-  const send = sendTuiBackgroundTaskMessage(app, { $zRestorePersistedBackgroundTasks: restoreTuiBackgroundTasks }, {
+const restore = (app: RuntimeTuiApp) => restoreTuiBackgroundTasks(app, fixtureSubagentQueries);
+
+test("concurrent task sends wait for an in-flight session restoration", async () => {
+  const { app } = subagentRestoreFixture();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const getSession = app.runtime!.sessionStore!.getSession;
+  let reads = 0, sends = 0;
+  app.runtime!.sessionStore!.getSession = async (id) => { reads++; await gate; return getSession(id); };
+  app.runtime!.subagentPort = { sendMessage: async () => { sends++; return "sent"; } };
+  const restoration = restore(app);
+  const send = sendTuiBackgroundTaskMessage(app, { $zRestorePersistedBackgroundTasks: restore }, {
     taskId: "agent", message: "Continue"
   });
   await Promise.resolve();
   expect(sends).toBe(0);
-  release([{ parts: [{ type: "tool", toolName: "Agent", output: JSON.stringify({ status: "async_launched", agentId: "agent" }) }] }]);
+  release();
   await restoration;
   expect(await send).toBe("sent");
-  expect(reads).toBe(1);
   expect(sends).toBe(1);
+  expect(reads).toBe(2);
+});
+
+test("restores native subagent projections without reading the legacy transcript", async () => {
+  const { app, tasks, reminders } = subagentRestoreFixture();
+  app.loadSessionTranscript = async () => { throw new Error("Legacy transcript must not be read"); };
+  await restore(app);
+  expect(tasks.get("agent")).toMatchObject({
+    childSessionId: "child", status: "completed", parentToolCallId: "call", agentType: "Explore",
+    parentSessionId: "parent", startedAt: 10, completedAt: 20
+  });
+  expect(reminders).toHaveLength(1);
+  await restore(app);
+  expect(reminders).toHaveLength(1);
+});
+
+test.each(["getSession", "messages", "events"])("retries a transient %s failure", async (operation) => {
+  const { app, tasks } = subagentRestoreFixture();
+  let reads = 0;
+  if (operation === "events") {
+    app.runtime!.getSessionEventStore = () => ({ getEvents: async () => {
+      if (++reads === 1) throw new Error("database is locked");
+      return [];
+    } });
+  } else {
+    const store = app.runtime!.sessionStore!;
+    if (operation === "getSession") {
+      const getSession = store.getSession;
+      store.getSession = async (id) => {
+        if (++reads === 1) throw new Error("database is locked");
+        return getSession(id);
+      };
+    } else {
+      const messages = store.messages;
+      store.messages = async (input) => {
+        if (++reads === 1) throw new Error("database is locked");
+        return messages(input);
+      };
+    }
+  }
+  await restore(app);
+  expect(tasks.size).toBe(0);
+  expect(app.$zRestoredBackgroundTasksSession).toBeUndefined();
+  await restore(app);
+  expect(tasks.size).toBe(1);
+});
+
+test.each(["foreign", "wrong-type", "missing"])("rejects %s child sessions before reading their content", async (kind) => {
+  const { app, sessions, tasks } = subagentRestoreFixture();
+  if (kind === "missing") sessions.delete("child");
+  else sessions.set("child", { id: "child", parentID: kind === "foreign" ? "other" : "parent", taskType: kind === "wrong-type" ? "main" : "subagent_child" });
+  const messages = app.runtime!.sessionStore!.messages;
+  app.runtime!.sessionStore!.messages = async (input) => {
+    expect(input.sessionID).toBe("parent");
+    return messages(input);
+  };
+  await restore(app);
+  expect(tasks.size).toBe(0);
+});
+
+test("does not overwrite a task registered while storage was being read", async () => {
+  const { app, tasks, reminders } = subagentRestoreFixture();
+  const live: RuntimeTask = { taskId: "agent", status: "running", description: "Live task" };
+  app.runtime!.getSessionEventStore = () => ({ getEvents: async () => { tasks.set("agent", live); return []; } });
+  await restore(app);
+  expect(tasks.get("agent")).toBe(live);
+  expect(reminders).toEqual([]);
+});
+
+test("discards restoration when navigation changes the active session", async () => {
+  const { app, tasks, reminders } = subagentRestoreFixture();
+  const messages = app.runtime!.sessionStore!.messages;
+  app.runtime!.sessionStore!.messages = async (input) => { app.sessionId = "other"; return messages(input); };
+  await restore(app);
+  expect(tasks.size).toBe(0);
+  expect(reminders).toEqual([]);
+  expect(app.$zRestoredBackgroundTasksSession).toBeUndefined();
+});
+
+test("does not fall back when session observation is unavailable", async () => {
+  const { app, tasks } = subagentRestoreFixture();
+  delete app.runtime!.sessionStore;
+  app.loadSessionTranscript = async () => { throw new Error("Legacy transcript must not be read"); };
+  await restore(app);
+  expect(tasks.size).toBe(0);
 });

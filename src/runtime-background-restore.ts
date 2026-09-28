@@ -1,107 +1,77 @@
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import type { RuntimeTask, RuntimeTuiApp } from "./runtime-tui-bridge.ts";
+import type { RuntimeSubagentQueries, RuntimeTask, RuntimeTuiApp } from "./runtime-tui-bridge.ts";
 
-type RecordValue = Record<string, unknown>;
 const maximumReminderTasks = 32;
 const maximumReminderLength = 4_000;
 const maximumRestoredTasks = 64;
 
-function record(value: unknown): RecordValue | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : undefined;
+async function restoreSessionChildren(
+  app: RuntimeTuiApp, sessionId: string, queries: RuntimeSubagentQueries
+): Promise<RuntimeTask[]> {
+  const store = app.runtime?.sessionStore;
+  const eventStore = app.runtime?.getSessionEventStore?.();
+  if (!store || !eventStore) return [];
+  const parentSession = await store.getSession(sessionId);
+  if (!parentSession) return [];
+  const [messages, parentEvents, parentProjection] = await Promise.all([
+    store.messages({ sessionID: sessionId }), eventStore.getEvents(sessionId), app.runtime?.getProjection?.()
+  ]);
+  // Use the same active-branch candidates and ownership checks as upstream's
+  // subagent observation API. Event storage alone is empty after a cold resume.
+  const ids = [...new Set(queries.collectChildSessionIds(parentSession, messages, parentEvents))];
+  const children = await Promise.all(ids.map(async (id) => {
+    const session = await store.getSession(id);
+    if (!session || session.parentID !== sessionId || session.taskType !== "subagent_child") return null;
+    const [messages, events] = await Promise.all([
+      store.messages({ sessionID: id }), eventStore.getEvents(id)
+    ]);
+    return { session, messages, projection: events.length ? queries.projectChildEvents(events) : undefined };
+  }));
+  const valid = children.filter((child) => child !== null);
+  const projection = queries.projectSubagents({
+    revision: 0, parentSession, messages, parentEvents, parentProjection,
+    childSessionsById: new Map(valid.map((child) => [child.session.id, child.session])),
+    childMessagesById: new Map(valid.map((child) => [child.session.id, child.messages])),
+    childProjectionsById: new Map(valid.flatMap((child) =>
+      child.projection ? [[child.session.id, child.projection] as const] : []))
+  });
+  return [...projection.running, ...projection.ended].map((agent): RuntimeTask => ({
+    taskId: agent.agentId ?? agent.toolCallId,
+    agentId: agent.agentId ?? agent.toolCallId,
+    agentType: agent.subagentType,
+    childSessionId: agent.childSessionId,
+    description: agent.title,
+    isBackgrounded: true,
+    parentSessionId: sessionId,
+    parentToolCallId: agent.toolCallId,
+    startedAt: agent.startedAt,
+    completedAt: agent.endedAt,
+    status: ["running", "waiting", "blocked"].includes(agent.status) ? "running"
+      : agent.status === "success" ? "completed" : agent.status === "failed" ? "failed" : "stopped",
+    error: agent.status === "failed" ? agent.summary : undefined,
+    output: agent.status === "success" && agent.summary
+      ? { status: "completed", content: [{ type: "text", text: agent.summary }] } : undefined,
+    taskType: "local_agent",
+    type: "local_agent"
+  }));
 }
 
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function parseSpawn(output: string, input: RecordValue | undefined): RecordValue | undefined {
-  try {
-    const parsed = record(JSON.parse(output));
-    if (parsed) return parsed;
-  } catch {
-    // Older runtimes returned a formatted launch result rather than JSON.
-  }
-  if (!output.includes("Async agent launched successfully.")) return undefined;
-  const agentId = /(?:^|\n)agentId:\s*([^\s(]+)/u.exec(output)?.[1];
-  if (!agentId) return undefined;
-  return {
-    status: "async_launched", agentId,
-    agentType: text(input?.subagent_type) ?? text(input?.agentType),
-    childSessionId: `sess_subagent_${agentId}`,
-    description: text(input?.description), prompt: text(input?.prompt),
-    outputFile: /(?:^|\n)output_file:\s*([^\r\n]+)/u.exec(output)?.[1]?.trim()
-  };
-}
-
-async function readMetadata(outputFile: unknown): Promise<RecordValue | undefined> {
-  if (!text(outputFile)) return undefined;
-  try {
-    return record(JSON.parse(await readFile(join(dirname(outputFile as string), "metadata.json"), "utf8")));
-  } catch {
-    // Metadata is optional; the persisted launch result still restores a task.
-    return undefined;
-  }
-}
-
-function enrichSpawn(spawn: RecordValue, metadata: RecordValue | undefined, sessionId: string): RecordValue {
-  if (!metadata || typeof metadata.agentId === "string" && metadata.agentId !== spawn.agentId
-    || typeof metadata.parentSessionId === "string" && metadata.parentSessionId !== sessionId) return spawn;
-  return {
-    ...spawn,
-    agentType: text(metadata.profileId) ?? spawn.agentType,
-    childSessionId: text(metadata.childSessionId) ?? spawn.childSessionId,
-    description: text(metadata.description) ?? spawn.description,
-    outputFile: text(metadata.outputFile) ?? spawn.outputFile,
-    prompt: text(metadata.prompt) ?? spawn.prompt,
-    error: text(metadata.error) ?? spawn.error
-  };
-}
-
-async function restore(app: RuntimeTuiApp): Promise<void> {
+async function restore(app: RuntimeTuiApp, queries: RuntimeSubagentQueries): Promise<void> {
   const runtime = app.runtime;
   const registry = runtime?.runtimeTaskRegistry;
   const sessionId = app.sessionId;
   if (!registry?.register || typeof sessionId !== "string" || sessionId === app.$zRestoredBackgroundTasksSession) return;
-  app.$zRestoredBackgroundTasksSession = sessionId;
   app.$zRestoredBackgroundTasksLog = [];
   try {
-    const messages = await app.loadSessionTranscript?.() ?? [];
+    const tasks = await restoreSessionChildren(app, sessionId, queries);
+    // A restore may finish after navigation, or after a live task was registered.
+    if (app.sessionId !== sessionId || app.runtime !== runtime) return;
     const restored: RuntimeTask[] = [];
-    for (const messageValue of messages) {
-      const parts = record(messageValue)?.parts;
-      if (!Array.isArray(parts)) continue;
-      for (const value of parts) {
-        const part = record(value);
-        if (part?.type !== "tool") continue;
-        const tool = (typeof part.toolName === "string" ? part.toolName
-          : typeof part.tool === "string" ? part.tool : "").trim().toLowerCase();
-        if (!["agent", "subagent", "task"].includes(tool)) continue;
-        const state = record(part.state);
-        const output = typeof part.output === "string" ? part.output : state?.output;
-        if (typeof output !== "string" || !output.trim()) continue;
-        let spawn = parseSpawn(output, record(part.input ?? state?.input));
-        if (!spawn || !["async_launched", "backgrounded"].includes(String(spawn.status)) || !text(spawn.agentId)) continue;
-        const metadata = await readMetadata(spawn.outputFile);
-        spawn = enrichSpawn(spawn, metadata, sessionId);
-        const agentId = spawn.agentId as string;
-        if (registry.get?.(agentId)) continue;
-        const task: RuntimeTask = {
-          taskId: agentId, agentId,
-          agentType: text(spawn.agentType) ?? "general-purpose",
-          childSessionId: text(spawn.childSessionId) ?? `sess_subagent_${agentId}`,
-          description: text(spawn.description), error: text(spawn.error),
-          isBackgrounded: true, outputFile: text(spawn.outputFile),
-          parentToolCallId: text(part.toolCallId) ?? text(part.callID),
-          parentSessionId: sessionId, prompt: text(spawn.prompt),
-          startedAt: record(state?.time)?.start,
-          status: metadata?.status === "completed" ? "completed" : metadata?.status === "failed" ? "failed" : "stopped",
-          taskType: "local_agent", type: "local_agent"
-        };
-        registry.register(task);
-        restored.push(task);
-      }
+    for (const task of tasks) {
+      if (registry.get?.(task.taskId)) continue;
+      registry.register(task);
+      restored.push(task);
     }
+    app.$zRestoredBackgroundTasksSession = sessionId;
     if (restored.length === 0) return;
     const taskIds = restored.slice(-maximumReminderTasks)
       .map((task) => `- ${task.taskId} (${task.status})`).join("\n").slice(0, maximumReminderLength);
@@ -113,16 +83,19 @@ async function restore(app: RuntimeTuiApp): Promise<void> {
     app.$zRestoredBackgroundTasksLog = [...(app.$zRestoredBackgroundTasksLog ?? []), ...restored].slice(-maximumRestoredTasks);
   } catch {
     // Restoration is supplementary. Let the next query retry a failed read.
-    app.$zRestoredBackgroundTasksSession = undefined;
+    if (app.sessionId === sessionId) app.$zRestoredBackgroundTasksSession = undefined;
   }
 }
 
 const pendingRestores = new WeakMap<RuntimeTuiApp, Promise<void>>();
 
-export async function restoreTuiBackgroundTasks(app: RuntimeTuiApp): Promise<void> {
+export async function restoreTuiBackgroundTasks(app: RuntimeTuiApp, queries: RuntimeSubagentQueries): Promise<void> {
   const pending = pendingRestores.get(app);
-  if (pending) return pending;
-  const operation = restore(app);
+  if (pending) {
+    await pending;
+    return restoreTuiBackgroundTasks(app, queries);
+  }
+  const operation = restore(app, queries);
   pendingRestores.set(app, operation);
   try { await operation; }
   finally { pendingRestores.delete(app); }

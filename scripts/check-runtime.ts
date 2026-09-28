@@ -114,6 +114,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !runtimeSource.includes(".subscribeSessionEvents=")
   || !runtimeSource.includes(".sendBackgroundTaskMessage=async")
   || !runtimeSource.includes(".restoreTuiBackgroundTasks(")
+  || !runtimeSource.includes("projectChildEvents:e=>new ")
   || !runtimeSource.includes(".readTuiRuntimeProjection(")
   || !runtimeSource.includes(".sendTuiBackgroundTaskMessage(")
   || !runtimeSource.includes(".$zRestorePersistedBackgroundTasks=async $zApp=>")

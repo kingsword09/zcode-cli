@@ -494,6 +494,25 @@ export function patchRuntimeGoalFailurePause(runtime: string): string {
   );
 }
 
+/** Bind the read model already shipped in the runtime; fail sync if its contract changes. */
+export function runtimeSubagentQueryBridge(runtime: string): string {
+  const bind = (name: string, classExport = false): { symbol: string; init: string } => {
+    const pattern = classExport
+      ? /([A-Za-z_$][\w$]*)=class(?: [A-Za-z_$][\w$]*)?\{static\{[A-Za-z_$][\w$]*\(this,"EventReducer"/u
+      : new RegExp(`[A-Za-z_$][\\w$]*\\(([A-Za-z_$][\\w$]*),"${name}"\\)`, "u");
+    const match = pattern.exec(runtime);
+    const init = match && [...runtime.slice(0, match.index)
+      .matchAll(/([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(\(\)=>\{/gu)].at(-1)?.[1];
+    if (!match || !init) throw new Error(`ZCode runtime is incompatible with subagent restoration (${name} anchor missing).`);
+    return { symbol: match[1]!, init };
+  };
+  const collect = bind("collectSubagentChildSessionIds");
+  const project = bind("projectSessionSubagents");
+  const reducer = bind("EventReducer", true);
+  const initializers = [...new Set([collect.init, project.init, reducer.init])].map((name) => `${name}()`);
+  return `(${initializers.join(",")},{collectChildSessionIds:${collect.symbol},projectSubagents:${project.symbol},projectChildEvents:e=>new ${reducer.symbol}().reduce(e)})`;
+}
+
 export function patchRuntimeTuiBridge(runtime: string): string {
   // Upstream's login gate only checks account subscriptions. API-key providers
   // imported into the registry must remain usable without a separate OAuth login.
@@ -525,6 +544,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const projectionHelperMarker = ".readTuiRuntimeProjection(";
   const backgroundRestoreMarker = ".$zRestorePersistedBackgroundTasks=async $zApp=>";
   const backgroundRestoreHelperMarker = ".restoreTuiBackgroundTasks(";
+  const subagentQueryMarker = "projectChildEvents:e=>new ";
   const backgroundRestoreBeforeSendMarker = ".$zSendInputWithoutBackgroundRestore=";
   const interruptTurnMarker = ".interruptTurn=async e=>";
   const interruptWaitForIdleMarker = "e?.waitForIdle===!0";
@@ -587,6 +607,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && runtime.includes(taskMessageHelperMarker)
     && runtime.includes(projectionBridgeMarker)
     && runtime.includes(backgroundRestoreHelperMarker)
+    && runtime.includes(subagentQueryMarker)
     && runtime.includes(backgroundRestoreMarker)
     && runtime.includes(backgroundRestoreBeforeSendMarker)
     && runtime.includes(".loadSessionContextMessages=async()=>await(await")
@@ -702,10 +723,11 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   // in-memory runtimeTaskRegistry is empty, so /tasks lists nothing and
   // sendBackgroundTaskMessage cannot find the task. The runtime already ships a
   // resume-from-child-session path (sendMessage on a stopped local_agent task),
-  // so re-registering spawn records from the already active-branch-filtered
-  // transcript is enough to make /tasks and /tasks resume work again.
+  // so register tasks from the native session/subagent read model. Its candidate
+  // selection handles the active branch and its reducer owns lifecycle state.
   const helper = 'require(require("node:path").join(__dirname,"cli-config.cjs"))';
-  const guardedBackgroundRestoreAssignment = `${bridge}.$zRestorePersistedBackgroundTasks=async $zApp=>await ${helper}.restoreTuiBackgroundTasks($zApp)`;
+  const queries = runtimeSubagentQueryBridge(runtime);
+  const guardedBackgroundRestoreAssignment = `${bridge}.$zRestorePersistedBackgroundTasks=async $zApp=>await ${helper}.restoreTuiBackgroundTasks($zApp,${queries})`;
   const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ${getApp}();return await ${helper}.readTuiRuntimeProjection($zRuntimeProjectionBridge,${bridge})}`;
   const taskMessageAssignment = `${bridge}.sendBackgroundTaskMessage=async e=>await ${helper}.sendTuiBackgroundTaskMessage(await ${getApp}(),${bridge},e)`;
   if (!listSkillsBridgePattern.test(patched)) {
@@ -755,7 +777,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
       assignments.push(projectionAssignment);
     }
   }
-  if (!patched.includes(backgroundRestoreHelperMarker)) {
+  if (!patched.includes(backgroundRestoreHelperMarker) || !patched.includes(subagentQueryMarker)) {
     const existingRestoreStart = patched.indexOf(`${bridge}.$zRestorePersistedBackgroundTasks=async $zApp=>`);
     if (existingRestoreStart >= 0) {
       const existingRestoreEnd = patched.indexOf(`,${bridge}.`, existingRestoreStart);
@@ -1571,6 +1593,7 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     apply: patchRuntimeTuiBridge,
     verify: (runtime) => runtime.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
       && runtime.includes(".loadSessionContextMessages=async()=>await(await")
+      && runtime.includes("projectChildEvents:e=>new ")
   },
   {
     id: "model-catalog-reload",

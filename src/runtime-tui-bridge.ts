@@ -15,6 +15,8 @@ export interface RuntimeTuiApp {
   loadSessionTranscript?(): Promise<unknown[]>;
   readExecutionState(): Promise<unknown> | unknown;
   runtime?: {
+    sessionStore?: RuntimeSessionStore;
+    getSessionEventStore?(): RuntimeSessionEventStore;
     getProjection?(): Promise<Record<string, unknown> | undefined> | Record<string, unknown> | undefined;
     getSessionId?(): string;
     runtimeTaskRegistry?: {
@@ -30,6 +32,51 @@ export interface RuntimeTuiApp {
     workingDirectory?: string;
     rootTraceContext?: unknown;
   };
+}
+
+export interface RuntimeSessionInfo {
+  id: string;
+  parentID?: string;
+  taskType?: string;
+  title?: string;
+  time?: { created?: number; updated?: number };
+}
+
+export interface RuntimeSessionStore {
+  getSession(sessionId: string): Promise<RuntimeSessionInfo | null>;
+  messages(input: { sessionID: string }): Promise<unknown[]>;
+}
+
+export interface RuntimeSessionEventStore {
+  getEvents(sessionId: string): Promise<unknown[]>;
+}
+
+export interface RuntimeSubagent {
+  agentId?: string;
+  childSessionId: string;
+  toolCallId: string;
+  subagentType: string;
+  title: string;
+  status: string;
+  startedAt?: number;
+  endedAt?: number;
+  summary?: string;
+}
+
+/** Implemented by the extracted runtime's native session query and reducer. */
+export interface RuntimeSubagentQueries {
+  collectChildSessionIds(session: RuntimeSessionInfo, messages: unknown[], events: unknown[]): string[];
+  projectChildEvents(events: unknown[]): unknown;
+  projectSubagents(input: {
+    revision: number;
+    parentSession: RuntimeSessionInfo;
+    messages: unknown[];
+    parentEvents: unknown[];
+    parentProjection?: Record<string, unknown>;
+    childSessionsById: Map<string, RuntimeSessionInfo>;
+    childMessagesById: Map<string, unknown[]>;
+    childProjectionsById: Map<string, unknown>;
+  }): { running: RuntimeSubagent[]; ended: RuntimeSubagent[] };
 }
 
 export interface RuntimeTuiBridge {

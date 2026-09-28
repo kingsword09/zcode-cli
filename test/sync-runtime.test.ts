@@ -1,3 +1,4 @@
+import { fixtureSubagentQueries, subagentRestoreFixture } from "./fixtures/runtime-subagents.ts";
 import { restoreTuiBackgroundTasks } from "../src/runtime-background-restore.ts";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -34,7 +35,8 @@ import {
   patchRuntimeSqliteBusyTimeout,
   patchRuntimeStreamEofFinishGuard,
   patchRuntimeTerminalToolProjection,
-  patchRuntimeTuiBridge,
+  patchRuntimeTuiBridge as patchExtractedRuntimeTuiBridge,
+  runtimeSubagentQueryBridge,
   patchRuntimeTuiExecutionState,
   patchRuntimeZaiDesktopOAuth,
   resolveArtifactUrl,
@@ -53,14 +55,28 @@ import {
   syncedReleaseVersion
 } from "../scripts/release-version.ts";
 
+const subagentQueryAnchors = 'var queryInit=init(()=>{label(collectChildren,"collectSubagentChildSessionIds");label(projectSubagents,"projectSessionSubagents")});var reducerInit=init(()=>{NativeReducer=class{static{label(this,"EventReducer")}}});';
+function patchRuntimeTuiBridge(runtime: string): string {
+  return patchExtractedRuntimeTuiBridge(runtime.includes('"collectSubagentChildSessionIds"') ? runtime : runtime + subagentQueryAnchors);
+}
+
 function bridgeFunction(...args: string[]): (...values: unknown[]) => unknown {
   const body = args.pop()!;
-  const factory = new Function("require", "__dirname", ...args, body);
+  const factory = new Function("require", "__dirname", "queryInit", "reducerInit", "collectChildren", "projectSubagents", "NativeReducer", ...args, body);
   return factory.bind(null, (id: string) => id === "node:path" ? { join }
-    : { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage, restoreTuiBackgroundTasks }, "/fixture");
+    : { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage, restoreTuiBackgroundTasks }, "/fixture",
+    () => {}, () => {}, fixtureSubagentQueries.collectChildSessionIds, fixtureSubagentQueries.projectSubagents,
+    class { reduce(events: unknown[]) { return fixtureSubagentQueries.projectChildEvents(events); } });
 }
 
 describe("runtime synchronization", () => {
+  test("requires native subagent query and reducer anchors", () => {
+    expect(runtimeSubagentQueryBridge(subagentQueryAnchors)).toContain("projectSubagents:projectSubagents");
+    for (const name of ["collectSubagentChildSessionIds", "projectSessionSubagents", "EventReducer"]) {
+      expect(() => runtimeSubagentQueryBridge(subagentQueryAnchors.replace(name, "missing"))).toThrow(`${name} anchor missing`);
+    }
+  });
+
   test("adds session recovery at native restore and execution boundaries and can run twice", async () => {
     const runtime = 'async function app(options){let read=()=>runtime,restore=label(async()=>{let ok=saved&&registry.validateSelection(saved);return read().setSessionModelSelection(ok?.ok?saved:void 0),saved},"restorePersistedModelSelection"),prepare=label(async args=>{await options.prepareUserExecutionBoundary(args)},"preparePromptBoundary");return{restore,prepare,getModelOption:label(model=>lookup(context.providerRegistry,model),"getModelOption")}}';
     const patched = patchRuntimeSessionModelRecovery(runtime);
@@ -944,290 +960,14 @@ describe("runtime synchronization", () => {
       "E",
       `${patched.slice(restoreStart, restoreEnd)};return E.$zRestorePersistedBackgroundTasks;`
     )({}) as (app: unknown) => Promise<void>;
-    {
-      const spawnOutput = (status: string) => JSON.stringify({
-        status,
-        isAsync: true,
-        agentId: "agent_9",
-        agentType: "Explore",
-        description: "Investigate renderer",
-        prompt: "Look into it",
-        childSessionId: "sess_child_9",
-        backgroundTaskId: "agent_9",
-        outputFile: join(outputDirectory, "output.txt")
-      });
-      const outputDirectory = await mkdtemp(join(tmpdir(), "zcode-restore-"));
-      try {
-        const spawnPart = (status: string) => ({
-          type: "tool",
-          toolName: "Agent",
-          toolCallId: "call_1",
-          output: spawnOutput(status)
-        });
-        const registered: Record<string, unknown>[] = [];
-        const store = new Map<string, Record<string, unknown>>();
-        const registry = {
-          register: (task: Record<string, unknown>) => {
-            registered.push(task);
-            store.set(String(task.taskId), task);
-          },
-          get: (taskId: string) => store.get(taskId)
-        };
-        const reminders: Array<{ source: string; text: string }> = [];
-        let rawContextLoads = 0;
-        const appFor = (parts: unknown[]) => ({
-          sessionId: "sess_parent",
-          $zRestoredBackgroundTasksLog: [] as Array<Record<string, unknown>>,
-          runtime: {
-            runtimeTaskRegistry: registry,
-            messageHistory: {
-              addAttachment: (source: string, text: string) => reminders.push({ source, text })
-            }
-          },
-          loadSessionTranscript: async () => [{ messageId: "m1", role: "agent", parts }],
-          loadSessionContextMessages: async () => {
-            rawContextLoads += 1;
-            return [{ info: { id: "inactive-branch", role: "assistant" }, parts: [spawnPart("async_launched")] }];
-          }
-        });
-        const firstRestoreApp = appFor([spawnPart("async_launched")]);
-        await restoreBackgroundTasks(firstRestoreApp);
-        expect(rawContextLoads).toBe(0);
-        expect(registered).toHaveLength(1);
-        expect(firstRestoreApp.$zRestoredBackgroundTasksLog).toHaveLength(1);
-        expect(firstRestoreApp.$zRestoredBackgroundTasksLog[0]).toMatchObject({ taskId: "agent_9", status: "stopped" });
-        expect(registered[0]).toMatchObject({
-          taskId: "agent_9",
-          agentId: "agent_9",
-          agentType: "Explore",
-          childSessionId: "sess_child_9",
-          parentSessionId: "sess_parent",
-          parentToolCallId: "call_1",
-          status: "stopped",
-          taskType: "local_agent",
-          type: "local_agent",
-          isBackgrounded: true
-        });
-        expect(reminders).toHaveLength(1);
-        expect(reminders[0]).toMatchObject({ source: "task_status" });
-        expect(reminders[0]?.text).toContain("Earlier TaskOutput errors");
-        expect(reminders[0]?.text).toContain("agent_9 (stopped)");
-        await restoreBackgroundTasks(appFor([spawnPart("async_launched")]));
-        expect(registered).toHaveLength(1);
-        expect(reminders).toHaveLength(1);
-
-        await writeFile(join(outputDirectory, "metadata.json"), `${JSON.stringify({
-          agentId: "agent_9",
-          status: "completed",
-          error: "stale error from the first attempt"
-        })}\n`);
-        const registryForCompleted: Record<string, unknown>[] = [];
-        await restoreBackgroundTasks({
-          sessionId: "sess_parent_2",
-          runtime: {
-            runtimeTaskRegistry: {
-              register: (task: Record<string, unknown>) => registryForCompleted.push(task),
-              get: () => undefined
-            }
-          },
-          loadSessionTranscript: async () => [{ messageId: "m2", role: "agent", parts: [spawnPart("async_launched")] }]
-        });
-        expect(registryForCompleted).toHaveLength(1);
-        expect(registryForCompleted[0]).toMatchObject({
-          status: "completed",
-          error: "stale error from the first attempt"
-        });
-
-        await restoreBackgroundTasks({
-          sessionId: "sess_parent_3",
-          runtime: {
-            runtimeTaskRegistry: {
-              register: (task: Record<string, unknown>) => registered.push(task),
-              get: (taskId: string) => store.get(taskId)
-            }
-          },
-          loadSessionTranscript: async () => [{ messageId: "m3", role: "agent", parts: [spawnPart("backgrounded")] }]
-        });
-        expect(registered).toHaveLength(1);
-
-        await restoreBackgroundTasks({
-          sessionId: "sess_parent_4",
-          runtime: {
-            runtimeTaskRegistry: {
-              register: (task: Record<string, unknown>) => registered.push(task),
-              get: () => undefined
-            }
-          },
-          loadSessionTranscript: async () => [{
-            messageId: "m4",
-            role: "agent",
-            parts: [{
-              type: "tool",
-              toolName: "Agent",
-              toolCallId: "call_2",
-              output: JSON.stringify({ status: "completed", agentId: "agent_10", content: "done" })
-            }]
-          }]
-        });
-        expect(registered).toHaveLength(1);
-
-        const taskAliasRegistered: Record<string, unknown>[] = [];
-        await restoreBackgroundTasks({
-          sessionId: "sess_parent_task_alias",
-          runtime: {
-            runtimeTaskRegistry: {
-              register: (task: Record<string, unknown>) => taskAliasRegistered.push(task),
-              get: () => undefined
-            }
-          },
-          loadSessionTranscript: async () => [{
-            messageId: "m-task",
-            role: "agent",
-            parts: [{
-              type: "tool",
-              toolName: "Task",
-              toolCallId: "call_task",
-              output: JSON.stringify({
-                status: "async_launched",
-                agentId: "agent_task",
-                agentType: "Explore",
-                childSessionId: "sess_child_task"
-              })
-            }]
-          }]
-        });
-        expect(taskAliasRegistered).toHaveLength(1);
-        expect(taskAliasRegistered[0]).toMatchObject({
-          taskId: "agent_task",
-          parentToolCallId: "call_task",
-          status: "stopped"
-        });
-
-        const modelTextAgentId = "agent_model_text";
-        const modelTextOutputFile = join(outputDirectory, "model-output.txt");
-        await writeFile(join(outputDirectory, "metadata.json"), `${JSON.stringify({
-          agentId: modelTextAgentId,
-          childSessionId: "sess_subagent_agent_model_text",
-          description: "Persisted model-text agent",
-          outputFile: modelTextOutputFile,
-          parentSessionId: "sess_parent_model_text",
-          parentToolUseId: "call_model_text",
-          profileId: "Explore",
-          prompt: "Continue the persisted task",
-          status: "running"
-        })}\n`);
-        const modelTextRegistered: Record<string, unknown>[] = [];
-        await restoreBackgroundTasks({
-          sessionId: "sess_parent_model_text",
-          runtime: {
-            runtimeTaskRegistry: {
-              register: (task: Record<string, unknown>) => modelTextRegistered.push(task),
-              get: () => undefined
-            }
-          },
-          loadSessionTranscript: async () => [{
-            messageId: "m-model-text",
-            role: "agent",
-            parts: [{
-              type: "tool",
-              toolName: "Agent",
-              toolCallId: "call_model_text",
-              input: {
-                description: "Persisted model-text agent",
-                prompt: "Continue the persisted task",
-                subagent_type: "Explore"
-              },
-              output: [
-                "Async agent launched successfully.",
-                `agentId: ${modelTextAgentId} (internal ID - use SendMessage to continue)`,
-                "The agent is working in the background.",
-                `output_file: ${modelTextOutputFile}`
-              ].join("\n")
-            }]
-          }]
-        });
-        expect(modelTextRegistered).toHaveLength(1);
-        expect(modelTextRegistered[0]).toMatchObject({
-          taskId: modelTextAgentId,
-          agentId: modelTextAgentId,
-          agentType: "Explore",
-          childSessionId: "sess_subagent_agent_model_text",
-          outputFile: modelTextOutputFile,
-          parentSessionId: "sess_parent_model_text",
-          parentToolCallId: "call_model_text",
-          status: "stopped"
-        });
-
-        const foregroundRegistered: Record<string, unknown>[] = [];
-        await restoreBackgroundTasks({
-          sessionId: "sess_parent_foreground",
-          runtime: {
-            runtimeTaskRegistry: {
-              register: (task: Record<string, unknown>) => foregroundRegistered.push(task),
-              get: () => undefined
-            }
-          },
-          loadSessionTranscript: async () => [{
-            messageId: "m-foreground",
-            role: "agent",
-            parts: [{
-              type: "tool",
-              toolName: "Agent",
-              toolCallId: "call_foreground",
-              input: {
-                description: "Foreground review",
-                prompt: "Review the renderer",
-                subagent_type: "Explore"
-              },
-              output: [
-                "Foreground review complete.",
-                "agentId: agent_foreground (use SendMessage with to: 'agent_foreground' to continue this agent)",
-                "<usage>tool_uses: 2</usage>"
-              ].join("\n")
-            }]
-          }]
-        });
-        expect(foregroundRegistered).toHaveLength(0);
-      } finally {
-        await rm(outputDirectory, { recursive: true, force: true });
-      }
-
-      // A transient restore failure must not pin the session sentinel; the
-      // next projection poll has to retry the scan.
-      const retryRegistered: Record<string, unknown>[] = [];
-      let retryCalls = 0;
-      const retryApp = {
-        sessionId: "sess_parent_5",
-        runtime: {
-          runtimeTaskRegistry: {
-            register: (task: Record<string, unknown>) => retryRegistered.push(task),
-            get: () => undefined
-          }
-        },
-        loadSessionTranscript: async () => {
-          retryCalls += 1;
-          if (retryCalls === 1) throw new Error("database is locked");
-          return [{
-            info: { id: "m5", role: "assistant" },
-            parts: [{
-              type: "tool",
-              toolName: "Agent",
-              toolCallId: "call_3",
-              output: JSON.stringify({
-                status: "async_launched",
-                agentId: "agent_11",
-                agentType: "Explore",
-                childSessionId: "sess_child_11"
-              })
-            }]
-          }];
-        }
-      };
-      await restoreBackgroundTasks(retryApp);
-      expect(retryRegistered).toHaveLength(0);
-      await restoreBackgroundTasks(retryApp);
-      expect(retryRegistered).toHaveLength(1);
-    }
+    const restoredFixture = subagentRestoreFixture();
+    await restoreBackgroundTasks(restoredFixture.app);
+    expect(restoredFixture.tasks.get("agent")).toMatchObject({
+      status: "completed", parentSessionId: "parent", parentToolCallId: "call", childSessionId: "child"
+    });
+    expect(restoredFixture.reminders).toHaveLength(1);
+    await restoreBackgroundTasks(restoredFixture.app);
+    expect(restoredFixture.reminders).toHaveLength(1);
 
     const restoreBeforeSendStart = patched.indexOf("E.$zSendInputWithoutBackgroundRestore=E.sendInput");
     const restoreBeforeSendEnd = patched.indexOf(",E.recallPreviousInput=", restoreBeforeSendStart);
@@ -1276,21 +1016,7 @@ describe("runtime synchronization", () => {
           }
         }
       },
-      loadSessionTranscript: async () => [{
-        messageId: "message-agent",
-        role: "assistant",
-        parts: [{
-          type: "tool",
-          toolName: "Agent",
-          toolCallId: "call-agent",
-          output: JSON.stringify({
-            status: "async_launched",
-            agentId: "agent-message",
-            agentType: "Explore",
-            childSessionId: "sess-child-message"
-          })
-        }]
-      }]
+
     };
     taskMessageBridge.$zRestorePersistedBackgroundTasks = async (app: unknown) => {
       const runtime = (app as typeof taskMessageApp).runtime;
@@ -1332,6 +1058,8 @@ describe("runtime synchronization", () => {
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     const legacyRestorePatch = patched.replace(".restoreTuiBackgroundTasks(", ".legacyRestore(");
     expect(patchRuntimeTuiBridge(legacyRestorePatch)).toContain(".restoreTuiBackgroundTasks(");
+    const previousRestorePatch = patched.replace(/,\(queryInit\(\),reducerInit\(\),\{collectChildSessionIds:[^}]+\}\)/u, "");
+    expect(patchRuntimeTuiBridge(previousRestorePatch)).toContain("projectChildEvents:e=>new NativeReducer().reduce(e)");
     const previousInterruptPatch = patched.replace("e?.waitForIdle===!0", "e?.waitForIdle===!1");
     expect(patchRuntimeTuiBridge(previousInterruptPatch)).toContain("e?.waitForIdle===!0");
     expect(() => patchRuntimeTuiBridge("incompatible runtime")).toThrow(/incompatible/);
