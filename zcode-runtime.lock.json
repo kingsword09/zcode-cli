@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "appVersion": "3.14.3",
+  "appVersion": "3.14.4",
   "platform": "linux",
   "arch": "x64",
-  "url": "https://cdn-zcode.z.ai/zcode/electron/releases/3.14.3/linux-x64/ZCode-3.14.3-linux-x64.deb",
-  "sha512": "VDYryL9bIYjM3uxRNJ8sRw5S5z9LBmRvvW1amQ9wEnhJBMc3Rlb2g8JvxWv04CPn0GgKHEJEZmWmLZuI6EYg1g=="
+  "url": "https://cdn-zcode.z.ai/zcode/electron/releases/3.14.4/linux-x64/ZCode-3.14.4-linux-x64.deb",
+  "sha512": "CMaAUbHehEEGuClDJeJI30ufA0zAgzfXgzV4ES200EuGDt0yYhEpzvtjayxvE/ag9T9ThnDg1eP4o3j9HkCHKg=="
 }
