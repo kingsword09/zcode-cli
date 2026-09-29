@@ -156,6 +156,23 @@ add these operations to the minified runtime bridge. The TUI queries
 `plugins/referenceCatalog` through the same client and inserts native
 `plugin://` links for `@` Plugin completion.
 
+A model turn over `zcode app-server` needs two runtime options that the
+protocol agent did not pass. It started its worker registry without the
+standalone credential store, so `session/create` reported
+`settings.model.available: []` and every turn failed with `CONFIGURATION_ERROR`
+"Select a model before continuing"; and it kept the host's own provider request
+auth port, which asks the client for request headers that only the Electron host
+answers, so a turn that got a model failed with `model_request_failed`. The
+`app-server-standalone-auth` runtime patch passes the standalone options and the
+registry's own request auth port, reading every symbol it needs from the code:
+the registry starter from the `startProcessProviderRegistryRuntime` export map,
+the env alias from the agent's own local, the refresh callbacks from the
+`--prompt` call site, and the registry from the app factory object. It is
+`optional` because that shape is verified against the 3.14 runtime only, so an
+upstream rename records a `skipped` capability rather than blocking a release.
+`test/sync-runtime.test.ts` covers both edits, idempotency, the unrelated
+registry and app factory sites it must not touch, and the skip path.
+
 Browser automation is enabled by the launcher only for agent-producing
 invocations:
 

@@ -13,6 +13,7 @@ import {
   chooseArtifact,
   extractRuntimeCapabilities,
   formatRuntimeCompatibilityFailure,
+  hasRuntimeAppServerStandaloneAuth,
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
@@ -24,6 +25,7 @@ import {
   parseRuntimePatchReports,
   parseRuntimeLock,
   patchRuntimeAgentAutoBackground,
+  patchRuntimeAppServerStandaloneAuth,
   patchRuntimeCliHelpContract,
   patchRuntimeDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
@@ -37,6 +39,7 @@ import {
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge as patchExtractedRuntimeTuiBridge,
   runtimeSubagentQueryBridge,
+  runtimePatchPlan,
   patchRuntimeTuiExecutionState,
   patchRuntimeZaiDesktopOAuth,
   resolveArtifactUrl,
@@ -68,6 +71,64 @@ function bridgeFunction(...args: string[]): (...values: unknown[]) => unknown {
     () => {}, () => {}, fixtureSubagentQueries.collectChildSessionIds, fixtureSubagentQueries.projectSubagents,
     class { reduce(events: unknown[]) { return fixtureSubagentQueries.projectChildEvents(events); } });
 }
+
+interface AppServerRuntimeNames {
+  agent: string;
+  app: string;
+  callbacks: string;
+  env: string;
+  host: string;
+  late: string;
+  noise: string;
+  other: string;
+  registry: string;
+  starter: string;
+  storage: string;
+}
+
+// Mirrors the minified 3.14 protocol agent: the export map names the registry
+// starter, the agent forwards its own env alias to that starter, logs the
+// provider registry event, and only then builds the host app factory. Other
+// runtimes, hosts and surfaces share the same wrappers, so the fixture keeps
+// them as decoys around the two sites the patch must reach.
+function appServerStandaloneFixture({
+  agent, app, callbacks, env, host, late, noise, other, registry, starter, storage
+}: AppServerRuntimeNames): string {
+  return [
+    `setZCodePluginEnabled:()=>oOo,startProcessProviderRegistryRuntime:()=>${starter},runZCodeProtocolAgent:()=>${agent},`,
+    `function ${agent}(e={}){let input=e.input??process.stdin,out=e.output??process.stdout;let ${env}=e.env??process.env;`,
+    `g=await u3e({create:r(()=>${storage}({dbPath:"zcode.sqlite",output:out,onProgress:r(()=>{},"onProgress")}),"create")});`,
+    `${registry}=await u3e({create:r(()=>${starter}(${env}),"create"),disposeLate:r(Fe=>Fe.dispose(),"disposeLate")}),`,
+    // A second worker registry above the event forwards another argument.
+    `t=await u3e({create:r(()=>${starter}(${other}),"create")}),`,
+    `e.lifecycle?.signal.throwIfAborted(),u.info("Worker Provider Registry",{accountRevision:${registry}.snapshot.sourceRevisions.account,`,
+    `event:"zcode_protocol.provider_registry.ready",providerCount:${registry}.snapshot.registry.providers.length});`,
+    // An unrelated host builds its own app factory from a different registry.
+    `let ${noise}={createZCodeApp:r((F={})=>${app}({...FYa(LYa(F,n),${noise}.runtime.registryService,`,
+    `${noise}.runtime.personalDefaults),env:e.env})};`,
+    `let bt=_=new ${host}({createZCodeApp:r((F={})=>${app}({...FYa(LYa(F,n),${registry}.runtime.registryService,`,
+    `${registry}.configuredDefaultModelSelection),resolveEffectiveModelSelection:r(kt=>kt,"resolveEffectiveModelSelection"),`,
+    `env:{...K,...F.env}}),createProviderEndpointRoutingPort:r(()=>Ze({env:${env}}),"createProviderEndpointRoutingPort")});return bt}`,
+    // `--prompt` supplies the standalone options and forwards the registry's
+    // own provider request auth port, which the protocol agent must reuse.
+    `async function runHeadless(e){let ct=s.startProcessProviderRegistryRuntime,`,
+    `z=await ct(e.env??process.env,e.skipUserConfig?{}:{standalone:{...${callbacks}(e.stderr),`,
+    `...s.userConfigPath?{legacyCliUserConfigFilePath:s.userConfigPath}:{}}});`,
+    `return Ae({providerRegistry:z.runtime.registryService,configuredDefaultModelSelection:z.configuredDefaultModelSelection,`,
+    `...z.providerRuntimeHeadersPort?{providerRuntimeHeadersPort:z.providerRuntimeHeadersPort}:{},sessionId:e.sessionId})}`,
+    // A later worker registry passes its own options and must stay untouched.
+    `function ${late}(e){return u3e({create:r(()=>${starter}(${late}Env),"create")})}`
+  ].join("");
+}
+
+const appServerRuntimeNames: AppServerRuntimeNames = {
+  agent: "iZo", app: "jEn", callbacks: "QAe", env: "z", host: "kxt", late: "kk",
+  noise: "noP", other: "otherEnv", registry: "rt", starter: "lkt", storage: "XEn"
+};
+const renamedAppServerRuntimeNames: AppServerRuntimeNames = {
+  agent: "Qz9", app: "App2", callbacks: "nRef", env: "env2", host: "Host2", late: "zz9",
+  noise: "noQ", other: "otherEnv2", registry: "reg2", starter: "Wba", storage: "Stor2"
+};
 
 describe("runtime synchronization", () => {
   test("requires native subagent query and reducer anchors", () => {
@@ -1466,5 +1527,98 @@ describe("runtime synchronization", () => {
       reasoningDeltaChars: 0,
       chunkCounts: { "tool-input-start": 1 }
     })).toBe(true);
+  });
+
+  test.each([
+    ["3.14.0 symbols", appServerRuntimeNames],
+    ["renamed symbols", renamedAppServerRuntimeNames]
+  ])("gives the app-server protocol agent the standalone credentials its turns need (%s)", (_label, names) => {
+    const runtime = appServerStandaloneFixture(names);
+    expect(hasRuntimeAppServerStandaloneAuth(runtime)).toBe(false);
+    const patched = patchRuntimeAppServerStandaloneAuth(runtime);
+
+    // 1. the worker registry is started with the standalone credential store,
+    //    otherwise no `account:*` provider exists and every turn stops with
+    //    CONFIGURATION_ERROR "Select a model before continuing".
+    expect(patched).toContain(
+      `create:r(()=>${names.starter}(${names.env},{standalone:{...${names.callbacks}(process.stderr)}}),"create")`
+    );
+    // 2. the app factory receives the registry's own provider request auth
+    //    port, otherwise the host keeps asking the client for request headers.
+    expect(patched).toContain(
+      `${names.registry}.runtime.registryService,${names.registry}.configuredDefaultModelSelection),`
+      + `...${names.registry}.providerRuntimeHeadersPort?`
+      + `{providerRuntimeHeadersPort:${names.registry}.providerRuntimeHeadersPort}:{},`
+    );
+    expect(hasRuntimeAppServerStandaloneAuth(patched)).toBe(true);
+    expect(patchRuntimeAppServerStandaloneAuth(patched)).toBe(patched);
+  });
+
+  test("leaves unrelated worker registry and app factory sites alone", () => {
+    const names = appServerRuntimeNames;
+    const runtime = appServerStandaloneFixture(names);
+    const patched = patchRuntimeAppServerStandaloneAuth(runtime);
+
+    // Storage, the second registry above the event, the unrelated host factory
+    // and the later registry all keep their own arguments and options.
+    expect(patched).toContain(`create:r(()=>${names.storage}({dbPath:"zcode.sqlite"`);
+    expect(patched).toContain(`create:r(()=>${names.starter}(${names.other}),"create")`);
+    expect(patched).toContain(`create:r(()=>${names.starter}(${names.late}Env),"create")`);
+    expect(patched).toContain(
+      `createZCodeApp:r((F={})=>${names.app}({...FYa(LYa(F,n),${names.noise}.runtime.registryService,`
+      + `${names.noise}.runtime.personalDefaults),env:e.env})`
+    );
+    expect(patched).toContain(`standalone:{...${names.callbacks}(e.stderr),`);
+    // Exactly one registry gained the standalone options and one factory the
+    // request auth port; the headless path already passed both.
+    expect(patched.split(`create:r(()=>${names.starter}(${names.env},{`).length - 1).toBe(1);
+    expect(patched.split(`...${names.registry}.providerRuntimeHeadersPort?`).length - 1).toBe(1);
+    expect(patched).toContain(`standalone:{...${names.callbacks}(process.stderr)`);
+  });
+
+  test("reports app-server standalone auth as already_present on a later sync", () => {
+    const entry = runtimePatchPlan.find(patch => patch.id === "app-server-standalone-auth");
+    expect(entry?.requirement).toBe("optional");
+    const runtime = appServerStandaloneFixture(renamedAppServerRuntimeNames);
+    const first = applyRuntimePatchPlan(runtime, [entry!]);
+
+    expect(first.reports).toEqual([{
+      id: "app-server-standalone-auth", requirement: "optional", status: "applied"
+    }]);
+    const second = applyRuntimePatchPlan(first.runtime, [entry!]);
+    expect(second.runtime).toBe(first.runtime);
+    expect(second.reports).toEqual([{
+      id: "app-server-standalone-auth", requirement: "optional", status: "already_present"
+    }]);
+  });
+
+  test("records a skip with the moved anchor instead of guessing", () => {
+    const entry = runtimePatchPlan.find(patch => patch.id === "app-server-standalone-auth");
+    const names = appServerRuntimeNames;
+    const runtime = appServerStandaloneFixture(names);
+
+    expect(() => patchRuntimeAppServerStandaloneAuth(
+      runtime.replace('event:"zcode_protocol.provider_registry.ready"', "event:\"zcode_protocol.registry.ready\"")
+    )).toThrow(/provider registry event anchor missing/);
+    expect(() => patchRuntimeAppServerStandaloneAuth(
+      runtime.replace("startProcessProviderRegistryRuntime:()=>", "startLegacyRegistry:()=>")
+    )).toThrow(/provider registry call anchor missing/);
+    expect(() => patchRuntimeAppServerStandaloneAuth(
+      runtime.replace(`standalone:{...${names.callbacks}(`, "standalone:{credentialCallbacks:")
+    )).toThrow(/provider registry call anchor missing/);
+    expect(() => patchRuntimeAppServerStandaloneAuth(
+      runtime.replace(`,${names.registry}.configuredDefaultModelSelection),`, `,${names.registry}.configuredDefaults),`)
+    )).toThrow(/createZCodeApp registry anchor missing/);
+    // Two matching hosts would make the factory anchor ambiguous.
+    expect(() => patchRuntimeAppServerStandaloneAuth(runtime + runtime)).toThrow(
+      /createZCodeApp registry anchor missing/
+    );
+
+    const result = applyRuntimePatchPlan(
+      runtime.replace(`,${names.registry}.configuredDefaultModelSelection),`, `,${names.registry}.configuredDefaults),`),
+      [entry!]
+    );
+    expect(result.reports[0]?.status).toBe("skipped");
+    expect(result.reports[0]?.message).toContain("createZCodeApp registry anchor missing");
   });
 });
