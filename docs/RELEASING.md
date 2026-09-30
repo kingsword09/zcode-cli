@@ -69,27 +69,49 @@ shebang directly, with no post-build rewrite. The compiled TUI is injected into
 
 ## Commit preview packages
 
-`.github/workflows/release-commit.yml` builds previews for pull requests, pushes
-to `main`, and manual workflow runs. It checks out the PR's head commit, builds
-the locked runtime, runs the release checks, and install-tests the npm tarball.
-The exact tested tarball is uploaded to pkg.pr.new without repacking it.
+To request a preview of an open PR (including a contributor's fork),
+**kingsword09** posts a new PR conversation comment containing exactly:
+
+```text
+/pkg-pr-new
+```
+
+Only GitHub user ID `19650362` may request PR previews. Other commenters,
+edited comments, commands in code blocks, regular issues, and reruns by other
+accounts are ignored or rejected. New PR commits do not publish automatically;
+post the command again to test the updated commit.
+
+The comment workflow must first be merged into `main`: GitHub runs
+`issue_comment` workflows from the default branch. The owner can also run
+**Publish commit preview** from Actions on `main`, with an optional
+`pull_request` number. An empty number previews `main`. Pushes to `main` retain
+their automatic preview builds.
+
+`.github/workflows/release-commit.yml` resolves and pins the PR's head SHA in a
+trusted authorization job, builds that exact commit with a read-only token,
+runs the release checks, and install-tests the npm tarball. The exact tested
+tarball is uploaded to pkg.pr.new without repacking it. PR scripts receive no
+repository-write or npm-publishing credentials. A separate job running only
+the trusted workflow revision posts the result and logs link back to the PR.
+Unauthorized comments cannot cancel an active preview build.
 
 Install the [pkg-pr-new GitHub App](https://github.com/apps/pkg-pr-new) on this
 repository before the first preview publication. No npm token or npm publish
 permission is needed. The publisher is pinned in `devDependencies` and `bun.lock`.
 
-The app updates a PR comment with a commit-specific preview link. The workflow
-summary also gives the command to test an existing session:
+The workflow posts a commit-specific preview link, or a failure with its logs.
+Use the link in that comment or the workflow summary to test an existing session:
 
 ```bash
-npx --yes https://pkg.pr.new/zcode-app-cli@<commit-sha> --resume <session-id>
+npx --yes https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@<commit-sha> --resume <session-id>
 ```
 
 Use the exact URL emitted by the successful workflow. This runs the preview
 without replacing the globally installed CLI. It uses the user's normal session
 store, so the tester can verify their affected sessions. Record the preview URL
 with the test result: preview tarballs retain the source package version, while
-their URLs identify the commit. They do not update npm's `latest` tag or create
+their URLs identify the commit. Mutable branch and PR-number aliases are not
+used by comment-triggered previews. They do not update npm's `latest` tag or create
 a release tag. The tested tarball is also retained as a workflow artifact for
 14 days, including when pkg.pr.new publication fails.
 

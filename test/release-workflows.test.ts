@@ -25,7 +25,8 @@ interface WorkflowStep {
 
 interface WorkflowJob {
   if?: string;
-  needs?: string;
+  needs?: string | string[];
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean };
   outputs?: Record<string, unknown>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
@@ -79,13 +80,14 @@ describe("release workflows", () => {
     const build = steps.findIndex(step => step.run === "bun run release:build");
     const pack = steps.findIndex(step => step.id === "pack");
     const publish = steps.findIndex(step => step.name === "Publish commit package");
-    expect(workflow.on).toHaveProperty("pull_request");
+    expect(workflow.on).toHaveProperty("issue_comment");
+    expect(workflow.on).not.toHaveProperty("pull_request");
     expect(workflow.on).toHaveProperty("push");
     expect(workflow.on).toHaveProperty("workflow_dispatch");
     expect(workflow.on).not.toHaveProperty("pull_request_target");
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(checkout?.with?.["persist-credentials"]).toBe(false);
-    expect(checkout?.with?.ref).toBe("${{ github.event.pull_request.head.sha || github.sha }}");
+    expect(checkout?.with?.ref).toBe("${{ needs.resolve.outputs.sha }}");
     expect(build).toBeGreaterThan(-1);
     expect(pack).toBeGreaterThan(build);
     expect(publish).toBeGreaterThan(pack);
@@ -94,11 +96,47 @@ describe("release workflows", () => {
     expect(steps[publish]?.env?.PREVIEW_TARBALL).toBe("${{ steps.pack.outputs.tarball }}");
     expect(steps[publish]?.run).toContain('bun run pkg-pr-new publish "$PREVIEW_TARBALL"');
     expect(steps[publish]?.run).toContain("--commentWithSha");
+    expect(steps[publish]?.run).toContain("--comment=off");
+    expect(steps[publish]?.run).toContain("--no-compact");
     expect(steps[publish]?.run).toContain("--bin");
     expect(source).not.toContain("NPM_TOKEN");
     expect(source).not.toContain("npm publish");
     expect(source).not.toContain("id-token: write");
     expect(source).not.toContain("bunx");
+  });
+
+  test("authorizes owner comments before running PR code and isolates the comment writer", async () => {
+    const { source, workflow } = await readWorkflow("release-commit.yml");
+    const resolveJob = workflow.jobs.resolve!;
+    const preview = workflow.jobs.preview!;
+    const report = workflow.jobs.report!;
+    expect(workflow.on.issue_comment).toEqual({ types: ["created"] });
+    expect(resolveJob.if).toContain("github.actor_id == '19650362'");
+    expect(resolveJob.if).toContain("github.triggering_actor == 'kingsword09'");
+    expect(resolveJob.if).toContain("github.event.comment.user.id == 19650362");
+    expect(resolveJob.if).toContain("github.event.comment.body == '/pkg-pr-new'");
+    expect(resolveJob.if).toContain("github.event.issue.pull_request");
+    expect(resolveJob.if).toContain("github.ref_name == github.event.repository.default_branch");
+    expect(resolveJob.permissions).toEqual({ contents: "read", "pull-requests": "read" });
+    expect(preview.permissions).toEqual({ contents: "read" });
+    expect(preview.needs).toBe("resolve");
+    expect(preview.if).toContain("github.triggering_actor == 'kingsword09'");
+    expect(workflow.concurrency).toBeUndefined();
+    expect(preview.concurrency?.group).toContain("needs.resolve.outputs.pr_number");
+    expect(preview.concurrency?.["cancel-in-progress"]).toBe(true);
+    expect(report.needs).toEqual(["resolve", "preview"]);
+    expect(report.permissions).toEqual({ contents: "read", "pull-requests": "write" });
+    expect(report.if).toContain("github.triggering_actor == 'kingsword09'");
+    expect(report.if).toContain("needs.preview.result == 'success'");
+    expect(report.if).toContain("needs.preview.result == 'failure'");
+    for (const job of [resolveJob, report]) {
+      const checkout = findAction(job.steps, "actions/checkout", actionShas.checkout);
+      expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
+      expect(checkout?.with?.["persist-credentials"]).toBe(false);
+      expect(job.steps.some(step => step.run?.includes("bun install"))).toBe(false);
+    }
+    expect(preview.steps.some(step => step.env?.GH_TOKEN || step.env?.GITHUB_TOKEN)).toBe(false);
+    expect(source).not.toContain("${{ github.event.comment.body }}");
   });
 
   test("runs read-only CI with pinned actions and cancels superseded checks", async () => {

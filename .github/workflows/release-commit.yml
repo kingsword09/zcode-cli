@@ -4,24 +4,66 @@ on:
   push:
     branches:
       - main
-  pull_request:
+  issue_comment:
+    types: [created]
   workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Open PR number (empty publishes the default branch)
+        required: false
+        type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: zcode-cli-preview-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  preview:
+  resolve:
+    if: >-
+      github.repository == 'kingsword09/zcode-cli' &&
+      github.ref_name == github.event.repository.default_branch &&
+      (github.event_name == 'push' ||
+        (github.actor_id == '19650362' && github.triggering_actor == 'kingsword09' &&
+          (github.event_name == 'workflow_dispatch' ||
+            (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+              github.event.comment.user.id == 19650362 && github.event.comment.body == '/pkg-pr-new'))))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+      pr_number: ${{ steps.target.outputs.pr_number }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Authorize and resolve preview commit
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/preview-comment.ts resolve
+
+  preview:
+    needs: resolve
+    if: github.event_name == 'push' || (github.actor_id == '19650362' && github.triggering_actor == 'kingsword09')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    # Job-level concurrency means an unauthorized comment cannot cancel a build.
+    concurrency:
+      group: zcode-cli-preview-${{ needs.resolve.outputs.pr_number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -47,12 +89,16 @@ jobs:
         run: bun run release:pack
 
       - name: Verify release metadata is unchanged
-        run: git diff --exit-code -- package.json zcode-runtime.lock.json
+        env:
+          PREVIEW_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$PREVIEW_SHA"
+          git diff --exit-code -- package.json zcode-runtime.lock.json
 
       - name: Upload tested package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: commit-preview-${{ github.event.pull_request.head.sha || github.sha }}
+          name: commit-preview-${{ needs.resolve.outputs.sha }}
           path: |
             .release/*.tgz
             .release/release.json
@@ -60,13 +106,51 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # Install https://github.com/apps/pkg-pr-new on this repository first.
-      # Upload the exact tarball that passed the install smoke test, without repacking it.
+      # The app must be installed on this repository. PR code receives no write
+      # token; the separate trusted job below posts the result to the right PR.
       - name: Publish commit package
         env:
           PREVIEW_TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: bun run pkg-pr-new publish "$PREVIEW_TARBALL" --bin --comment=update --commentWithSha --no-template --json .release/preview.json
+        run: bun run pkg-pr-new publish "$PREVIEW_TARBALL" --bin --comment=off --commentWithSha --no-compact --no-template --json .release/preview.json
 
-      - name: Show preview command
+      - name: Verify published URL and show preview command
+        env:
+          PREVIEW_SHA: ${{ needs.resolve.outputs.sha }}
         run: |
-          jq -r '.packages[] | "Preview package: \(.url)\n\n```sh\nnpx --yes \(.url) --resume <session-id>\n```"' .release/preview.json >> "$GITHUB_STEP_SUMMARY"
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const { packages } = JSON.parse(readFileSync('.release/preview.json', 'utf8'));
+          const expected = `https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@${process.env.PREVIEW_SHA}`;
+          if (packages.length !== 1 || packages[0].name !== 'zcode-app-cli' || packages[0].url !== expected) {
+            throw new Error('Published package does not match the selected preview commit.');
+          }
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Preview package: ${expected}\n\n\`\`\`sh\nnpx --yes ${expected}\n\`\`\`\n`);
+          NODE
+
+  report:
+    needs: [resolve, preview]
+    if: >-
+      always() && needs.resolve.result == 'success' && needs.resolve.outputs.pr_number != '' &&
+      (needs.preview.result == 'success' || needs.preview.result == 'failure') &&
+      github.actor_id == '19650362' && github.triggering_actor == 'kingsword09'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Post preview result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          PREVIEW_SHA: ${{ needs.resolve.outputs.sha }}
+          PREVIEW_RESULT: ${{ needs.preview.result }}
+        run: node scripts/preview-comment.ts report
