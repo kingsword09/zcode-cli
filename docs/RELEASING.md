@@ -160,13 +160,11 @@ validated runtime to continue. Session cache aggregation lives in the local TUI
 and reads persisted messages through the adapter, so upstream minifier symbol
 changes do not affect it.
 
-`app-server-standalone-auth` is optional because its minified shape is proven
-against the 3.14 runtime only. It gives the `app-server` protocol agent the same
-standalone credential store and provider request auth port that `--prompt` and
-the TUI already pass, which is what lets a turn run on a standalone Z.AI login.
-Every other registry or app factory site keeps its own options. When upstream
-moves either anchor the patch throws with the anchor name, the plan records a
-`skipped` capability, and `bun run check` reports it instead of guessing.
+`app-server-standalone-auth` is required. It enables local CLI credentials by
+default while preserving explicit Host authentication. Missing or ambiguous
+protocol anchors and partial auth injections stop synchronization; a release
+must not silently lose account-backed app-server turns. Runtime tests exercise
+both credential owners against a local HTTPS model fixture.
 
 If a required compatibility check fails, synchronization writes JSON and
 Markdown reports under `.release/`. The scheduled workflow uploads both files

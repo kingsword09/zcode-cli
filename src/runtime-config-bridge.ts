@@ -7,6 +7,7 @@ export { assertSessionModelReady, readSessionModelState } from "./session-model-
 export { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage } from "./runtime-tui-bridge.ts";
 export { restoreTuiBackgroundTasks } from "./runtime-background-restore.ts";
 export { installSqliteWriteRecovery, pruneSqliteUsage, sqliteRecoveryStats } from "./runtime-sqlite-recovery.ts";
+export { appServerRegistryOptions } from "./app-server-auth.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;

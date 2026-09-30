@@ -93,7 +93,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || patchRuntimeStreamEofFinishGuard(runtimeSource) !== runtimeSource
   || !hasRuntimeStreamEofFinishGuard(runtimeSource)
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
-  || (patchEnabled("app-server-standalone-auth") && !hasRuntimeAppServerStandaloneAuth(runtimeSource))
+  || !hasRuntimeAppServerStandaloneAuth(runtimeSource)
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
   || !runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes('return await import("playwright-core")')

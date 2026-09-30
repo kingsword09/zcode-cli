@@ -27,6 +27,29 @@ CLI 通用设置仍使用用户目录中的 `~/.zcode/cli/setting.json`。
 [Provider 配置字段参考](PROVIDER_CONFIG.zh-CN.md) 列出了全部个人配置字段、桌面端字段对应关系
 及上游目录继承规则。
 
+## App-server 登录与鉴权
+
+`zcode app-server` 默认使用 `standalone` 模式，读取 CLI 登录保存的原生凭据，
+并在请求模型时自行提供鉴权信息。使用账号模型前先运行 `zcode login`。
+
+如果调用方自己管理账号，启动服务时显式选择 `host`：
+
+```bash
+ZCODE_APP_SERVER_AUTH_MODE=host zcode app-server
+```
+
+程序启动子进程时，在其环境变量中设置 `ZCODE_APP_SERVER_AUTH_MODE: "host"` 即可。
+该模式保留 `provider/updateAccountConfig` 和 `interaction/requestProviderRuntimeHeaders`，
+由客户端负责账号更新和请求凭据刷新，不读取本机的 standalone 凭据文件。
+
+模式在服务启动时确定，切换需要重启。凭据缺失或鉴权失败不会自动改用另一方的账号；
+模式名称无效时启动失败。Standalone 模式拒绝客户端覆盖账号配置。
+两种模式都保留通过原生 provider 配置使用个人 API key 的能力。
+
+设计参考 [Codex app-server 的鉴权模式](https://developers.openai.com/codex/app-server#authentication-modes)，
+明确区分谁负责管理凭据。ZCode 使用启动配置选择模式并保留自己的协议，
+没有实现 Codex 的 `account/login/start`、`account/read` 接口。
+
 ## 启动迁移
 
 CLI 参考桌面端迁移规则，使用 runtime 的原生解析器和带文件锁的 provider 仓库。

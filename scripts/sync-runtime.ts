@@ -14,6 +14,8 @@ import {
 } from "../src/runtime-capabilities.ts";
 import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts";
 import { markRuntimeModified } from "./runtime-attribution.ts";
+import { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
+export { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
 import {
   hasRuntimeSqliteBusyTimeout, hasRuntimeSqliteWriteRecovery,
   patchRuntimeSqliteBusyTimeout, patchRuntimeSqliteWriteRecovery
@@ -1526,75 +1528,6 @@ export function hasRuntimeRegistryLoginModelDefaults(runtime: string): boolean {
     && runtime.includes('"persistStandaloneCodingPlanConnection"');
 }
 
-const appServerRegistryReadyEvent = 'event:"zcode_protocol.provider_registry.ready"';
-// The protocol agent keeps its env alias a statement above the registry call,
-// and builds the app factory object right after logging that event.
-const appServerRegistryEnvWindow = 400;
-const appServerFactoryWindow = 300;
-const appServerStandaloneMarker = /create:r\(\(\)=>[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\{standalone:\{\.\.\.[A-Za-z_$][\w$]*\(process\.stderr\)\}\}\),"create"\)/u;
-const appServerRequestAuthMarker = /([A-Za-z_$][\w$]*)\.configuredDefaultModelSelection\),\.\.\.\1\.providerRuntimeHeadersPort\?\{providerRuntimeHeadersPort:\1\.providerRuntimeHeadersPort\}:\{\},/u;
-
-/** Let the protocol agent reuse the standalone credentials `--prompt` and the TUI pass. */
-export function patchRuntimeAppServerStandaloneAuth(runtime: string): string {
-  let patched = runtime;
-  if (!appServerStandaloneMarker.test(patched)) {
-    // 1. The protocol agent starts its own worker registry without the
-    // standalone credential store, so no `account:*` provider is published:
-    // `session/create` reports an empty model catalog and every turn fails
-    // with CONFIGURATION_ERROR "Select a model before continuing".
-    const ready = patched.indexOf(appServerRegistryReadyEvent);
-    const starter = /startProcessProviderRegistryRuntime:\(\)=>([A-Za-z_$][\w$]*)/u.exec(patched)?.[1];
-    const refreshCallbacks = /standalone:\{\.\.\.([A-Za-z_$][\w$]*)\(/u.exec(patched)?.[1];
-    if (ready < 0) {
-      throw new Error("ZCode runtime is incompatible with app-server standalone auth (provider registry event anchor missing).");
-    }
-    // Several runtimes start deferred resources with the same `create:r(...)`
-    // wrapper. Keep only the one that passes the agent's own env alias, and
-    // never guess when the name it forwards is not that alias.
-    const before = patched.slice(0, ready);
-    const site = starter && [...before.matchAll(new RegExp(
-      `create:r\\(\\(\\)=>${escapeRegExpName(starter)}\\(([A-Za-z_$][\\w$]*)\\),"create"\\)`, "gu"
-    ))].filter(match => new RegExp(
-      `${escapeRegExpName(match[1])}=[A-Za-z_$][\\w$]*\\.env\\?\\?process\\.env;`, "u"
-    ).test(before.slice(Math.max(0, match.index - appServerRegistryEnvWindow), match.index))).at(-1);
-    if (!refreshCallbacks || !site) {
-      throw new Error("ZCode runtime is incompatible with app-server standalone auth (provider registry call anchor missing).");
-    }
-    patched = [
-      before.slice(0, site.index),
-      `create:r(()=>${starter}(${site[1]},{standalone:{...${refreshCallbacks}(process.stderr)}}),"create")`,
-      before.slice(site.index + site[0].length),
-      patched.slice(ready)
-    ].join("");
-  }
-  if (!appServerRequestAuthMarker.test(patched)) {
-    // 2. Standalone registries answer provider request auth themselves, while
-    // the protocol host's own port asks the client (the Electron host) for
-    // headers. Without the registry port every turn then fails with
-    // model_request_failed on the missing `headersApplied` union member.
-    const app = new RegExp(
-      `createZCodeApp:(?:(?!createZCodeApp:)[\\s\\S]){0,${appServerFactoryWindow}}?`
-      + "([A-Za-z_$][\\w$]*)\\.runtime\\.registryService,\\1\\.configuredDefaultModelSelection\\),",
-      "gu"
-    );
-    const factories = [...patched.matchAll(app)];
-    if (factories.length !== 1) {
-      throw new Error("ZCode runtime is incompatible with app-server standalone auth (createZCodeApp registry anchor missing).");
-    }
-    const registry = factories[0][1];
-    patched = patched.replace(
-      app,
-      `$&...${registry}.providerRuntimeHeadersPort?{providerRuntimeHeadersPort:${registry}.providerRuntimeHeadersPort}:{},`
-    );
-  }
-  return patched;
-}
-
-/** Detect both standalone-auth injections the protocol agent needs. */
-export function hasRuntimeAppServerStandaloneAuth(runtime: string): boolean {
-  return appServerStandaloneMarker.test(runtime) && appServerRequestAuthMarker.test(runtime);
-}
-
 const goalFailurePauseMarker = /finishTargetTurnAccounting\(\{[^{}]*?status:"paused",traceContext:/u;
 const terminalProjectionMarkers = [
   'status:"idle",currentTurnId:void 0,activeToolCalls:[],totalTokenCount:',
@@ -1721,10 +1654,8 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     verify: hasRuntimeCliHelpContract
   },
   {
-    // 3.14.0 only: the shape is proven against one upstream runtime, so an
-    // unexpected upstream build records a skip instead of blocking a release.
     id: "app-server-standalone-auth",
-    requirement: "optional",
+    requirement: "required",
     apply: patchRuntimeAppServerStandaloneAuth,
     verify: hasRuntimeAppServerStandaloneAuth
   }

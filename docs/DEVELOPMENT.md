@@ -156,22 +156,22 @@ add these operations to the minified runtime bridge. The TUI queries
 `plugins/referenceCatalog` through the same client and inserts native
 `plugin://` links for `@` Plugin completion.
 
-A model turn over `zcode app-server` needs two runtime options that the
-protocol agent did not pass. It started its worker registry without the
-standalone credential store, so `session/create` reported
-`settings.model.available: []` and every turn failed with `CONFIGURATION_ERROR`
-"Select a model before continuing"; and it kept the host's own provider request
-auth port, which asks the client for request headers that only the Electron host
-answers, so a turn that got a model failed with `model_request_failed`. The
-`app-server-standalone-auth` runtime patch passes the standalone options and the
-registry's own request auth port, reading every symbol it needs from the code:
-the registry starter from the `startProcessProviderRegistryRuntime` export map,
-the env alias from the agent's own local, the refresh callbacks from the
-`--prompt` call site, and the registry from the app factory object. It is
-`optional` because that shape is verified against the 3.14 runtime only, so an
-upstream rename records a `skipped` capability rather than blocking a release.
-`test/sync-runtime.test.ts` covers both edits, idempotency, the unrelated
-registry and app factory sites it must not touch, and the skip path.
+App-server auth selects one credential owner at startup through
+`src/app-server-auth.ts`: `standalone` by default, or explicit
+`ZCODE_APP_SERVER_AUTH_MODE=host`. The native registry owns credential storage
+and refresh; host mode retains the native account-update and request-auth RPCs.
+`scripts/runtime-app-server-patches.ts` uses Acorn to parse the exported protocol
+agent function, links its registry startup to the ready event and app factory,
+and injects registry options plus the registry's auth port. Unrelated functions,
+partial patches, mismatched registries and ambiguous anchors cannot satisfy its
+verification. Acorn is a synchronization-time development dependency.
+
+Run `bun test test/app-server-auth.test.ts test/runtime-app-server-patches.test.ts`
+for mode selection and patch regression tests. After synchronization, run
+`bun test test/runtime/app-server-auth.test.ts` for real protocol turns against
+a local HTTPS model server: local login, credential rotation, host account
+updates and auth callbacks, missing credentials and invalid modes. Tests use
+temporary homes, fake credentials and a test-only loopback certificate.
 
 Browser automation is enabled by the launcher only for agent-producing
 invocations:

@@ -30,6 +30,34 @@ Provider settings are created by native login or configured using
 [provider field reference](PROVIDER_CONFIG.md) explains every supported personal
 configuration field, Desktop editor mapping and automatic catalog inheritance.
 
+## App-server authentication
+
+`zcode app-server` defaults to `standalone` authentication: it reuses the native
+credentials saved by CLI login and supplies its own model-request auth. Log in
+with `zcode login` before starting an account-backed session.
+
+Clients that own account login must explicitly select `host` when spawning the
+server:
+
+```bash
+ZCODE_APP_SERVER_AUTH_MODE=host zcode app-server
+```
+
+For a programmatic launcher, set `ZCODE_APP_SERVER_AUTH_MODE: "host"` in the child
+process environment. Host mode preserves `provider/updateAccountConfig` and
+`interaction/requestProviderRuntimeHeaders`; the client owns account updates
+and request-credential refresh. It does not read the standalone credential file.
+
+The mode is fixed for the server process. Restart to change it. Missing or
+rejected credentials never switch to the other source; an unknown mode fails
+startup. Standalone mode rejects host account updates. Personal API-key providers
+remain available through the native provider configuration in either mode.
+
+This follows the credential-ownership distinction in [Codex app-server
+authentication](https://developers.openai.com/codex/app-server#authentication-modes).
+ZCode selects the mode at startup and retains its native protocol; it does not
+implement Codex's `account/login/start` or `account/read` endpoints.
+
 ## Startup migration
 
 The CLI follows the Desktop migration rules and uses the runtime's native parser

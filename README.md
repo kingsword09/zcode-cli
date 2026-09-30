@@ -481,6 +481,11 @@ Coding Plan API key, or a direct API key with a custom provider. For detailed
 setup steps, retries/timeouts, theme, and turn-completion notifications, see
 [Configuration](./docs/CONFIGURATION.md).
 
+`zcode app-server` reuses local CLI login by default. Clients that supply account
+configuration and request auth must launch it with `ZCODE_APP_SERVER_AUTH_MODE=host`.
+See [app-server authentication](./docs/CONFIGURATION.md#app-server-authentication)
+for credential ownership and protocol behavior.
+
 ## Local development
 
 Install dependencies and start the client with live TypeScript and auto-sync
