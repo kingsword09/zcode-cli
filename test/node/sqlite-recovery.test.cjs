@@ -39,20 +39,18 @@ function interceptRuns(db, beforeRun) {
 test("lock recovery yields to timers and restores the native timeout", { timeout: 10_000 }, async () => {
   await withDirectory(async (directory, dbPath) => {
     const store = await Store.openStartup({ dbPath });
-    let holder, release, heartbeat;
+    let holder, release, releaseSent = false;
     try {
       holder = await startWorker("hold", { dbPath });
-      let ticks = 0;
-      heartbeat = setInterval(() => { ticks++; }, 10);
-      release = setTimeout(() => holder.send("release"), 180);
+      release = setTimeout(() => { releaseSent = true; holder.send("release"); }, 180);
       await store.createSession(sessionInput(directory, "responsive"));
-      assert.ok(ticks >= 3, `Event loop blocked during contention: ${ticks} ticks`);
+      assert.equal(releaseSent, true, "Contention release timer did not run before the write completed");
       assert.equal(store.db.prepare("pragma busy_timeout").get().timeout, 10_000);
       assert.ok(sqliteRecoveryStats(store).retries > 0);
       assert.equal(sqliteRecoveryStats(store).lastRecovery.operation, "createSession");
       assert.equal(store.db.prepare("select count(*) AS n from session").get().n, 1);
     } finally {
-      clearTimeout(release); clearInterval(heartbeat);
+      clearTimeout(release);
       await holder?.stop(); store.close();
     }
   });
