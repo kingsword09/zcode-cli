@@ -99,11 +99,14 @@ Install the [pkg-pr-new GitHub App](https://github.com/apps/pkg-pr-new) on this
 repository before the first preview publication. No npm token or npm publish
 permission is needed. The publisher is pinned in `devDependencies` and `bun.lock`.
 
-The workflow posts a commit-specific preview link, or a failure with its logs.
+The workflow uses pkg.pr.new's default compact URLs and posts the actual returned
+URL as the install command, followed by the full repository URL for the same
+commit. If pkg.pr.new falls back to a full URL, that returned URL is used directly.
+Publication failures report their logs without an install link.
 Use the link in that comment or the workflow summary to test an existing session:
 
 ```bash
-npx --yes https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@<commit-sha> --resume <session-id>
+npx --yes https://pkg.pr.new/zcode-app-cli@<commit-sha> --resume <session-id>
 ```
 
 Use the exact URL emitted by the successful workflow. This runs the preview

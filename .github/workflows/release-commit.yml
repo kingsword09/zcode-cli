@@ -51,6 +51,8 @@ jobs:
 
   preview:
     needs: resolve
+    outputs:
+      url: ${{ steps.published.outputs.url }}
     if: github.event_name == 'push' || (github.actor_id == '19650362' && github.triggering_actor == 'kingsword09')
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -111,20 +113,25 @@ jobs:
       - name: Publish commit package
         env:
           PREVIEW_TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: bun run pkg-pr-new publish "$PREVIEW_TARBALL" --bin --comment=off --commentWithSha --no-compact --no-template --json .release/preview.json
+        run: bun run pkg-pr-new publish "$PREVIEW_TARBALL" --bin --comment=off --commentWithSha --no-template --json .release/preview.json
 
       - name: Verify published URL and show preview command
+        id: published
         env:
           PREVIEW_SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync, appendFileSync } from 'node:fs';
           const { packages } = JSON.parse(readFileSync('.release/preview.json', 'utf8'));
-          const expected = `https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@${process.env.PREVIEW_SHA}`;
-          if (packages.length !== 1 || packages[0].name !== 'zcode-app-cli' || packages[0].url !== expected) {
+          const sha = process.env.PREVIEW_SHA;
+          const url = packages?.[0]?.url;
+          const match = typeof url === 'string' && /^https:\/\/pkg\.pr\.new\/(?:kingsword09\/zcode-cli\/)?zcode-app-cli@([0-9a-f]{7,40})$/.exec(url);
+          if (!/^[0-9a-f]{40}$/.test(sha) || packages.length !== 1 || packages[0].name !== 'zcode-app-cli' || !match || !sha.startsWith(match[1])) {
             throw new Error('Published package does not match the selected preview commit.');
           }
-          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Preview package: ${expected}\n\n\`\`\`sh\nnpx --yes ${expected}\n\`\`\`\n`);
+          const fullUrl = `https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@${sha}`;
+          appendFileSync(process.env.GITHUB_OUTPUT, `url=${url}\n`);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Preview package: ${url}\n\n\`\`\`sh\nnpx --yes ${url}\n\`\`\`\n${url !== fullUrl ? `\nFull repository URL: ${fullUrl}\n` : ''}`);
           NODE
 
   report:
@@ -153,4 +160,5 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
           PREVIEW_SHA: ${{ needs.resolve.outputs.sha }}
           PREVIEW_RESULT: ${{ needs.preview.result }}
+          PREVIEW_URL: ${{ needs.preview.outputs.url }}
         run: node scripts/preview-comment.ts report

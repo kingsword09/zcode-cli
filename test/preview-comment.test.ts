@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { authorizePreview, previewComment, resolvePreviewTarget, type PreviewContext,
+import { authorizePreview, previewComment, previewPackageLinks, resolvePreviewTarget, type PreviewContext,
   type PreviewPullRequest } from "../scripts/preview-comment.ts";
 
 const mainSha = "a".repeat(40), headSha = "b".repeat(40);
@@ -80,13 +80,38 @@ test("default-branch pushes and owner manual runs retain default-branch previews
 });
 
 test("success reports contain the pinned package URL and failures never invent a package link", () => {
-  const success = previewComment(headSha, "success", "12345");
-  expect(success).toContain(`npx --yes https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@${headSha}`);
+  const shortUrl = `https://pkg.pr.new/zcode-app-cli@${headSha.slice(0, 7)}`;
+  const success = previewComment(headSha, "success", "12345", shortUrl);
+  expect(success).toContain(`npx --yes ${shortUrl}`);
+  expect(success).toContain(`[Full repository URL](https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@${headSha})`);
   expect(success).toContain("/actions/runs/12345");
   expect(previewComment(headSha, "failure", "12345")).not.toContain("https://pkg.pr.new");
   expect(() => previewComment(headSha, "cancelled", "12345")).toThrow();
   expect(() => previewComment("`malicious`", "success", "12345")).toThrow();
   expect(() => previewComment(headSha, "success", "12345)evil")).toThrow();
+});
+
+test("publication may return compact or full URLs while preserving the emitted SHA spelling", () => {
+  const fullUrl = `https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@${headSha}`;
+  for (const url of [`https://pkg.pr.new/zcode-app-cli@${headSha.slice(0, 7)}`, `https://pkg.pr.new/zcode-app-cli@${headSha}`, fullUrl]) {
+    expect(previewPackageLinks(headSha, url)).toEqual({ url, fullUrl });
+  }
+  const fallback = previewComment(headSha, "success", "12345", fullUrl);
+  expect(fallback).toContain(`npx --yes ${fullUrl}`);
+  expect(fallback).not.toContain("[Full repository URL]");
+});
+
+test.each([
+  `https://pkg.pr.new/zcode-app-cli@${mainSha.slice(0, 7)}`,
+  `https://pkg.pr.new/other/repo/zcode-app-cli@${headSha}`,
+  `https://evil.test/zcode-app-cli@${headSha}`,
+  `https://pkg.pr.new/another-package@${headSha}`,
+  `https://pkg.pr.new/zcode-app-cli@${headSha}?other=1`,
+  "https://pkg.pr.new/zcode-app-cli@main",
+  "https://pkg.pr.new/zcode-app-cli@bbbbbb",
+  undefined
+])("rejects an unverified preview URL: %s", url => {
+  expect(() => previewPackageLinks(headSha, url)).toThrow();
 });
 
 test("the workflow helper runs in native Node without installing PR dependencies", async () => {

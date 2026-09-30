@@ -79,13 +79,25 @@ export async function resolvePreviewTarget(
   return { sha: commitSha(pull.head.sha), pullRequest: number };
 }
 
-export function previewComment(sha: string, result: string, runId: string): string {
+export function previewPackageLinks(sha: string, publishedUrl: unknown): { url: string; fullUrl: string } {
+  sha = commitSha(sha);
+  const match = typeof publishedUrl === "string"
+    ? /^https:\/\/pkg\.pr\.new\/(?:kingsword09\/zcode-cli\/)?zcode-app-cli@([0-9a-f]{7,40})$/u.exec(publishedUrl)
+    : null;
+  if (!match || !sha.startsWith(match[1]!)) throw new Error("Published package URL does not match the selected preview commit.");
+  return { url: publishedUrl as string, fullUrl: `https://pkg.pr.new/${repository}/zcode-app-cli@${sha}` };
+}
+
+export function previewComment(sha: string, result: string, runId: string, publishedUrl?: string): string {
   sha = commitSha(sha);
   if (!/^\d+$/u.test(runId)) throw new Error("Invalid workflow run ID.");
   const run = `https://github.com/${repository}/actions/runs/${runId}`;
   const lines = [`pkg-pr-new preview for commit \`${sha}\`.`, ""];
   if (result === "success") {
-    lines.push("```sh", `npx --yes https://pkg.pr.new/${repository}/zcode-app-cli@${sha}`, "```", "",
+    const { url, fullUrl } = previewPackageLinks(sha, publishedUrl);
+    lines.push("```sh", `npx --yes ${url}`, "```", "");
+    if (url !== fullUrl) lines.push(`[Full repository URL](${fullUrl})`, "");
+    lines.push(
       "This preview uses the selected commit; later PR updates require another `/pkg-pr-new` comment.");
   } else if (result === "failure") {
     lines.push("The preview build or publication failed. No new preview link is available from this run.");
@@ -126,7 +138,7 @@ async function main() {
     if (number === undefined || number !== pullRequestNumber(process.env.PREVIEW_PR_NUMBER)) {
       throw new Error("Preview result does not belong to the requested PR.");
     }
-    const body = previewComment(process.env.PREVIEW_SHA!, process.env.PREVIEW_RESULT!, process.env.GITHUB_RUN_ID!);
+    const body = previewComment(process.env.PREVIEW_SHA!, process.env.PREVIEW_RESULT!, process.env.GITHUB_RUN_ID!, process.env.PREVIEW_URL);
     // This job only executes the trusted workflow revision, never PR scripts.
     await githubApi(`issues/${number}/comments`, { method: "POST", body: { body } });
   } else {

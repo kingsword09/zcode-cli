@@ -97,7 +97,7 @@ describe("release workflows", () => {
     expect(steps[publish]?.run).toContain('bun run pkg-pr-new publish "$PREVIEW_TARBALL"');
     expect(steps[publish]?.run).toContain("--commentWithSha");
     expect(steps[publish]?.run).toContain("--comment=off");
-    expect(steps[publish]?.run).toContain("--no-compact");
+    expect(steps[publish]?.run).not.toContain("--no-compact");
     expect(steps[publish]?.run).toContain("--bin");
     expect(source).not.toContain("NPM_TOKEN");
     expect(source).not.toContain("npm publish");
@@ -129,6 +129,9 @@ describe("release workflows", () => {
     expect(report.if).toContain("github.triggering_actor == 'kingsword09'");
     expect(report.if).toContain("needs.preview.result == 'success'");
     expect(report.if).toContain("needs.preview.result == 'failure'");
+    expect(preview.outputs?.url).toBe("${{ steps.published.outputs.url }}");
+    expect(report.steps.find(step => step.name === "Post preview result")?.env?.PREVIEW_URL)
+      .toBe("${{ needs.preview.outputs.url }}");
     for (const job of [resolveJob, report]) {
       const checkout = findAction(job.steps, "actions/checkout", actionShas.checkout);
       expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
