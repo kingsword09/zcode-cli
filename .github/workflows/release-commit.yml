@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -22,6 +25,8 @@ jobs:
       github.repository == 'kingsword09/zcode-cli' &&
       github.ref_name == github.event.repository.default_branch &&
       (github.event_name == 'push' ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' &&
+          github.event.workflow_run.conclusion == 'success') ||
         (github.actor_id == '19650362' && github.triggering_actor == 'kingsword09' &&
           (github.event_name == 'workflow_dispatch' ||
             (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
@@ -53,7 +58,10 @@ jobs:
     needs: resolve
     outputs:
       url: ${{ steps.published.outputs.url }}
-    if: github.event_name == 'push' || (github.actor_id == '19650362' && github.triggering_actor == 'kingsword09')
+    if: >-
+      needs.resolve.outputs.sha != '' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_run' ||
+        (github.actor_id == '19650362' && github.triggering_actor == 'kingsword09'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -139,7 +147,8 @@ jobs:
     if: >-
       always() && needs.resolve.result == 'success' && needs.resolve.outputs.pr_number != '' &&
       (needs.preview.result == 'success' || needs.preview.result == 'failure') &&
-      github.actor_id == '19650362' && github.triggering_actor == 'kingsword09'
+      (github.event_name == 'workflow_run' ||
+        (github.actor_id == '19650362' && github.triggering_actor == 'kingsword09'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

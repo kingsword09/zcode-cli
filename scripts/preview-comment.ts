@@ -19,6 +19,15 @@ export interface PreviewContext {
     comment?: { body?: string; user?: { id?: number } };
     issue?: { number?: number; pull_request?: object };
     inputs?: { pull_request?: string };
+    workflow_run?: {
+      name?: string;
+      path?: string;
+      event?: string;
+      conclusion?: string;
+      head_sha?: string;
+      repository?: { full_name?: string };
+      pull_requests?: { number: number }[];
+    };
   };
 }
 
@@ -41,6 +50,16 @@ export function authorizePreview(context: PreviewContext): number | undefined {
     throw new Error("Preview requests must use this repository's default-branch workflow.");
   }
   if (context.eventName === "push") return undefined;
+  if (context.eventName === "workflow_run") {
+    const run = context.event.workflow_run;
+    if (context.event.action !== "completed" || run?.name !== "CI"
+      || run.path !== ".github/workflows/ci.yml" || run.event !== "pull_request"
+      || run.conclusion !== "success" || run.repository?.full_name !== repository) {
+      throw new Error("Automatic previews require a successful PR CI run in this repository.");
+    }
+    commitSha(run.head_sha);
+    return undefined;
+  }
   if (context.actorId !== ownerId || context.triggeringActor !== ownerLogin) {
     throw new Error("Only kingsword09 may request or rerun a preview.");
   }
@@ -68,9 +87,26 @@ export interface PreviewPullRequest {
 
 export async function resolvePreviewTarget(
   context: PreviewContext,
-  getPullRequest: (number: number) => Promise<PreviewPullRequest>
-): Promise<{ sha: string; pullRequest?: number }> {
+  getPullRequest: (number: number) => Promise<PreviewPullRequest>,
+  getCommitPullRequests: (sha: string) => Promise<{ number: number }[]> = async () => []
+): Promise<{ sha: string; pullRequest?: number } | undefined> {
   const number = authorizePreview(context);
+  if (context.eventName === "workflow_run") {
+    const run = context.event.workflow_run!;
+    const sha = commitSha(run.head_sha);
+    // GitHub may omit pull_requests on CI runs from forks. Resolve those by
+    // commit, then verify the current PR state before checking out any PR code.
+    const candidates = run.pull_requests?.length ? run.pull_requests : await getCommitPullRequests(sha);
+    const targets: number[] = [];
+    for (const candidate of new Set(candidates.map(pull => pullRequestNumber(pull.number)))) {
+      const pull = await getPullRequest(candidate);
+      if (pull.number === candidate && pull.state === "open" && pull.base.repo.full_name === repository
+        && pull.head.repo && pull.head.sha === sha) targets.push(candidate);
+    }
+    if (targets.length > 1) throw new Error("CI commit matches more than one open PR.");
+    // A superseded CI run must not publish an old commit or cancel a newer build.
+    return targets.length === 1 ? { sha, pullRequest: targets[0]! } : undefined;
+  }
   if (number === undefined) return { sha: commitSha(context.sha) };
   const pull = await getPullRequest(number);
   if (pull.number !== number || pull.state !== "open" || pull.base.repo.full_name !== repository || !pull.head.repo) {
@@ -98,7 +134,7 @@ export function previewComment(sha: string, result: string, runId: string, publi
     lines.push("```sh", `npx --yes ${url}`, "```", "");
     if (url !== fullUrl) lines.push(`[Full repository URL](${fullUrl})`, "");
     lines.push(
-      "This preview uses the selected commit; later PR updates require another `/pkg-pr-new` comment.");
+      "This preview uses the selected commit. PR updates publish automatically after CI succeeds; kingsword09 can also request a preview with `/pkg-pr-new`.");
   } else if (result === "failure") {
     lines.push("The preview build or publication failed. No new preview link is available from this run.");
   } else {
@@ -129,12 +165,29 @@ async function main() {
     triggeringActor: process.env.GITHUB_TRIGGERING_ACTOR!, eventName: process.env.GITHUB_EVENT_NAME!,
     ref: process.env.GITHUB_REF!, sha: process.env.GITHUB_SHA!, event
   };
+  const resolveTarget = () => resolvePreviewTarget(context,
+    number => githubApi(`pulls/${number}`),
+    sha => githubApi(`commits/${sha}/pulls?per_page=100`));
   if (process.argv[2] === "resolve") {
-    const target = await resolvePreviewTarget(context, number => githubApi(`pulls/${number}`));
+    const target = await resolveTarget();
+    if (!target) {
+      await appendFile(process.env.GITHUB_OUTPUT!, "sha=\npr_number=\n");
+      console.log("Skipping CI preview: no open PR still points to the validated commit.");
+      return;
+    }
     await appendFile(process.env.GITHUB_OUTPUT!, `sha=${target.sha}\npr_number=${target.pullRequest ?? ""}\n`);
     console.log(`Selected ${target.pullRequest ? `PR #${target.pullRequest}` : "default branch"} at ${target.sha}.`);
   } else if (process.argv[2] === "report") {
-    const number = authorizePreview(context);
+    let number = authorizePreview(context);
+    if (context.eventName === "workflow_run") {
+      const target = await resolveTarget();
+      if (!target) {
+        console.log("Skipping CI preview report: the PR has closed or moved to another commit.");
+        return;
+      }
+      if (target.sha !== process.env.PREVIEW_SHA) throw new Error("Preview result does not match the CI commit.");
+      number = target.pullRequest;
+    }
     if (number === undefined || number !== pullRequestNumber(process.env.PREVIEW_PR_NUMBER)) {
       throw new Error("Preview result does not belong to the requested PR.");
     }

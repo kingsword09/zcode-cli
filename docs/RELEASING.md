@@ -69,20 +69,26 @@ shebang directly, with no post-build rewrite. The compiled TUI is injected into
 
 ## Commit preview packages
 
-To request a preview of an open PR (including a contributor's fork),
+Open PRs (including contributor forks) publish a preview automatically after
+their **CI** workflow completes successfully. Failed or cancelled CI runs do
+not publish. The workflow checks that the PR is still open and its head still
+matches the CI commit, so superseded runs do not publish stale previews.
+
+To request a preview manually,
 **kingsword09** posts a new PR conversation comment containing exactly:
 
 ```text
 /pkg-pr-new
 ```
 
-Only GitHub user ID `19650362` may request PR previews. Other commenters,
-edited comments, commands in code blocks, regular issues, and reruns by other
-accounts are ignored or rejected. New PR commits do not publish automatically;
-post the command again to test the updated commit.
+Only GitHub user ID `19650362` may request manual PR previews. Other commenters,
+edited comments, commands in code blocks, regular issues, and manual preview
+reruns by other accounts are ignored or rejected. The comment command can
+request a preview without waiting for CI; the preview still runs its own
+release checks before publication.
 
-The comment workflow must first be merged into `main`: GitHub runs
-`issue_comment` workflows from the default branch. The owner can also run
+The preview workflow must first be merged into `main`: GitHub runs
+`workflow_run` and `issue_comment` workflows from the default branch. The owner can also run
 **Publish commit preview** from Actions on `main`, with an optional
 `pull_request` number. An empty number previews `main`. Pushes to `main` retain
 their automatic preview builds.
@@ -114,7 +120,7 @@ without replacing the globally installed CLI. It uses the user's normal session
 store, so the tester can verify their affected sessions. Record the preview URL
 with the test result: preview tarballs retain the source package version, while
 their URLs identify the commit. Mutable branch and PR-number aliases are not
-used by comment-triggered previews. They do not update npm's `latest` tag or create
+used by PR previews. They do not update npm's `latest` tag or create
 a release tag. The tested tarball is also retained as a workflow artifact for
 14 days, including when pkg.pr.new publication fails.
 

@@ -16,6 +16,84 @@ function pull(): PreviewPullRequest {
   return { number: 180, state: "open", base: { repo: { full_name: "kingsword09/zcode-cli" } },
     head: { sha: headSha, repo: { full_name: "contributor/zcode-cli" } } };
 }
+function ciContext(): PreviewContext {
+  return { repository: "kingsword09/zcode-cli", actorId: "1", triggeringActor: "contributor",
+    eventName: "workflow_run", ref: "refs/heads/main", sha: mainSha,
+    event: { action: "completed", repository: { default_branch: "main" }, workflow_run: {
+      name: "CI", path: ".github/workflows/ci.yml", event: "pull_request", conclusion: "success",
+      head_sha: headSha, repository: { full_name: "kingsword09/zcode-cli" }, pull_requests: [{ number: 180 }]
+    } } };
+}
+
+test("successful PR CI automatically resolves the validated head for a non-owner contributor", async () => {
+  const requested: number[] = [];
+  const target = await resolvePreviewTarget(ciContext(), async number => { requested.push(number); return pull(); },
+    async () => { throw new Error("The run already identifies its PR"); });
+  expect(requested).toEqual([180]);
+  expect(target).toEqual({ sha: headSha, pullRequest: 180 });
+});
+
+test.each([
+  ["failed CI", (c: PreviewContext) => { c.event.workflow_run!.conclusion = "failure"; }],
+  ["cancelled CI", (c: PreviewContext) => { c.event.workflow_run!.conclusion = "cancelled"; }],
+  ["unfinished CI", (c: PreviewContext) => { c.event.action = "requested"; }],
+  ["push CI", (c: PreviewContext) => { c.event.workflow_run!.event = "push"; }],
+  ["manual CI", (c: PreviewContext) => { c.event.workflow_run!.event = "workflow_dispatch"; }],
+  ["another workflow", (c: PreviewContext) => { c.event.workflow_run!.name = "Other"; }],
+  ["a different CI file", (c: PreviewContext) => { c.event.workflow_run!.path = ".github/workflows/other.yml"; }],
+  ["another repository's CI", (c: PreviewContext) => { c.event.workflow_run!.repository!.full_name = "contributor/zcode-cli"; }],
+  ["an invalid CI SHA", (c: PreviewContext) => { c.event.workflow_run!.head_sha = "main\npr_number=999"; }],
+  ["a missing run", (c: PreviewContext) => { delete c.event.workflow_run; }],
+  ["a fork workflow", (c: PreviewContext) => { c.repository = "contributor/zcode-cli"; }],
+  ["an untrusted workflow branch", (c: PreviewContext) => { c.ref = "refs/heads/contributor"; }]
+] as const)("rejects %s before automatic preview API requests", async (_name, change) => {
+  const input = ciContext();
+  change(input);
+  let apiCalls = 0;
+  await expect(resolvePreviewTarget(input,
+    async () => { apiCalls++; return pull(); },
+    async () => { apiCalls++; return [{ number: 180 }]; })).rejects.toThrow();
+  expect(apiCalls).toBe(0);
+});
+
+test.each([
+  ["superseded CI", (p: PreviewPullRequest) => { p.head.sha = "c".repeat(40); }],
+  ["closed PR", (p: PreviewPullRequest) => { p.state = "closed"; }],
+  ["deleted fork", (p: PreviewPullRequest) => { p.head.repo = null; }],
+  ["another repository", (p: PreviewPullRequest) => { p.base.repo.full_name = "other/repo"; }],
+  ["a mismatched PR", (p: PreviewPullRequest) => { p.number = 181; }]
+] as const)("skips %s without selecting a commit to publish", async (_name, change) => {
+  const response = pull();
+  change(response);
+  expect(await resolvePreviewTarget(ciContext(), async () => response)).toBeUndefined();
+});
+
+test("fork CI with an empty PR list finds the open PR by its validated commit", async () => {
+  const input = ciContext();
+  input.event.workflow_run!.pull_requests = [];
+  const requested: number[] = [], commits: string[] = [];
+  const target = await resolvePreviewTarget(input, async number => {
+    requested.push(number);
+    return number === 180 ? pull() : { ...pull(), number, state: "closed" };
+  }, async sha => { commits.push(sha); return [{ number: 179 }, { number: 180 }, { number: 180 }]; });
+  expect(commits).toEqual([headSha]);
+  expect(requested).toEqual([179, 180]);
+  expect(target).toEqual({ sha: headSha, pullRequest: 180 });
+});
+
+test("CI with no associated open PR never falls back to publishing the default branch", async () => {
+  const input = ciContext();
+  delete input.event.workflow_run!.pull_requests;
+  expect(await resolvePreviewTarget(input,
+    async () => { throw new Error("No PR lookup expected"); }, async () => [])).toBeUndefined();
+});
+
+test("ambiguous commit associations cannot report a preview on an arbitrary PR", async () => {
+  const input = ciContext();
+  input.event.workflow_run!.pull_requests = [{ number: 180 }, { number: 181 }];
+  await expect(resolvePreviewTarget(input, async number => ({ ...pull(), number })))
+    .rejects.toThrow("more than one open PR");
+});
 
 test("an owner comment resolves the fork's exact head, not the default branch or merge commit", async () => {
   const requested: number[] = [];
@@ -85,6 +163,8 @@ test("success reports contain the pinned package URL and failures never invent a
   expect(success).toContain(`npx --yes ${shortUrl}`);
   expect(success).toContain(`[Full repository URL](https://pkg.pr.new/kingsword09/zcode-cli/zcode-app-cli@${headSha})`);
   expect(success).toContain("/actions/runs/12345");
+  expect(success).toContain("automatically after CI succeeds");
+  expect(success).toContain("/pkg-pr-new");
   expect(previewComment(headSha, "failure", "12345")).not.toContain("https://pkg.pr.new");
   expect(() => previewComment(headSha, "cancelled", "12345")).toThrow();
   expect(() => previewComment("`malicious`", "success", "12345")).toThrow();
