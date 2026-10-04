@@ -17,6 +17,7 @@ import {
   firstRunSetupEnv,
   formatVersionOutput,
   isTuiRuntimeInvocation,
+  isDoctorRuntimeInvocation,
   isVersionInvocation,
   normalizeLoginArgs,
   readRuntimeCliOptionTypes,
@@ -224,6 +225,16 @@ describe("launcher routing", () => {
     expect(isTuiRuntimeInvocation(["plugins", "list"])).toBe(false);
     expect(isTuiRuntimeInvocation(["--help"])).toBe(false);
     expect(isTuiRuntimeInvocation(["--unknown"])).toBe(false);
+  });
+
+  test("routes doctor around settings bootstrap without mistaking prompt text for a command", () => {
+    expect(isDoctorRuntimeInvocation(["doctor", "--json"])).toBe(true);
+    expect(isDoctorRuntimeInvocation(["--cwd", "/project", "doctor"])).toBe(true);
+    expect(isDoctorRuntimeInvocation(["doctor", "--help"])).toBe(true);
+    expect(isDoctorRuntimeInvocation(["--prompt", "doctor"])).toBe(false);
+    expect(isDoctorRuntimeInvocation(["--prompt", "hello", "doctor"])).toBe(false);
+    expect(isDoctorRuntimeInvocation(["--cwd", "doctor"])).toBe(false);
+    expect(isDoctorRuntimeInvocation(["doctor", "--unknown"])).toBe(false);
   });
 
   test("routes only the plain Z.AI login command through the Desktop OAuth bridge", () => {

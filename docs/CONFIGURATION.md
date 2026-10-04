@@ -2,14 +2,15 @@
 
 English | [简体中文](CONFIGURATION.zh-CN.md)
 
-The CLI follows the current ZCode runtime's provider registry schema. General
-runtime settings and provider configuration live in separate files.
+The CLI follows the current ZCode runtime's provider registry schema. Provider
+and model settings live in `provider_config.json`; MCP servers, hooks, plugins,
+permissions and other general runtime settings live in the CLI's `setting.json`.
 
 ## Configuration files
 
 | File | Purpose |
 | --- | --- |
-| `~/.zcode/cli/setting.json` | CLI theme, notifications, tools, storage and other runtime settings |
+| `~/.zcode/cli/setting.json` | MCP servers, hooks, plugins, permissions, network, storage and CLI display settings |
 | `~/.zcode/v2/setting.json` | Existing Desktop language and memory preferences, read without modification |
 | `~/.zcode/v2/provider_config.json` | Providers, model metadata overrides and the default model |
 | `~/.zcode/v2/credentials.json` | Credentials persisted by the native runtime |
@@ -92,12 +93,178 @@ reported rather than replaced by old settings.
 | Resume/restart | Restores the session's model and reasoning options |
 | Language and memory | Reads Desktop `localePreference` / `memoryEnabled`; explicit CLI settings override these values |
 | Theme, terminal layout, copy-on-select and notifications | CLI `setting.json` |
-| Tool permissions, retries, stream timeout, CLI plugin/MCP options and other runtime settings | CLI `setting.json`, with native project/environment precedence |
+| MCP servers | CLI `setting.json` → `mcp.servers`; [MCP precedence](#project-settings-and-plugins) applies to project and plugin servers |
+| Tool permissions, retries, stream timeout, hooks, plugins and other runtime settings | CLI `setting.json`, with native project/environment precedence |
 | Update cache, diagnostic logs and migration state | Operational files beneath the CLI directory |
 
 The CLI does not add keys to Desktop's `setting.json`. Notification and display
 changes write only the CLI file. Shared preferences are applied while loading
 runtime settings, not copied into CLI settings during unrelated updates.
+
+## MCP servers
+
+Add servers under the top-level `mcp.servers` object in
+`~/.zcode/cli/setting.json`. The keys are server names. `mcp`, `features`,
+`permission`, `plugins` and `hooks` are siblings in this file; the
+`schemaVersion` / `config` wrapper belongs to `provider_config.json`.
+
+Merge this example into your existing settings, replacing the endpoint and
+executable with your own running HTTP server and installed stdio server:
+
+```json
+{
+  "features": {
+    "mcp": true
+  },
+  "mcp": {
+    "servers": {
+      "basic-memory": {
+        "type": "http",
+        "url": "http://127.0.0.1:18796/mcp"
+      },
+      "token-savior": {
+        "type": "stdio",
+        "command": "/absolute/path/to/token-savior-mcp",
+        "args": [],
+        "timeoutMs": 30000
+      }
+    }
+  }
+}
+```
+
+The runtime reads this file on startup. Restart ZCode after changing MCP
+settings. The `settings-v1.json` marker only controls migration from the old
+CLI `config.json`; it does not prevent later edits to `setting.json` from loading.
+Changing the model/provider file or completing provider login does not configure
+custom MCP servers.
+
+### Server fields
+
+| Field | Applies to | Meaning |
+| --- | --- | --- |
+| `type` | All | `"stdio"`, `"http"` or `"sse"`; use the transport supported by your server |
+| `command` | stdio | Executable name or absolute path; put command arguments in `args` |
+| `args` | stdio | Optional array of strings |
+| `env` | stdio | Optional object of environment variable names to string values |
+| `cwd` | stdio | Optional working directory for the server process |
+| `url` | HTTP / SSE | Server endpoint, including its MCP or SSE path |
+| `headers` | HTTP / SSE | Optional object of header names to string values, such as `Authorization` |
+| `oauth` | HTTP / SSE | Optional OAuth configuration; see below |
+| `enabled` | All | Set to `false` to disable a server while keeping its configuration |
+| `timeoutMs` | All | Optional positive number in milliseconds; use this field instead of `timeout` or `startup_timeout_sec` |
+| `protocolVersion` | All | Optional `"auto"`, `"legacy"` or `"2026-07-28"` in runtime 0.16.9; normally leave unset for automatic negotiation |
+
+For OAuth, `oauth.type` accepts `"authorization_code"` or `"client_credentials"`.
+Both accept `clientId`, `clientSecret`, `clientName` and `scope`; client credentials
+requires `clientId` and `clientSecret`, while authorization code also accepts
+`redirectPath`. Configure these only when required by the MCP server.
+
+### Project settings and plugins
+
+Project `zcode.json` or `.zcode/config.json` files use the same `mcp.servers`
+structure. In a Git worktree, the runtime discovers those files from the worktree
+root through the working directory; outside a worktree, it checks the working
+directory. For project stdio servers, relative `cwd` values resolve against the
+project configuration's base directory (the parent of `.zcode` for
+`.zcode/config.json`); an omitted `cwd` uses that directory.
+
+MCP servers merge by name. **User settings take precedence over project settings
+for the same server name** in the current runtime; distinct names from both
+sources remain available. This is an exception to the usual project-override
+rule for other settings. An empty user `mcp.servers` object does not disable
+project or plugin servers. Use `enabled: false` on a named server, or
+`features.mcp: false` to disable MCP as a whole.
+
+Enabled plugins also contribute servers. Their definitions come from the
+plugin's `.mcp.json` or manifest, and normally appear as
+`plugin:<plugin-name>:<server-name>`. Keep standalone user MCP definitions in
+`setting.json`; this CLI does not automatically read `.agents/mcp.json`.
+Plugin controls remain under `plugins`, hook declarations under
+`hooks.events.<Event>`, and tool permissions under `permission` in `setting.json`.
+
+### Upstream source and file paths
+
+These paths distinguish the packaged CLI from the upstream application. The
+source references below are pinned to upstream
+[`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e).
+This package's runtime lock selects the separate Desktop 3.14.4 artifact; the
+public source snapshot is not an assertion of that artifact's build commit.
+
+| Client / source | User MCP file | JSON path |
+| --- | --- | --- |
+| Unpatched upstream CLI | `~/.zcode/cli/config.json` | `mcp.servers` |
+| This package, `zcode-app-cli` | `~/.zcode/cli/setting.json` | `mcp.servers` |
+| Upstream Desktop's ZCode directory source | `~/.zcode/cli/config.json` | `mcp.servers` |
+| Upstream Desktop's `.agents` fallback | `~/.agents/mcp.json` | `mcpServers` |
+
+The upstream [file loader](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/apps/zcode-cli/packages/adapters/src/config/file-config.adapter.ts#L61-L118)
+defaults to `config.json`. This package's
+[`patchRuntimeSharedConfig`](https://github.com/kingsword09/zcode-cli/blob/e93caf41292314bd751180cf9b08f6d18895a5b5/scripts/sync-runtime.ts#L1026-L1046)
+changes that filename to `setting.json`. The
+[general-settings schema](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/apps/zcode-cli/packages/adapters/src/config/schema.ts#L286-L306)
+contains `mcp`, `plugins`, `permission` and `hooks`. The separate, strict
+[provider-file schema](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/provider-node/src/provider-config-file-codec.ts#L18-L30)
+accepts provider/model rules, provider order and default model selection; adding
+MCP there fails its schema validation. The
+[MCP merge function](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/apps/zcode-cli/packages/adapters/src/config/config-factory.ts#L372-L397)
+explicitly applies user definitions after project definitions.
+
+Desktop has a separate
+[MCP directory reader and writer](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/desktop/src/main/mcpUserDirectory/index.ts#L37-L69).
+For each user/project scope, it
+[falls back to `.agents/mcp.json`](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/desktop/src/main/mcpUserDirectory/index.ts#L334-L375)
+when that scope's ZCode file has no MCP entries. Project files are
+`.zcode/config.json` and `.agents/mcp.json`, respectively. Sharing
+`provider_config.json` with Desktop does not synchronize these user MCP files
+with this package's `setting.json`; the old CLI file is only imported during the
+one-time migration described above.
+
+### Checking whether settings loaded
+
+Run `zcode doctor` to inspect configuration paths, loading status, validated MCP
+server names and their user/project sources. For a report suitable for debugging:
+
+```bash
+zcode doctor --json
+zcode --cwd /path/to/project doctor --json
+```
+
+The JSON output keeps the existing runtime metadata and adds `configuration`:
+`user.path` / `user.status`, `project.paths` / `project.status`, `mcp.enabled`,
+`mcp.servers` and `diagnostics`. Status is `loaded`, `missing` or `invalid`.
+Diagnostics identify the file and rejected field. Server records include only
+name, transport, enabled state and source; command arguments, URLs, environment
+variables, headers and credentials are omitted. `provider.path` identifies the
+provider file; this check does not validate provider credentials.
+
+Doctor works without login and even when `setting.json` contains invalid JSON.
+It skips first-run settings creation and provider migration, and reports the old
+`config.json` as a migration source only. It does not start MCP servers or send
+model requests. A missing settings file is allowed; rejected settings or skipped
+MCP entries produce exit code `1`. Valid configuration produces exit code `0`.
+
+The server list covers user/project configuration. Plugin and built-in MCP
+servers are added separately at session startup, and this check does not test
+connectivity. Use `/status` in the TUI to inspect connected MCP servers. The
+default structured runtime logs are under `~/.zcode/cli/log/`. When a server is
+missing, these events provide the session's loading and connection evidence:
+
+| Event | What to check |
+| --- | --- |
+| `bootstrap.app.startup.config.completed` | `context.configSourceUser` indicates whether the user settings file loaded |
+| `config.file.invalid` | `context.configPath` and `context.diagnosticMessage` identify a file-level parsing or schema error |
+| `config.mcp_server.skipped` | `context.diagnosticPath` and `context.diagnosticMessage` identify an invalid server entry |
+| `mcp.configured_servers.connect.started` | `context.serverNames` lists the servers selected for connection |
+| `mcp.configured_servers.connect.completed` | Connection status and tool counts distinguish loading from connection failures |
+
+Valid JSON must also satisfy the runtime schema. A schema error outside an
+individual MCP server entry can cause the entire settings file to be ignored.
+For example, `ui.theme: "system"` is invalid; supported values are `"auto"`,
+`"dark"` and `"light"`. In that case the runtime can still start with default
+settings and plugin servers. `features.mcp` defaults to `true`, so seeing MCP
+enabled does not prove the user file loaded. A malformed individual server entry
+is skipped with `config.mcp_server.skipped`; valid entries can still load.
 
 ## Model catalogs and default selection
 

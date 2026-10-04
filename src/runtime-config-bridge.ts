@@ -8,6 +8,7 @@ export { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage } from "./runtim
 export { restoreTuiBackgroundTasks } from "./runtime-background-restore.ts";
 export { installSqliteWriteRecovery, pruneSqliteUsage, sqliteRecoveryStats } from "./runtime-sqlite-recovery.ts";
 export { appServerRegistryOptions } from "./app-server-auth.ts";
+export { inspectRuntimeConfiguration, writeConfigurationDoctor } from "./config-diagnostics.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;

@@ -458,10 +458,21 @@ not available on `PATH`.
 
 ## Configuration
 
-ZCode reads configuration from `~/.zcode/cli/setting.json` (or
-`%USERPROFILE%\.zcode\cli\setting.json` on Windows), with project-level
-overrides from `zcode.json` or `.zcode/config.json` in the working directory.
-Existing files are never replaced.
+ZCode reads MCP servers, hooks, plugins, permissions, network, storage and display
+settings from `~/.zcode/cli/setting.json` (or
+`%USERPROFILE%\.zcode\cli\setting.json` on Windows). Project settings use
+`zcode.json` or `.zcode/config.json`. Existing files are never replaced.
+
+Custom MCP servers go in the top-level `mcp.servers` object in `setting.json`.
+See [MCP configuration](./docs/CONFIGURATION.md#mcp-servers) for HTTP/stdio examples,
+supported fields, loading diagnostics and the MCP-specific precedence rule
+(user definitions win over project definitions with the same server name).
+Run `zcode doctor --json` to inspect loaded configuration paths, MCP names and
+sources, and validation errors without starting MCP servers or sending a model
+request. Plugin and built-in MCP servers are added separately when a session starts.
+The `setting.json` filename is this package's adaptation of the upstream CLI's
+`config.json`. See [upstream source and file paths](./docs/CONFIGURATION.md#upstream-source-and-file-paths)
+for the distinction from Desktop's MCP settings.
 
 Provider settings and the default model are stored in
 `~/.zcode/v2/provider_config.json`, shared with ZCode Desktop by default.

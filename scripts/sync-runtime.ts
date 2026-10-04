@@ -16,6 +16,8 @@ import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts"
 import { markRuntimeModified } from "./runtime-attribution.ts";
 import { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
 export { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
+import { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
+export { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
 import {
   hasRuntimeSqliteBusyTimeout, hasRuntimeSqliteWriteRecovery,
   patchRuntimeSqliteBusyTimeout, patchRuntimeSqliteWriteRecovery
@@ -1549,6 +1551,10 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeSharedConfig,
     verify: runtime => runtime.includes('ZCODE_CLI_MIGRATE_CONFIG==="1"') && runtime.includes('="setting.json",')
+  },
+  {
+    id: "configuration-diagnostics", requirement: "required", apply: patchRuntimeConfigurationDiagnostics,
+    verify: hasRuntimeConfigurationDiagnostics
   },
   {
     id: "session-model-recovery", requirement: "required", apply: patchRuntimeSessionModelRecovery,

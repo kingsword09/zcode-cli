@@ -3,8 +3,9 @@
 [English](PROVIDER_CONFIG.md) | 简体中文
 
 ZCode 桌面端与 CLI 共用 `~/.zcode/v2/provider_config.json`，文件名使用下划线。
-可通过 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指定其他文件。终端显示、工具和网络等
-CLI 设置放在 `~/.zcode/cli/setting.json`。
+可通过 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指定其他文件。MCP、hooks、插件、权限、
+终端显示和网络等 CLI 设置放在 `~/.zcode/cli/setting.json`。
+`mcp.servers` 的结构及 HTTP／stdio 示例见 [MCP 服务器配置](CONFIGURATION.zh-CN.md#mcp-服务器)。
 
 [`provider.example.json`](../provider.example.json) 展示当前个人 provider schema 的配置项。
 它是可以解析的标准 JSON，不包含注释；各字段的含义、可选值及互斥关系由本文说明。

@@ -273,12 +273,17 @@ export function isTuiRuntimeInvocation(
     && (invocation.command === undefined || invocation.command === "tui");
 }
 
+export function isDoctorRuntimeInvocation(args: string[], runtimeOptionTypes = readRuntimeCliOptionTypes()): boolean {
+  const invocation = inspectRuntimeInvocation(args, runtimeOptionTypes);
+  return !invocation.agentInvocation && !invocation.invalid && invocation.command === "doctor";
+}
+
 export function firstRunSetupEnv(setupPending: boolean, args: string[]): NodeJS.ProcessEnv | undefined {
   if (!setupPending || !isTuiRuntimeInvocation(args)) return undefined;
   return { ZCODE_CLI_FIRST_RUN: "1" };
 }
 
-function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, string> {
+function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}, inspectConfiguration = false): Record<string, string> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.ZCODE_CLI_OAUTH_CALLBACK_STDIN;
   delete env.ZCODE_CLI_MIGRATE_CONFIG;
@@ -289,7 +294,7 @@ function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}): Record<string, strin
   };
   const merged: NodeJS.ProcessEnv = {
     ...inherited,
-    ZCODE_DATA_BASE_DIR: sharedDataBaseDir(inherited),
+    ...inspectConfiguration ? {} : { ZCODE_DATA_BASE_DIR: sharedDataBaseDir(inherited) },
     ZCODE_BASE_URL: resolveZCodeBaseUrl(inherited),
     ZCODE_MODEL_RETRY_MAX_RETRIES: resolveModelRetryMaxRetries(inherited),
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,
@@ -387,7 +392,7 @@ async function runRuntime(
   const tuiInvocation = isTuiRuntimeInvocation(args);
   const child = spawnChild(node, [runtimePath, ...args], {
     cwd: process.cwd(),
-    env: runtimeEnvironment(extraEnv),
+    env: runtimeEnvironment(extraEnv, isDoctorRuntimeInvocation(args)),
     stdio: tuiInvocation ? ["inherit", "inherit", "pipe"] : "inherit"
   });
   const diagnosticState: TuiRuntimeDiagnosticState = {
@@ -470,6 +475,8 @@ export async function main(args: string[]): Promise<number> {
 
   let setupPending = false;
   try {
+    // doctor 必须能检查损坏的配置，不能先被普通启动校验或 provider 迁移拦住。
+    if (isDoctorRuntimeInvocation(args)) return await runRuntime(resolveNodeExecutable(), args);
     const bootstrap = await ensureCliSettings();
     await readCliSettings();
     sharedDataBaseDir();
@@ -481,6 +488,7 @@ export async function main(args: string[]): Promise<number> {
     }
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    console.error("Run `zcode doctor --json` for configuration diagnostics.");
     return 1;
   }
 

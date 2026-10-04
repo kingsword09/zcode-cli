@@ -2,14 +2,15 @@
 
 [English](CONFIGURATION.md) | 简体中文
 
-CLI 跟随当前 ZCode runtime 的 provider registry schema。通用运行设置与 provider 配置
-分别存储；模型配置中的“智能配置”对应英文界面的 **Smart configuration**。
+CLI 跟随当前 ZCode runtime 的 provider registry schema。Provider 和模型设置存放在
+`provider_config.json`；MCP、hooks、插件、权限等通用运行设置存放在 CLI 的 `setting.json`。
+模型配置中的“智能配置”对应英文界面的 **Smart configuration**。
 
 ## 配置文件
 
 | 文件 | 用途 |
 | --- | --- |
-| `~/.zcode/cli/setting.json` | CLI 主题、通知、工具、存储和其他运行设置 |
+| `~/.zcode/cli/setting.json` | MCP、hooks、插件、权限、网络、存储和 CLI 显示设置 |
 | `~/.zcode/v2/setting.json` | 桌面端已有的语言和记忆偏好，CLI 只读不修改 |
 | `~/.zcode/v2/provider_config.json` | Provider、模型元数据覆盖和默认模型 |
 | `~/.zcode/v2/credentials.json` | 原生 runtime 持久化的凭证 |
@@ -78,11 +79,157 @@ CLI 专属字段迁移到 `~/.zcode/cli/setting.json`，省略 provider、main/l
 | 恢复会话／重启 | 恢复该会话保存的模型和推理选项 |
 | 语言与记忆 | 读取桌面端 `localePreference`／`memoryEnabled`，显式 CLI 设置优先 |
 | 主题、终端布局、选中复制、通知 | CLI `setting.json` |
-| 工具权限、重试、流超时、CLI 插件／MCP 等运行设置 | CLI `setting.json`，保留原生项目和环境配置优先级 |
+| MCP 服务器 | CLI `setting.json` → `mcp.servers`；项目与插件服务器的合并规则见 [项目配置与插件](#项目配置与插件) |
+| 工具权限、重试、流超时、hooks、插件等运行设置 | CLI `setting.json`，保留原生项目和环境配置优先级 |
 | 更新缓存、诊断日志、迁移状态 | CLI 目录下的运行文件 |
 
 CLI 不向桌面端的 `setting.json` 增加字段。通知和显示设置只写 CLI 文件。
 共享偏好在加载 runtime 设置时生效，不会因修改其他 CLI 选项而被复制进 CLI 设置。
+
+## MCP 服务器
+
+在 `~/.zcode/cli/setting.json` 的顶层 `mcp.servers` 对象中添加服务器，键名就是服务器名。
+`mcp` 与 `features`、`permission`、`plugins`、`hooks` 同级；
+`schemaVersion` / `config` 外层结构属于 `provider_config.json`。
+
+将以下内容合并到已有设置中，并把地址和可执行文件路径替换为你实际运行的 HTTP 服务
+及已安装的 stdio 服务：
+
+```json
+{
+  "features": {
+    "mcp": true
+  },
+  "mcp": {
+    "servers": {
+      "basic-memory": {
+        "type": "http",
+        "url": "http://127.0.0.1:18796/mcp"
+      },
+      "token-savior": {
+        "type": "stdio",
+        "command": "/absolute/path/to/token-savior-mcp",
+        "args": [],
+        "timeoutMs": 30000
+      }
+    }
+  }
+}
+```
+
+Runtime 每次启动都会读取此文件，修改 MCP 设置后重启 ZCode 即可。
+`settings-v1.json` 标记只控制从旧 CLI `config.json` 的迁移，不会阻止后续修改
+`setting.json` 生效。修改模型／provider 文件或完成 provider 登录，不会配置自定义 MCP。
+
+### 服务器字段
+
+| 字段 | 适用类型 | 含义 |
+| --- | --- | --- |
+| `type` | 全部 | `"stdio"`、`"http"` 或 `"sse"`，按服务器支持的传输方式选择 |
+| `command` | stdio | 可执行文件名或绝对路径；命令参数单独放在 `args` 中 |
+| `args` | stdio | 可选，字符串数组 |
+| `env` | stdio | 可选，环境变量名到字符串值的对象 |
+| `cwd` | stdio | 可选，服务器进程的工作目录 |
+| `url` | HTTP / SSE | 服务器地址，包含实际的 MCP 或 SSE 路径 |
+| `headers` | HTTP / SSE | 可选，请求头名称到字符串值的对象，例如 `Authorization` |
+| `oauth` | HTTP / SSE | 可选，OAuth 配置，见下文 |
+| `enabled` | 全部 | 设为 `false` 可禁用服务器并保留配置 |
+| `timeoutMs` | 全部 | 可选，正数，单位为毫秒；超时应使用此字段，`timeout` 和 `startup_timeout_sec` 不生效 |
+| `protocolVersion` | 全部 | Runtime 0.16.9 支持可选值 `"auto"`、`"legacy"`、`"2026-07-28"`；通常省略，使用自动协商 |
+
+`oauth.type` 支持 `"authorization_code"` 和 `"client_credentials"`。
+两者都支持 `clientId`、`clientSecret`、`clientName`、`scope`；client credentials 模式
+必须填写 `clientId` 和 `clientSecret`，authorization code 模式还支持 `redirectPath`。
+按 MCP 服务器的鉴权要求配置即可。
+
+### 项目配置与插件
+
+项目的 `zcode.json` 或 `.zcode/config.json` 使用相同的 `mcp.servers` 结构。
+在 Git 工作树内，runtime 从工作树根目录到当前工作目录发现这些文件；工作树外只检查
+当前工作目录。项目 stdio 服务器的相对 `cwd` 以配置的基础目录解析：
+对 `.zcode/config.json`，基础目录是 `.zcode` 的父目录；省略 `cwd` 时也使用该基础目录。
+
+MCP 服务器按名称合并。当前 runtime 中，**同名服务器的用户配置优先于项目配置**；
+不同名称的服务器都会保留。这与其他设置通常由项目覆盖用户配置的规则不同。
+用户配置中的空 `mcp.servers` 对象不会禁用项目或插件服务器。
+可对指定服务器设置 `enabled: false`，或用 `features.mcp: false` 关闭整个 MCP 功能。
+
+已启用的插件也会提供 MCP，定义来自插件的 `.mcp.json` 或 manifest，通常显示为
+`plugin:<插件名>:<服务器名>`。独立的用户 MCP 定义放在 `setting.json`；
+此 CLI 不会自动读取 `.agents/mcp.json`。
+插件控制仍在 `setting.json` 的 `plugins` 下，hook 声明在 `hooks.events.<Event>` 下，
+工具权限在 `permission` 下。
+
+### 上游源码与配置路径的区别
+
+下面区分本发行包与上游应用。源码引用固定在上游
+[`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e)。
+本项目 runtime lock 选择的是独立发布的 Desktop 3.14.4 产物，不能据此认定该产物
+由这个公开源码提交构建。
+
+| 客户端／配置源 | 用户级 MCP 文件 | JSON 路径 |
+| --- | --- | --- |
+| 未打补丁的上游 CLI | `~/.zcode/cli/config.json` | `mcp.servers` |
+| 本项目 `zcode-app-cli` | `~/.zcode/cli/setting.json` | `mcp.servers` |
+| 上游 Desktop 的 ZCode 目录配置源 | `~/.zcode/cli/config.json` | `mcp.servers` |
+| 上游 Desktop 的 `.agents` 回退配置源 | `~/.agents/mcp.json` | `mcpServers` |
+
+上游 [文件加载器](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/apps/zcode-cli/packages/adapters/src/config/file-config.adapter.ts#L61-L118)
+默认使用 `config.json`。本项目的
+[`patchRuntimeSharedConfig`](https://github.com/kingsword09/zcode-cli/blob/e93caf41292314bd751180cf9b08f6d18895a5b5/scripts/sync-runtime.ts#L1026-L1046)
+将文件名改成 `setting.json`。
+[通用设置 schema](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/apps/zcode-cli/packages/adapters/src/config/schema.ts#L286-L306)
+包含 `mcp`、`plugins`、`permission` 和 `hooks`；独立且严格的
+[provider 文件 schema](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/provider-node/src/provider-config-file-codec.ts#L18-L30)
+只接受 provider／模型规则、provider 排序和默认模型选择，向其中添加 MCP 会导致 schema
+校验失败。[MCP 合并函数](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/apps/zcode-cli/packages/adapters/src/config/config-factory.ts#L372-L397)
+明确先应用项目配置，再应用用户配置。
+
+Desktop 有独立的
+[MCP 目录读写模块](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/desktop/src/main/mcpUserDirectory/index.ts#L37-L69)。
+在每个用户／项目作用域内，ZCode 文件没有 MCP 条目时，它会
+[回退到 `.agents/mcp.json`](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/packages/desktop/src/main/mcpUserDirectory/index.ts#L334-L375)。
+项目级文件分别是 `.zcode/config.json` 和 `.agents/mcp.json`。
+与 Desktop 共用 `provider_config.json` 不代表这些用户 MCP 文件会与本项目的
+`setting.json` 同步；旧 CLI 文件只在前述一次性迁移时导入。
+
+### 确认配置是否加载
+
+运行 `zcode doctor` 查看实际配置路径、加载状态、校验通过的 MCP 名称及用户／项目来源。
+需要排查问题时可生成 JSON 报告：
+
+```bash
+zcode doctor --json
+zcode --cwd /path/to/project doctor --json
+```
+
+JSON 保留原有 runtime 信息，新增 `configuration`：包含 `user.path` / `user.status`、
+`project.paths` / `project.status`、`mcp.enabled`、`mcp.servers` 和 `diagnostics`。
+状态为 `loaded`、`missing` 或 `invalid`；诊断指出对应文件与被拒绝的字段。
+服务器记录只包含名称、传输方式、启用状态和来源，不输出命令参数、URL、环境变量、
+请求头或凭据。`provider.path` 只标明 provider 文件位置，不验证 provider 凭据。
+
+Doctor 无需登录，即使 `setting.json` 的 JSON 语法损坏也能运行。它跳过首次设置文件创建
+和 provider 迁移，并将旧 `config.json` 标为仅供迁移使用。它不会启动 MCP 或请求模型。
+设置文件缺失是允许的；配置无效或有 MCP 条目被跳过时退出码为 `1`，有效配置为 `0`。
+
+服务器列表覆盖用户／项目配置。插件和内置 MCP 会在会话启动时另外加入，doctor 不测试
+连接是否成功。在 TUI 中使用 `/status` 查看连接状态。结构化 runtime 日志默认位于
+`~/.zcode/cli/log/`；服务器缺失时，以下事件可提供实际会话的加载和连接证据：
+
+| 事件 | 检查内容 |
+| --- | --- |
+| `bootstrap.app.startup.config.completed` | `context.configSourceUser` 表示是否成功加载用户设置文件 |
+| `config.file.invalid` | `context.configPath` 和 `context.diagnosticMessage` 指出文件解析或 schema 校验错误 |
+| `config.mcp_server.skipped` | `context.diagnosticPath` 和 `context.diagnosticMessage` 指出无效的服务器配置项 |
+| `mcp.configured_servers.connect.started` | `context.serverNames` 列出准备连接的服务器 |
+| `mcp.configured_servers.connect.completed` | 连接状态和工具数量，可区分配置加载问题与连接失败 |
+
+JSON 语法正确还不够，字段也必须符合 runtime 的 schema。单个 MCP 服务器条目以外的
+schema 错误可能导致整份设置文件被忽略。例如 `ui.theme: "system"` 无效，正确值是
+`"auto"`、`"dark"` 或 `"light"`。此时 runtime 仍可能使用默认设置及插件服务器启动。
+`features.mcp` 默认就是 `true`，因此 MCP 开关已开启不能证明用户文件加载成功。
+单个服务器条目无效时，会记录 `config.mcp_server.skipped` 并跳过该条目，其他有效条目仍可加载。
 
 ## 模型目录与默认选择
 

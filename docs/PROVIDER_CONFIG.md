@@ -3,8 +3,10 @@
 English | [简体中文](PROVIDER_CONFIG.zh-CN.md)
 
 ZCode Desktop and CLI share `~/.zcode/v2/provider_config.json` (underscore).
-`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` can select another file. General terminal,
-tool and network settings belong in `~/.zcode/cli/setting.json`.
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` can select another file. MCP servers, hooks,
+plugins, permissions, terminal and network settings belong in
+`~/.zcode/cli/setting.json`. See [MCP servers](CONFIGURATION.md#mcp-servers)
+for the `mcp.servers` structure and HTTP/stdio examples.
 
 [`provider.example.json`](../provider.example.json) covers the current personal
 provider schema. It is valid JSON without comments. This reference explains the

@@ -15,6 +15,7 @@ import { runtimeTestEnv } from "./runtime-test-env.ts";
 import {
   extractRuntimeCapabilities,
   hasRuntimeAppServerStandaloneAuth,
+  hasRuntimeConfigurationDiagnostics,
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
@@ -94,6 +95,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeStreamEofFinishGuard(runtimeSource)
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
   || !hasRuntimeAppServerStandaloneAuth(runtimeSource)
+  || !hasRuntimeConfigurationDiagnostics(runtimeSource)
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
   || !runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes('return await import("playwright-core")')
