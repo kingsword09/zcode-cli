@@ -21,7 +21,8 @@ function ciContext(): PreviewContext {
     eventName: "workflow_run", ref: "refs/heads/main", sha: mainSha,
     event: { action: "completed", repository: { default_branch: "main" }, workflow_run: {
       name: "CI", path: ".github/workflows/ci.yml", event: "pull_request", conclusion: "success",
-      head_sha: headSha, repository: { full_name: "kingsword09/zcode-cli" }, pull_requests: [{ number: 180 }]
+      head_sha: headSha, head_branch: "fix/example", head_repository: { full_name: "contributor/zcode-cli" },
+      repository: { full_name: "kingsword09/zcode-cli" }, pull_requests: [{ number: 180 }]
     } } };
 }
 
@@ -71,12 +72,12 @@ test.each([
 test("fork CI with an empty PR list finds the open PR by its validated commit", async () => {
   const input = ciContext();
   input.event.workflow_run!.pull_requests = [];
-  const requested: number[] = [], commits: string[] = [];
+  const requested: number[] = [], heads: unknown[] = [];
   const target = await resolvePreviewTarget(input, async number => {
     requested.push(number);
     return number === 180 ? pull() : { ...pull(), number, state: "closed" };
-  }, async sha => { commits.push(sha); return [{ number: 179 }, { number: 180 }, { number: 180 }]; });
-  expect(commits).toEqual([headSha]);
+  }, async head => { heads.push(head); return [{ number: 179 }, { number: 180 }, { number: 180 }]; });
+  expect(heads).toEqual([{ repository: "contributor/zcode-cli", branch: "fix/example" }]);
   expect(requested).toEqual([179, 180]);
   expect(target).toEqual({ sha: headSha, pullRequest: 180 });
 });
