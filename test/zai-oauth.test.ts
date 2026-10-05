@@ -3,10 +3,16 @@ import { describe, expect, test } from "bun:test";
 import {
   buildZaiAuthorizeUrl,
   parseZaiOAuthCallback,
-  runZaiOAuthLogin
+  runZaiOAuthLogin,
+  usesNativeZaiOAuth
 } from "../src/zai-oauth.ts";
 
 describe("Z.AI Desktop OAuth bridge", () => {
+  test("routes Linux and Windows to the runtime's HTTPS callback flow", () => {
+    expect(usesNativeZaiOAuth("linux")).toBe(true);
+    expect(usesNativeZaiOAuth("win32")).toBe(true);
+    expect(usesNativeZaiOAuth("darwin")).toBe(false);
+  });
   test("builds the registered Desktop authorization request", () => {
     const url = new URL(buildZaiAuthorizeUrl("expected-state"));
     expect(`${url.origin}${url.pathname}`).toBe("https://chat.z.ai/api/oauth/authorize");

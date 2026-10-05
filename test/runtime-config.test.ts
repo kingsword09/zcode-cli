@@ -38,6 +38,17 @@ test("reuses native Desktop preferences without copying them into CLI settings",
   expect((await readCliSettings(env)).ui).not.toHaveProperty("locale");
 });
 
+test("maps Desktop's default \"system\" localePreference to the CLI's \"auto\"", async () => {
+  const { env } = await fixture();
+  await writeFile(desktopSettingsPath(env), JSON.stringify({ localePreference: "system" }));
+  await ensureCliSettings(env);
+  const input = await readCliSettings(env);
+  expect(input.ui).not.toHaveProperty("locale");
+  expect(mergeDesktopSettings(input, cliSettingsPath(env), env)).toMatchObject({ ui: { locale: "auto" } });
+  expect(mergeDesktopSettings({ ui: { locale: "en-US" } }, cliSettingsPath(env), env))
+    .toMatchObject({ ui: { locale: "en-US" } });
+});
+
 test("migrates CLI settings once and never reads the old file as a fallback", async () => {
   const { env } = await fixture();
   await mkdir(dirname(legacyCliConfigPath(env)), { recursive: true });

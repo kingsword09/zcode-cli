@@ -17,6 +17,10 @@ export interface ZaiOAuthInvocation {
   runtimeArgs: string[];
 }
 
+export function usesNativeZaiOAuth(platform: NodeJS.Platform = process.platform): boolean {
+  return platform !== "darwin";
+}
+
 export interface ZaiOAuthCallback {
   callbackUrl: string;
   code: string;

@@ -39,11 +39,19 @@ describe("configured model access", () => {
       [`account-provider:coding-plan:${providerId}:account:fixture-user:api-key`]: "opaque-encrypted-key"
     }));
     expect(await readConfiguredModelAccess(env)).toEqual({ configPath, providerId, model: `${providerId}/GLM-5.3` });
+    const isolatedPath = join(home, "cli-credentials.json");
+    const isolatedEnv = { ...env, ZCODE_CLI_CREDENTIALS_FILE: isolatedPath };
+    expect(await readConfiguredModelAccess(isolatedEnv)).toBeNull();
+    await writeFile(isolatedPath, JSON.stringify({
+      [`account-provider:${providerId}:identity`]: "cli-identity",
+      [`account-provider:coding-plan:${providerId}:account:cli-user:api-key`]: "cli-key"
+    }));
     await writeFile(join(directory, "credentials.json"), JSON.stringify({
       [`account-provider:${providerId}:identity`]: "opaque-encrypted-identity",
       "account-provider:coding-plan:account:bigmodel-individual-coding-plan:account:fixture-user:api-key": "different-provider"
     }));
     expect(await readConfiguredModelAccess(env)).toBeNull();
+    expect(await readConfiguredModelAccess(isolatedEnv)).toEqual({ configPath, providerId, model: `${providerId}/GLM-5.3` });
   });
 
   test("uses personal registry config as authoritative after migration", async () => {

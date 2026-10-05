@@ -1377,6 +1377,21 @@ export function patchRuntimeStreamEofFinishGuard(runtime: string): string {
   return patched;
 }
 
+export function patchRuntimeCliCredentials(runtime: string): string {
+  const marker = 'ZCODE_CLI_CREDENTIALS_FILE';
+  if (runtime.includes(marker)) return runtime;
+  const suffix = runtime.indexOf('"credentials.json")');
+  const start = runtime.lastIndexOf("function ", suffix);
+  const prefix = /^function [A-Za-z_$][\w$]*\(e=\{\}\)\{/u.exec(runtime.slice(start));
+  if (suffix < 0 || start < 0 || !prefix
+    || !runtime.slice(start, suffix).includes("if(e.filePath)return")) {
+    throw new Error("ZCode runtime is incompatible with the CLI credential path patch.");
+  }
+  const insertion = start + prefix[0].length;
+  const override = 'e={...e,filePath:e.filePath??(e.env??process.env).ZCODE_CLI_CREDENTIALS_FILE?.trim()};';
+  return runtime.slice(0, insertion) + override + runtime.slice(insertion);
+}
+
 export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
   if (runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')) return runtime;
 
@@ -1641,6 +1656,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "optional",
     apply: patchRuntimeOAuthHttpErrors,
     verify: (runtime) => !runtime.includes('"OAuth response is not valid JSON",{httpStatus:void 0}')
+  },
+  {
+    id: "cli-credentials",
+    requirement: "required",
+    apply: patchRuntimeCliCredentials,
+    verify: (runtime) => runtime.includes("ZCODE_CLI_CREDENTIALS_FILE")
   },
   {
     id: "desktop-oauth",

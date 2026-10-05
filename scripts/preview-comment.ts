@@ -25,6 +25,8 @@ export interface PreviewContext {
       event?: string;
       conclusion?: string;
       head_sha?: string;
+      head_branch?: string;
+      head_repository?: { full_name?: string };
       repository?: { full_name?: string };
       pull_requests?: { number: number }[];
     };
@@ -88,15 +90,17 @@ export interface PreviewPullRequest {
 export async function resolvePreviewTarget(
   context: PreviewContext,
   getPullRequest: (number: number) => Promise<PreviewPullRequest>,
-  getCommitPullRequests: (sha: string) => Promise<{ number: number }[]> = async () => []
+  getOpenPullRequests: (head?: { repository: string; branch: string }) => Promise<{ number: number }[]> = async () => []
 ): Promise<{ sha: string; pullRequest?: number } | undefined> {
   const number = authorizePreview(context);
   if (context.eventName === "workflow_run") {
     const run = context.event.workflow_run!;
     const sha = commitSha(run.head_sha);
-    // GitHub may omit pull_requests on CI runs from forks. Resolve those by
-    // commit, then verify the current PR state before checking out any PR code.
-    const candidates = run.pull_requests?.length ? run.pull_requests : await getCommitPullRequests(sha);
+    const headRepository = run.head_repository?.full_name;
+    const headBranch = run.head_branch;
+    const candidates = run.pull_requests?.length ? run.pull_requests
+      : headRepository && headBranch ? await getOpenPullRequests({ repository: headRepository, branch: headBranch })
+      : await getOpenPullRequests();
     const targets: number[] = [];
     for (const candidate of new Set(candidates.map(pull => pullRequestNumber(pull.number)))) {
       const pull = await getPullRequest(candidate);
@@ -167,7 +171,21 @@ async function main() {
   };
   const resolveTarget = () => resolvePreviewTarget(context,
     number => githubApi(`pulls/${number}`),
-    sha => githubApi(`commits/${sha}/pulls?per_page=100`));
+    async head => {
+      if (head) {
+        const [owner] = head.repository.split("/", 1);
+        if (owner) {
+          const filtered = await githubApi(`pulls?state=open&head=${encodeURIComponent(`${owner}:${head.branch}`)}&per_page=100`) as { number: number }[];
+          if (filtered.length > 0) return filtered;
+        }
+      }
+      const numbers: { number: number }[] = [];
+      for (let page = 1; ; page++) {
+        const pulls = await githubApi(`pulls?state=open&per_page=100&page=${page}`) as { number: number }[];
+        numbers.push(...pulls);
+        if (pulls.length < 100) return numbers;
+      }
+    });
   if (process.argv[2] === "resolve") {
     const target = await resolveTarget();
     if (!target) {

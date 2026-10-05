@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
 
 import defaultCliSettings from "../setting.example.json" with { type: "json" };
-import { cliSettingsPath, legacyCliConfigPath, providerConfigPath, settingsMigrationMarkerPath, sharedDataBaseDir } from "./config-paths.ts";
+import { cliSettingsPath, credentialsPath, legacyCliConfigPath, providerConfigPath, settingsMigrationMarkerPath } from "./config-paths.ts";
 export { cliSettingsPath, providerConfigPath } from "./config-paths.ts";
 
 export interface ConfiguredModelAccess {
@@ -197,8 +197,6 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 /** Configuration presence only; the runtime owns credential decryption and authentication. */
 export async function readConfiguredModelAccess(env: NodeJS.ProcessEnv = process.env): Promise<ConfiguredModelAccess | null> {
-  const home = sharedDataBaseDir(env);
-  const directory = join(home, ".zcode", "v2");
   const configPath = providerConfigPath(env);
   let value: unknown;
   try {
@@ -215,7 +213,7 @@ export async function readConfiguredModelAccess(env: NodeJS.ProcessEnv = process
   const result = { configPath, model: `${providerId}/${modelId}`, providerId };
   if (providerId.startsWith("account:")) {
     try {
-      const credentials = record(JSON.parse(await readFile(join(directory, "credentials.json"), "utf8")));
+      const credentials = record(JSON.parse(await readFile(credentialsPath(env), "utf8")));
       const identity = credentials?.[`account-provider:${providerId}:identity`];
       const keyPrefix = `account-provider:coding-plan:${providerId}:account:`;
       return typeof identity === "string" && identity.length > 0 && Object.entries(credentials ?? {}).some(

@@ -449,8 +449,10 @@ browser for interactive login or verification flows.
 - Node.js 22.19 or newer;
 - macOS, Linux or Windows on x64 or ARM64.
 
-Z.AI browser OAuth currently requires macOS because the registered provider
-callback is `zcode://zai-auth/callback`; API-key and custom-provider access work
+Z.AI browser OAuth uses the official runtime's server-mediated login on Linux
+and Windows: the browser returns to ZCode's registered HTTPS callback while
+the CLI polls for completion. macOS uses `zcode://zai-auth/callback` through
+the Desktop callback bridge. API-key and custom-provider access work
 on every supported platform.
 
 Set `ZCODE_NODE=/absolute/path/to/node` when the desired Node.js executable is
@@ -477,6 +479,29 @@ for the distinction from Desktop's MCP settings.
 Provider settings and the default model are stored in
 `~/.zcode/v2/provider_config.json`, shared with ZCode Desktop by default.
 Use `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` for an independent CLI provider file.
+That file has its own custom providers and model overrides. To retain an
+existing Desktop catalog, copy `~/.zcode/v2/provider_config.json` to the chosen
+CLI provider path before the first login, with mode 600. Do not overwrite an
+existing CLI provider file: merge its missing provider and model rules instead,
+preserving the CLI's `defaultModelSelection`. Later Desktop catalog changes
+must also be copied or merged into the independent file.
+To keep CLI OAuth credentials independent of Desktop too, set
+`ZCODE_CLI_CREDENTIALS_FILE` before both login and prompt runs:
+
+```bash
+export ZCODE_CLI_CREDENTIALS_FILE="$HOME/.zcode/cli/credentials.json"
+export ZCODE_PERSONAL_PROVIDER_CONFIG_FILE="$HOME/.zcode/cli/provider_config.json"
+zcode login --oauth --no-browser
+zcode --prompt 'Reply with exactly: ok'
+```
+
+The browser authorization uses the registered ZCode client ID. The runtime
+stores the login and resolves Coding Plan access using its native account
+provider registry. The credential file remains private (mode 600). These
+overrides leave Desktop's credentials and provider configuration untouched.
+Client headers and a local usage row do not independently prove server-side
+bonus accounting.
+
 `/settings` saves the default model; `/model` changes only the current session.
 See [`provider.example.json`](./provider.example.json) for complete field examples
 and the [provider configuration reference](./docs/PROVIDER_CONFIG.md) for multimodal
@@ -487,7 +512,7 @@ models demonstrate explicit overrides and manual configuration.
 [Provider 配置字段参考](./docs/PROVIDER_CONFIG.zh-CN.md)。
 The project follows the current upstream runtime and configuration schema.
 
-Three model-access paths are supported: Z.AI OAuth (macOS only), Z.AI/BigModel
+Three model-access paths are supported: Z.AI OAuth, Z.AI/BigModel
 Coding Plan API key, or a direct API key with a custom provider. For detailed
 setup steps, retries/timeouts, theme, and turn-completion notifications, see
 [Configuration](./docs/CONFIGURATION.md).

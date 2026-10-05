@@ -25,6 +25,7 @@ import {
   parseRuntimeLock,
   patchRuntimeAgentAutoBackground,
   patchRuntimeCliHelpContract,
+  patchRuntimeCliCredentials,
   patchRuntimeDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
@@ -48,6 +49,19 @@ import {
   supportsMultiMessageFileRewind,
   writeRuntimeCompatibilityFailure
 } from "../scripts/sync-runtime.ts";
+
+describe("CLI credential isolation", () => {
+  test("keeps explicit paths first and isolates environment-selected credentials", () => {
+    const source = 'function resolve(e={}){if(e.filePath)return e.filePath;return join(".zcode","v2","credentials.json")}';
+    const patched = patchRuntimeCliCredentials(source);
+    expect(patchRuntimeCliCredentials(patched)).toBe(patched);
+    const resolve = new Function("join", `${patched};return resolve`)((...parts: string[]) => parts.join("/"));
+    expect(resolve({ env: {} })).toBe(".zcode/v2/credentials.json");
+    expect(resolve({ env: { ZCODE_CLI_CREDENTIALS_FILE: " /cli/credentials.json " } })).toBe("/cli/credentials.json");
+    expect(resolve({ filePath: "/explicit", env: { ZCODE_CLI_CREDENTIALS_FILE: "/cli" } })).toBe("/explicit");
+    expect(() => patchRuntimeCliCredentials("incompatible runtime")).toThrow(/credential path patch/);
+  });
+});
 import {
   compareReleaseVersions,
   nextBuildVersion,

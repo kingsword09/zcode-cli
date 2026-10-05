@@ -237,7 +237,7 @@ describe("launcher routing", () => {
     expect(isDoctorRuntimeInvocation(["doctor", "--unknown"])).toBe(false);
   });
 
-  test("routes only the plain Z.AI login command through the Desktop OAuth bridge", () => {
+  test("recognizes plain Z.AI OAuth login for platform-specific routing", () => {
     expect(classifyZaiOAuthInvocation(["login"])).toEqual({
       json: false,
       noBrowser: false,

@@ -36,6 +36,11 @@ export function providerConfigPath(env: NodeJS.ProcessEnv = process.env, platfor
     || path.join(sharedDataBaseDir(env, platform, fallbackHome), ".zcode", "v2", "provider_config.json");
 }
 
+export function credentialsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.ZCODE_CLI_CREDENTIALS_FILE?.trim()
+    || join(sharedDataBaseDir(env), ".zcode", "v2", "credentials.json");
+}
+
 export function legacyCliConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(dirname(cliSettingsPath(env)), "config.json");
 }
