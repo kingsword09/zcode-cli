@@ -18,7 +18,10 @@ export function mergeDesktopSettings(value: unknown, filePath: string, env: Node
   const settings = record(value);
   if (!settings || resolve(filePath) !== resolve(cliSettingsPath(env))) return value;
   const desktop = readDesktopSettings(env);
-  const locale = desktop.localePreference;
+  // Desktop's default "system" (follow the OS language) is the CLI's "auto";
+  // copying it verbatim fails the CLI schema's locale enum and invalidates
+  // the whole user config. See #192.
+  const locale = desktop.localePreference === "system" ? "auto" : desktop.localePreference;
   const memory = typeof desktop.memoryEnabled === "boolean" ? desktop.memoryEnabled : undefined;
   const memorySettings = { ...memory !== undefined ? { use: memory, write: memory } : {}, ...record(settings.memory) };
   const memoryFeature = typeof memorySettings.use === "boolean" && typeof memorySettings.write === "boolean"
