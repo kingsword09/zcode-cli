@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { choose, promptText } from "../packages/zcode-tui/src/choice-dialog.ts";
-import { PermissionRequestQueue } from "../packages/zcode-tui/src/permission-request-queue.ts";
+import { PermissionRequestQueue, permissionRequestSignal } from "../packages/zcode-tui/src/permission-request-queue.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
 function dialogHarness(): {
@@ -92,6 +92,40 @@ describe("permission request queue", () => {
 
     expect(await Promise.all([first, second])).toEqual([null, null]);
     expect(host.children).toHaveLength(0);
+  });
+
+  test("closes a dialog when the runtime settles its request elsewhere", async () => {
+    const queue = new PermissionRequestQueue();
+    const { focus, host, ui } = dialogHarness();
+    // The runtime's permission broker options: a PermissionRequest hook that
+    // answers first aborts this signal.
+    const hookRace = new AbortController();
+    const context = { signal: hookRace.signal, claimResponse: () => true, timeoutMs: 60_000 };
+
+    const settled = queue.run(() => permissionDialog(ui, host, "Write", permissionRequestSignal(context)));
+    const next = queue.run(() => permissionDialog(ui, host, "Bash"));
+    await Promise.resolve();
+
+    expect(host.render(100).join("\n")).toContain("Write");
+    hookRace.abort();
+
+    expect(await settled).toBeNull();
+    await Promise.resolve();
+    expect(host.children).toHaveLength(1);
+    expect(host.render(100).join("\n")).toContain("Bash");
+    expect(focus.current).toBe(host.children[0] ?? null);
+    host.children[0]?.handleInput?.("\r");
+    expect(await next).toMatchObject({ value: "allow" });
+  });
+
+  test("reads the request signal from runtime or TUI options", () => {
+    const runtime = new AbortController();
+    const tui = new AbortController();
+    expect(permissionRequestSignal({ signal: runtime.signal })).toBe(runtime.signal);
+    expect(permissionRequestSignal({ abortSignal: tui.signal })).toBe(tui.signal);
+    expect(permissionRequestSignal({ signal: runtime.signal, abortSignal: tui.signal })).toBe(runtime.signal);
+    expect(permissionRequestSignal({ signal: "nope" })).toBeUndefined();
+    expect(permissionRequestSignal(undefined)).toBeUndefined();
   });
 
   test("continues with the next request after an exception", async () => {
