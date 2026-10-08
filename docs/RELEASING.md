@@ -197,6 +197,12 @@ protocol anchors and partial auth injections stop synchronization; a release
 must not silently lose account-backed app-server turns. Runtime tests exercise
 both credential owners against a local HTTPS model fixture.
 
+`bigmodel-oauth` is required. It replaces the runtime's direct exchange requiring
+an app secret with Desktop's official ZCode token service, and persists the
+ZCode JWT alongside the BigModel tokens. Runtime tests use the native localhost
+callback, stub token/API-key endpoints and the native encrypted credential store
+to cover browser login, failure cleanup and manual Coding Plan setup.
+
 If a required compatibility check fails, synchronization writes JSON and
 Markdown reports under `.release/`. The scheduled workflow uploads both files
 and creates or updates the fixed **Automated upstream runtime compatibility

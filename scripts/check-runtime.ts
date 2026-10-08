@@ -15,6 +15,7 @@ import { runtimeTestEnv } from "./runtime-test-env.ts";
 import {
   extractRuntimeCapabilities,
   hasRuntimeAppServerStandaloneAuth,
+  hasRuntimeBigmodelOAuth,
   hasRuntimeConfigurationDiagnostics,
   hasRuntimeCliSettingsFile,
   hasRuntimeCliHelpContract,
@@ -96,6 +97,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeStreamEofFinishGuard(runtimeSource)
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
   || !hasRuntimeAppServerStandaloneAuth(runtimeSource)
+  || !hasRuntimeBigmodelOAuth(runtimeSource)
   || !hasRuntimeConfigurationDiagnostics(runtimeSource)
   || !hasRuntimeCliSettingsFile(runtimeSource)
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")

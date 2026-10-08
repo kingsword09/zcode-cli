@@ -525,7 +525,7 @@ models demonstrate explicit overrides and manual configuration.
 [Provider 配置字段参考](./docs/PROVIDER_CONFIG.zh-CN.md)。
 The project follows the current upstream runtime and configuration schema.
 
-Three model-access paths are supported: Z.AI OAuth, Z.AI/BigModel
+Three model-access paths are supported: Z.AI/BigModel OAuth, Z.AI/BigModel
 Coding Plan API key, or a direct API key with a custom provider. For detailed
 setup steps, retries/timeouts, theme, and turn-completion notifications, see
 [Configuration](./docs/CONFIGURATION.md).
