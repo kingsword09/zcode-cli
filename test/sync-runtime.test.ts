@@ -2,7 +2,7 @@ import { fixtureSubagentQueries, subagentRestoreFixture } from "./fixtures/runti
 import { restoreTuiBackgroundTasks } from "../src/runtime-background-restore.ts";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 import { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage } from "../src/runtime-tui-bridge.ts";
@@ -14,6 +14,7 @@ import {
   extractRuntimeCapabilities,
   formatRuntimeCompatibilityFailure,
   hasRuntimeCliHelpContract,
+  hasRuntimeCliSettingsFile,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeSqliteBusyTimeout,
@@ -26,6 +27,7 @@ import {
   patchRuntimeAgentAutoBackground,
   patchRuntimeCliHelpContract,
   patchRuntimeCliCredentials,
+  patchRuntimeCliSettingsFile,
   patchRuntimeDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
@@ -49,6 +51,68 @@ import {
   supportsMultiMessageFileRewind,
   writeRuntimeCompatibilityFailure
 } from "../scripts/sync-runtime.ts";
+
+describe("CLI settings file override", () => {
+  const home = join(tmpdir(), "settings-fixture-home");
+  // Native settings and trust-store path resolution after the shared-config patch.
+  const trustSource = 'async function trustPath(e={}){let t=(0,P.resolve)(e.homeDir??(0,O.homedir)()),n=(0,P.resolve)(e.userConfigPath??(0,P.join)(t,".zcode","cli","config.json"));return n}';
+  const source = 'var F="setting.json",B="~/.zcode/cli";'
+    + 'function resolvePath(e){return e.startsWith("~/")?(0,P.join)((0,O.homedir)(),e.slice(2)):(0,P.resolve)(e)}'
+    + 'function load(e,t={}){let n=e?resolvePath(e):(0,P.join)(resolvePath(t.baseDir??B),t.configFileName??F);return n}'
+    + 'function settingsPath(){return(0,P.join)(resolvePath(B),F)}'
+    + trustSource;
+
+  function runtime(env: Record<string, string>) {
+    const patched = patchRuntimeCliSettingsFile(source);
+    const P = { join, resolve };
+    const require = (id: string) => {
+      if (id !== "node:path") throw new Error(id);
+      return P;
+    };
+    return new Function("P", "O", "require", "process", `${patched};return {load,settingsPath,trustPath}`)(P, { homedir: () => home }, require, { env });
+  }
+
+  test.each([undefined, "", " \t "])("keeps default paths for an unset or blank override (%j)", async (value) => {
+    const plain = runtime(value === undefined ? {} : { ZCODE_CLI_SETTINGS_FILE: value });
+    expect(plain.load()).toBe(join(home, ".zcode", "cli", "setting.json"));
+    expect(plain.settingsPath()).toBe(plain.load());
+    expect(await plain.trustPath()).toBe(join(home, ".zcode", "cli", "config.json"));
+  });
+
+  test("uses ZCODE_CLI_SETTINGS_FILE for settings and hook trust, preserving explicit paths", async () => {
+    const patched = patchRuntimeCliSettingsFile(source);
+    expect(patchRuntimeCliSettingsFile(patched)).toBe(patched);
+    expect(hasRuntimeCliSettingsFile(patched)).toBe(true);
+
+    const hostFile = join(home, "host", "card.json"), explicit = join(home, "explicit.json");
+    const project = join(home, "project", ".zcode");
+    const host = runtime({ ZCODE_CLI_SETTINGS_FILE: ` ${hostFile} ` });
+    expect(host.load()).toBe(hostFile);
+    expect(host.settingsPath()).toBe(hostFile);
+    expect(await host.trustPath()).toBe(hostFile);
+    expect(host.load(explicit)).toBe(explicit);
+    expect(await host.trustPath({ userConfigPath: explicit })).toBe(explicit);
+    expect(host.load(undefined, { baseDir: project, configFileName: "config.json" })).toBe(join(project, "config.json"));
+    expect(host.load(undefined, { baseDir: project })).toBe(join(project, "setting.json"));
+    expect(host.load(undefined, { configFileName: "custom.json" })).toBe(join(home, ".zcode", "cli", "custom.json"));
+  });
+
+  test("upgrades an existing settings override that lacks the hook trust patch", () => {
+    const patched = patchRuntimeCliSettingsFile(source);
+    const previous = patched.replace('e.userConfigPath??(process.env.ZCODE_CLI_SETTINGS_FILE?.trim()||(0,P.join)(t,".zcode","cli","config.json"))',
+      'e.userConfigPath??(0,P.join)(t,".zcode","cli","config.json")');
+    expect(previous).not.toBe(patched);
+    expect(hasRuntimeCliSettingsFile(previous)).toBe(false);
+    expect(patchRuntimeCliSettingsFile(previous)).toBe(patched);
+  });
+
+  test("refuses missing or ambiguous anchors even when the environment variable is mentioned", () => {
+    expect(() => patchRuntimeCliSettingsFile("incompatible runtime")).toThrow(/settings path patch/);
+    expect(() => patchRuntimeCliSettingsFile('"ZCODE_CLI_SETTINGS_FILE"')).toThrow(/settings path patch/);
+    expect(() => patchRuntimeCliSettingsFile(source.replace(trustSource, ""))).toThrow(/hook trust anchor/);
+    expect(() => patchRuntimeCliSettingsFile(source + trustSource)).toThrow(/hook trust anchor/);
+  });
+});
 
 describe("CLI credential isolation", () => {
   test("keeps explicit paths first and isolates environment-selected credentials", () => {

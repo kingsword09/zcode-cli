@@ -3,14 +3,24 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, posix, win32 } from "node:path";
 
-export function cliSettingsPath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, fallbackHome = homedir()): string {
+function homeCliSettingsPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, fallbackHome: string): string {
   const path = platform === "win32" ? win32 : posix;
   const home = (platform === "win32" ? env.USERPROFILE : env.HOME)?.trim() || fallbackHome;
   return path.join(home, ".zcode", "cli", "setting.json");
 }
 
+/**
+ * The CLI settings file. `ZCODE_CLI_SETTINGS_FILE` lets a host run one process
+ * on its own settings file (hooks, MCP servers, permissions) without editing
+ * the user's `~/.zcode/cli/setting.json`. Files that are derived from the
+ * settings location (migration markers, the legacy `config.json`) follow it.
+ */
+export function cliSettingsPath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, fallbackHome = homedir()): string {
+  return env.ZCODE_CLI_SETTINGS_FILE?.trim() || homeCliSettingsPath(env, platform, fallbackHome);
+}
+
 export function desktopSettingsPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(dirname(dirname(cliSettingsPath(env))), "v2", "setting.json");
+  return join(dirname(dirname(homeCliSettingsPath(env, process.platform, homedir()))), "v2", "setting.json");
 }
 
 export function readDesktopSettings(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {

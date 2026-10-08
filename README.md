@@ -474,6 +474,9 @@ ZCode reads MCP servers, hooks, plugins, permissions, network, storage and displ
 settings from `~/.zcode/cli/setting.json` (or
 `%USERPROFILE%\.zcode\cli\setting.json` on Windows). Project settings use
 `zcode.json` or `.zcode/config.json`. Existing files are never replaced.
+Set `ZCODE_CLI_SETTINGS_FILE` to an absolute path to give one process its own user
+settings file. See [host integration](./docs/HOST_INTEGRATION.md#environment-and-configuration)
+for migration behavior and the separate session, provider and credential overrides.
 
 Custom MCP servers go in the top-level `mcp.servers` object in `setting.json`.
 See [MCP configuration](./docs/CONFIGURATION.md#mcp-servers) for HTTP/stdio examples,

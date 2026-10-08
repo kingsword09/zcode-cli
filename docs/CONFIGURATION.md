@@ -21,8 +21,20 @@ both clients. `/model` changes only the current CLI session.
 
 Set `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` to a separate file to isolate provider
 settings. `ZCODE_DATA_BASE_DIR` changes the native runtime's base directory,
-including its provider and credential storage. General CLI settings still use
-the user's `~/.zcode/cli/setting.json`.
+including its provider and credential storage. General CLI settings default to
+the user's `~/.zcode/cli/setting.json`. Set `ZCODE_CLI_SETTINGS_FILE` to an absolute
+file path to give one process its own settings. Unset or whitespace-only values
+use the default. The selected file replaces the user settings source; explicit
+runtime file paths and project configuration keep their existing precedence.
+
+Legacy `config.json` and `migrations/` markers follow the selected file's directory.
+Hook trust commands use that file's `storage.dir` too. Providers, credentials and
+the session database (including persisted project permissions) have separate path
+overrides; changing only the settings file does not isolate those stores. See
+[host integration](HOST_INTEGRATION.md#environment-and-configuration) for examples.
+Desktop preferences remain in `~/.zcode/v2/setting.json`; Desktop's user hooks and
+MCP configuration in `~/.zcode/cli/config.json` are not continuously synchronized
+with the CLI settings file.
 
 On first launch, the CLI creates a credential-free general configuration from
 [`setting.example.json`](../setting.example.json). Existing files are not replaced.

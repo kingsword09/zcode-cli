@@ -76,10 +76,38 @@ The following variables are supported host integration points:
 | `ZCODE_BASE_URL` | Override the official ZCode service base URL. |
 | `ZCODE_MODEL_RETRY_MAX_RETRIES` | Override the model retry limit. |
 | `ZCODE_TUI_RUNTIME_LOG` | Choose the bounded diagnostic log for TUI runtime stderr. |
+| `ZCODE_CLI_SETTINGS_FILE` | Choose an absolute path for this process's user settings, including hooks, MCP servers and default tool permissions. |
 
 Hosts should pass user configuration through the normal ZCode environment and
 configuration files. Do not put API keys or other secrets in command-line
 arguments or host logs.
+
+For example, give each agent a settings directory:
+
+```bash
+ZCODE_CLI_SETTINGS_FILE=/host/agent-a/setting.json zcode
+ZCODE_CLI_SETTINGS_FILE=/host/agent-b/setting.json zcode
+```
+
+The selected file replaces the default user settings file; its contents are not
+merged with `~/.zcode/cli/setting.json`. Unset or whitespace-only values use the
+default. Explicit runtime file paths and project configuration keep their existing
+precedence. The launcher initializes a missing file and reads legacy `config.json`
+and writes `migrations/` markers in the selected file's directory. Separate
+directories keep each profile's migration state independent.
+
+Hook trust commands also read the selected file's `storage.dir`, so grants and
+revocations use the same trust store as the app runtime. Selecting a settings file
+alone does not isolate session databases, persisted project permissions, providers
+or credentials. Use `storage.dir` for separate hook trust storage,
+`ZCODE_SESSION_DB_PATH` for sessions and persisted permissions,
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` for providers, and `ZCODE_CLI_CREDENTIALS_FILE`
+for credentials when the host needs those stores to be independent.
+
+Desktop preferences still come from `~/.zcode/v2/setting.json`. This override does
+not synchronize Desktop's user hooks/MCP file (`~/.zcode/cli/config.json`) with the
+CLI settings file. See [configuration files](./CONFIGURATION.md#configuration-files)
+for the ownership and migration rules.
 
 The launcher does not install, replace, or select a different npm package
 while a command is running. A host that needs reproducible deployments should

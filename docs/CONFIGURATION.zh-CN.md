@@ -20,7 +20,16 @@ Windows 使用 `%USERPROFILE%` 代替 `~`。Provider 文件默认与桌面端共
 
 设置 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 可使用独立的 provider 文件。
 `ZCODE_DATA_BASE_DIR` 改变原生 runtime 的基础目录，包括 provider 和凭证存储。
-CLI 通用设置仍使用用户目录中的 `~/.zcode/cli/setting.json`。
+CLI 通用设置默认使用用户目录中的 `~/.zcode/cli/setting.json`。
+设置 `ZCODE_CLI_SETTINGS_FILE` 为绝对文件路径，可为单个进程指定独立设置。
+未设置或仅含空白时使用默认路径。所选文件替换用户级设置来源；显式 runtime 文件路径和
+项目配置保留原有优先级。
+
+旧 `config.json` 和 `migrations/` 标记使用所选文件所在目录，hook 信任命令也读取该文件的
+`storage.dir`。Provider、凭证和会话数据库（含持久化项目权限）有各自的路径覆盖变量，
+仅切换设置文件不会隔离这些存储，示例见[宿主集成](HOST_INTEGRATION.md#environment-and-configuration)。
+Desktop 偏好仍位于 `~/.zcode/v2/setting.json`；桌面端保存在 `~/.zcode/cli/config.json`
+中的用户 hooks 和 MCP 配置不会与 CLI 设置文件持续同步。
 
 首次启动时，CLI 根据不含凭证的 [`setting.example.json`](../setting.example.json)
 创建通用设置，不覆盖已有文件。Provider 配置由原生登录创建，或参考

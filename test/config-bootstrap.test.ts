@@ -8,6 +8,7 @@ import {
   readConfiguredModelAccess,
   cliSettingsPath
 } from "../src/model-access.ts";
+import { desktopSettingsPath, legacyCliConfigPath, settingsMigrationMarkerPath } from "../src/config-paths.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -38,6 +39,48 @@ describe("user config bootstrap", () => {
     expect(cliSettingsPath({}, "win32", "D:\\Profiles\\Default")).toBe(
       "D:\\Profiles\\Default\\.zcode\\cli\\setting.json"
     );
+  });
+
+  test("lets a host choose the settings file without moving Desktop settings", async () => {
+    const home = await temporaryHome();
+    const hostFile = join(home, "host", "card", "setting.json");
+    const env = { ...homeEnvironment(home), ZCODE_CLI_SETTINGS_FILE: ` ${hostFile} ` };
+
+    expect(cliSettingsPath(env)).toBe(hostFile);
+    expect(desktopSettingsPath(env)).toBe(join(home, ".zcode", "v2", "setting.json"));
+    expect(await ensureCliSettings(env)).toEqual({ configPath: hostFile, created: true });
+    expect(JSON.parse(await readFile(hostFile, "utf8"))).toBeObject();
+    await expect(stat(join(home, ".zcode", "cli", "setting.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("supports Windows overrides and ignores blank values", () => {
+    expect(cliSettingsPath({ ZCODE_CLI_SETTINGS_FILE: " C:\\Host\\card.json " }, "win32", "D:\\Default"))
+      .toBe("C:\\Host\\card.json");
+    expect(cliSettingsPath({ HOME: "/home/alice", ZCODE_CLI_SETTINGS_FILE: " \t " }, "linux", "/fallback"))
+      .toBe("/home/alice/.zcode/cli/setting.json");
+  });
+
+  test("migrates and resets host settings independently of the home migration", async () => {
+    const home = await temporaryHome(), homeEnv = homeEnvironment(home);
+    await ensureCliSettings(homeEnv);
+    const original = await readFile(cliSettingsPath(homeEnv), "utf8");
+    const originalMarker = await readFile(settingsMigrationMarkerPath(homeEnv), "utf8");
+    await writeFile(legacyCliConfigPath(homeEnv), "invalid home legacy config");
+
+    const env = { ...homeEnv, ZCODE_CLI_SETTINGS_FILE: join(home, "host", "card.json") };
+    await mkdir(dirname(legacyCliConfigPath(env)), { recursive: true });
+    const hooks = { enabled: true, events: {} };
+    await writeFile(legacyCliConfigPath(env), JSON.stringify({ hooks, provider: { old: {} } }));
+    expect(await ensureCliSettings(env)).toEqual({ configPath: cliSettingsPath(env), created: true, migrated: true });
+    expect(JSON.parse(await readFile(cliSettingsPath(env), "utf8"))).toEqual({ hooks });
+    expect(JSON.parse(await readFile(settingsMigrationMarkerPath(env), "utf8"))).toEqual({ schemaVersion: 1 });
+
+    await rm(cliSettingsPath(env));
+    await writeFile(legacyCliConfigPath(env), "invalid host legacy config after migration");
+    expect(await ensureCliSettings(env)).toEqual({ configPath: cliSettingsPath(env), created: true });
+    expect(JSON.parse(await readFile(cliSettingsPath(env), "utf8")).hooks.enabled).toBe(false);
+    expect(await readFile(cliSettingsPath(homeEnv), "utf8")).toBe(original);
+    expect(await readFile(settingsMigrationMarkerPath(homeEnv), "utf8")).toBe(originalMarker);
   });
 
   test("recursively creates a private, credential-free config", async () => {

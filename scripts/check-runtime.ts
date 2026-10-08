@@ -16,6 +16,7 @@ import {
   extractRuntimeCapabilities,
   hasRuntimeAppServerStandaloneAuth,
   hasRuntimeConfigurationDiagnostics,
+  hasRuntimeCliSettingsFile,
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
@@ -96,6 +97,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
   || !hasRuntimeAppServerStandaloneAuth(runtimeSource)
   || !hasRuntimeConfigurationDiagnostics(runtimeSource)
+  || !hasRuntimeCliSettingsFile(runtimeSource)
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
   || !runtimeSource.includes('"plugin://"')
   || !runtimeSource.includes('return await import("playwright-core")')
