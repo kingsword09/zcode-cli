@@ -16,6 +16,7 @@ import {
   extractRuntimeCapabilities,
   hasRuntimeAppServerStandaloneAuth,
   hasRuntimeBigmodelOAuth,
+  hasRuntimeBrowserUrlOpening,
   hasRuntimeConfigurationDiagnostics,
   hasRuntimeCliSettingsFile,
   hasRuntimeCliHelpContract,
@@ -98,6 +99,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
   || !hasRuntimeAppServerStandaloneAuth(runtimeSource)
   || !hasRuntimeBigmodelOAuth(runtimeSource)
+  || !hasRuntimeBrowserUrlOpening(runtimeSource)
   || !hasRuntimeConfigurationDiagnostics(runtimeSource)
   || !hasRuntimeCliSettingsFile(runtimeSource)
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")

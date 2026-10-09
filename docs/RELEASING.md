@@ -203,6 +203,12 @@ ZCode JWT alongside the BigModel tokens. Runtime tests use the native localhost
 callback, stub token/API-key endpoints and the native encrypted credential store
 to cover browser login, failure cleanup and manual Coding Plan setup.
 
+`browser-url-opening` is required. Windows browser launches use an encoded
+PowerShell command that decodes the URL as data, preserving OAuth query separators,
+percent encoding and state. The Windows CI job exercises PowerShell itself with
+the browser-launch action stubbed. Runtime login tests also verify that the
+native browser opener invokes this command before completing the callback.
+
 If a required compatibility check fails, synchronization writes JSON and
 Markdown reports under `.release/`. The scheduled workflow uploads both files
 and creates or updates the fixed **Automated upstream runtime compatibility

@@ -280,6 +280,15 @@ stdin 把回调交给 runtime。Runtime 交换令牌、保存加密凭证、解�
 `https://zcode.z.ai/api/v1/oauth/token`。BigModel access token 和 ZCode JWT 均通过原生
 凭证存储加密保存。回调须能访问运行 CLI 的机器；SSH 环境需要将回调 URL 中的端口转发到该机器。
 
+Windows 上，CLI 通过 PowerShell 打开浏览器，保留授权链接中的全部查询参数。
+手动打开时，请将包含 `redirect` 和 `state` 的完整 URL 粘贴到浏览器地址栏，
+避免通过 `cmd.exe /c start` 传递链接。
+
+若 BigModel 授权页的账号名称显示为 `--`，或提示缺少账号 ID，可先在同一浏览器中
+登录 [BigModel 官网](https://bigmodel.cn/login)，再重新运行 `/login bigmodel-coding-plan`。
+该错误发生在网页端，早于 CLI 收到授权码；账号 ID 来自网站登录会话，并非 OAuth 的 `appId`。
+浏览器若询问是否允许访问此设备上的应用或服务，请为此次登录允许访问，以便完成 localhost 回调。
+
 不使用浏览器或 SSH 回调端口转发时，可在
 [Coding Plan 概览](https://bigmodel.cn/coding-plan/personal/overview) 获取密钥，
 再在 `/login` 中选择 **BigModel Coding Plan API Key**。原生 runtime 会加密保存密钥并设置

@@ -17,7 +17,7 @@ async function probe(body: string): Promise<void> {
       const file = ${JSON.stringify(join(root, "vendor/zcode.cjs"))};
       let source = fs.readFileSync(file, "utf8");
       const names = ["loginBigmodelCodingPlan", "configureCodingPlanApiKey", "createSharedZCodeCredentialStore",
-        "startProcessProviderRegistryRuntime", "parseClientSigningCredential", "buildLoginSelection"];
+        "startProcessProviderRegistryRuntime", "parseClientSigningCredential", "buildLoginSelection", "openUrlInBrowser"];
       const symbols = names.map(name => {
         const symbol = new RegExp('[A-Za-z_$][\\\\w$]*\\\\(([A-Za-z_$][\\\\w$]*),"' + name + '"\\\\)', 'u').exec(source);
         if (!symbol) throw new Error("Missing native function: " + name);
@@ -54,9 +54,23 @@ test("BigModel OAuth completes the native callback, broker exchange and account 
     const choices=buildLoginSelection("en").items;
     assert.equal(choices.some(item=>item.id==="bigmodel-coding-plan"),true);
     assert.equal(choices.find(item=>item.id==="bigmodel-coding-plan-api-key").input.mask,true);
-    let callbackUrl, requested = false, businessRequests = 0;
+    let callbackUrl, requested = false, businessRequests = 0, browserOpened = false;
     const response=data=>({status:200,body:new TextEncoder().encode(JSON.stringify({code:0,data}))});
-    const result = await loginBigmodelCodingPlan({env, noBrowser:true, state:"fixture-state",
+    const result = await loginBigmodelCodingPlan({env, state:"fixture-state",
+      openBrowser:authorizeUrl=>openUrlInBrowser(authorizeUrl,{platform:"win32",spawnProcess:(executable,args,options)=>{
+        assert.equal(executable,"powershell.exe");
+        assert.deepEqual(args.slice(0,3),["-NoProfile","-NonInteractive","-EncodedCommand"]);
+        const script=Buffer.from(args[3],"base64").toString("utf16le");
+        const encodedUrl=/FromBase64String\\('([A-Za-z0-9+/=]+)'\\)/u.exec(script)?.[1];
+        assert.ok(encodedUrl);
+        assert.equal(Buffer.from(encodedUrl,"base64").toString("utf8"),authorizeUrl);
+        assert.equal(options.windowsHide,true);
+        browserOpened=true;
+        const child=new (require("node:events").EventEmitter)();
+        child.unref=()=>{};
+        process.nextTick(()=>child.emit("spawn"));
+        return child;
+      }}),
       onAuthorizeUrl:async({authorize_url,callback_url})=>{
         callbackUrl=callback_url;
         const url=new URL(authorize_url);
@@ -91,6 +105,8 @@ test("BigModel OAuth completes the native callback, broker exchange and account 
       }}
     });
     assert.equal(requested,true);
+    assert.equal(browserOpened,true);
+    assert.equal(result.browser.opened,true);
     assert.equal(businessRequests,3);
     assert.equal(result.providerId,"bigmodel");
     const store=createSharedZCodeCredentialStore({env});
