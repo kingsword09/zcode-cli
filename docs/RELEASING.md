@@ -205,9 +205,11 @@ to cover browser login, failure cleanup and manual Coding Plan setup.
 
 `browser-url-opening` is required. Windows browser launches use an encoded
 PowerShell command that decodes the URL as data, preserving OAuth query separators,
-percent encoding and state. The Windows CI job exercises PowerShell itself with
-the browser-launch action stubbed. Runtime login tests also verify that the
-native browser opener invokes this command before completing the callback.
+percent encoding and state. On Windows, run `bun test test/browser-open.test.ts`
+locally to exercise PowerShell itself with the browser-launch action stubbed.
+The cross-platform tests remain in the unit suite. Runtime login tests also
+verify that the native browser opener invokes this command before completing
+the callback.
 
 If a required compatibility check fails, synchronization writes JSON and
 Markdown reports under `.release/`. The scheduled workflow uploads both files
