@@ -14,6 +14,10 @@ import {
 } from "../src/runtime-capabilities.ts";
 import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts";
 import { markRuntimeModified } from "./runtime-attribution.ts";
+import { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
+export { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
+import { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
+export { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
 import { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
 export { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
 import { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
@@ -1730,6 +1734,18 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimePromptModel,
     verify: (runtime) => runtime.includes("ZCODE_CLI_PROMPT_MODEL")
+  },
+  {
+    id: "bigmodel-oauth",
+    requirement: "required",
+    apply: patchRuntimeBigmodelOAuth,
+    verify: hasRuntimeBigmodelOAuth
+  },
+  {
+    id: "browser-url-opening",
+    requirement: "required",
+    apply: patchRuntimeBrowserUrlOpening,
+    verify: hasRuntimeBrowserUrlOpening
   },
   {
     id: "desktop-oauth",

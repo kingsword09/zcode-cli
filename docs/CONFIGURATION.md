@@ -307,6 +307,10 @@ provider configuration is recognized directly; no desktop import step is needed.
   authorization. `--no-browser` prints the authorization URL.
 - **Z.AI/BigModel Coding Plan API key:** open `/login` and choose the masked
   API-key option. The official runtime owns credential and provider persistence.
+- **BigModel browser OAuth:** choose **BigModel Coding Plan** in `/login`, or run
+  `/login bigmodel-coding-plan`. The CLI exchanges the authorization code through
+  the official ZCode token service used by Desktop. No OAuth app secret needs to
+  be configured in the CLI.
 - **Custom provider:** configure the native provider file directly. Any provider
   ID can be used; a separate OAuth login is unnecessary.
 
@@ -318,7 +322,34 @@ For macOS OAuth, the CLI temporarily registers a callback receiver, checks
 `state`, restores the previous `zcode://` handler and sends the callback through
 stdin. The runtime exchanges the token, stores encrypted credentials, resolves
 the Coding Plan API key and saves the native default model. The TUI then rereads
-provider configuration. BigModel uses the runtime's localhost callback.
+provider configuration. BigModel uses the runtime's localhost callback, checks
+`state`, and sends the matching callback URI and state to
+`https://zcode.z.ai/api/v1/oauth/token`. Both the BigModel access token and ZCode
+JWT are saved in the native encrypted credential store before account setup
+completes. The callback must reach the machine running the CLI; with SSH, forward
+the port shown in the callback URL to that machine.
+
+On Windows, the CLI opens the browser through PowerShell so the authorization
+URL's query parameters survive command-line parsing. If opening it manually,
+copy the entire URL, including `redirect` and `state`, into the browser address
+bar instead of passing it to `cmd.exe /c start`.
+
+If BigModel's authorization page shows `--` for the account name or reports a
+missing account ID, try signing in at [BigModel](https://bigmodel.cn/login) in
+the same browser first, then run `/login bigmodel-coding-plan` again. This error
+occurs on the website before the CLI receives an authorization code. The account
+ID comes from the website's login session; it is not the OAuth `appId`. If the
+browser asks to access apps or services on this device, allow it for this login
+so it can reach the localhost callback.
+
+For API-key setup without a browser or SSH callback forwarding, get your key from the
+[Coding Plan overview](https://bigmodel.cn/coding-plan/personal/overview), then
+choose **BigModel Coding Plan API Key** in `/login`. The native runtime encrypts
+the key and saves the account provider's default model; manual plaintext edits
+to `provider_config.json` are unnecessary. Login and subsequent requests must
+use the same credential file and `ZCODE_CREDENTIAL_SECRET` (if set). Credentials
+encrypted with another secret must be configured again with the CLI's key-entry
+flow; ciphertext is not an API key.
 
 ## Custom provider
 

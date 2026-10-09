@@ -265,6 +265,9 @@ Provider 文件中的 `config.defaultModelSelection` 决定新会话使用的模
   `--no-browser` 只输出授权链接。
 - **Z.AI／BigModel Coding Plan API Key：** 打开 `/login`，选择掩码输入的 API Key 选项。
   凭证和 provider 的保存由官方 runtime 负责。
+- **BigModel 浏览器 OAuth：** 在 `/login` 中选择 **BigModel Coding Plan**，或运行
+  `/login bigmodel-coding-plan`。CLI 通过 Desktop 使用的官方 ZCode 令牌服务交换授权码，
+  无需在 CLI 中配置 OAuth 应用密钥。
 - **自定义 provider：** 直接配置原生 provider 文件，可使用自定义 ID，无需额外 OAuth 登录。
 
 普通的 `zcode login` 会识别已经配置的原生默认模型并提示配置路径。
@@ -272,7 +275,26 @@ Provider 文件中的 `config.defaultModelSelection` 决定新会话使用的模
 
 macOS OAuth 会临时注册回调接收器、校验 `state`，恢复原来的 `zcode://` 处理程序，并通过
 stdin 把回调交给 runtime。Runtime 交换令牌、保存加密凭证、解析 Coding Plan API Key，
-再保存原生默认模型；TUI 随后重新读取 provider 配置。BigModel 使用 runtime 的 localhost 回调。
+再保存原生默认模型；TUI 随后重新读取 provider 配置。BigModel 使用 runtime 的 localhost
+回调，校验 `state` 后，将匹配的回调地址和 state 提交到
+`https://zcode.z.ai/api/v1/oauth/token`。BigModel access token 和 ZCode JWT 均通过原生
+凭证存储加密保存。回调须能访问运行 CLI 的机器；SSH 环境需要将回调 URL 中的端口转发到该机器。
+
+Windows 上，CLI 通过 PowerShell 打开浏览器，保留授权链接中的全部查询参数。
+手动打开时，请将包含 `redirect` 和 `state` 的完整 URL 粘贴到浏览器地址栏，
+避免通过 `cmd.exe /c start` 传递链接。
+
+若 BigModel 授权页的账号名称显示为 `--`，或提示缺少账号 ID，可先在同一浏览器中
+登录 [BigModel 官网](https://bigmodel.cn/login)，再重新运行 `/login bigmodel-coding-plan`。
+该错误发生在网页端，早于 CLI 收到授权码；账号 ID 来自网站登录会话，并非 OAuth 的 `appId`。
+浏览器若询问是否允许访问此设备上的应用或服务，请为此次登录允许访问，以便完成 localhost 回调。
+
+不使用浏览器或 SSH 回调端口转发时，可在
+[Coding Plan 概览](https://bigmodel.cn/coding-plan/personal/overview) 获取密钥，
+再在 `/login` 中选择 **BigModel Coding Plan API Key**。原生 runtime 会加密保存密钥并设置
+账号 provider 的默认模型，无需手动在 `provider_config.json` 中填写明文密钥。
+登录和后续请求须使用同一凭证文件及 `ZCODE_CREDENTIAL_SECRET`（若已设置）。
+其他密钥加密的凭证需要通过 CLI 的密钥输入流程重新配置，不能将密文当作 API Key 使用。
 
 ## 自定义 Provider
 
