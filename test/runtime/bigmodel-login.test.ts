@@ -65,6 +65,7 @@ test("BigModel OAuth completes the native callback, broker exchange and account 
         assert.ok(encodedUrl);
         assert.equal(Buffer.from(encodedUrl,"base64").toString("utf8"),authorizeUrl);
         assert.equal(options.windowsHide,true);
+        assert.equal(options.detached,false);
         browserOpened=true;
         const child=new (require("node:events").EventEmitter)();
         child.unref=()=>{};
