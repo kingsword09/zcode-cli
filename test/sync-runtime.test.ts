@@ -36,6 +36,7 @@ import {
   patchRuntimeOAuthHttpErrors,
   patchRuntimeSessionModelRecovery,
   patchRuntimeSqliteBusyTimeout,
+  patchRuntimeStandaloneStartPlan,
   patchRuntimeStreamEofFinishGuard,
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge as patchExtractedRuntimeTuiBridge,
@@ -685,6 +686,97 @@ describe("runtime synchronization", () => {
         env: { ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" }
       });
     });
+  });
+
+  test("entitles and authenticates the Start Plan in standalone runtimes", async () => {
+    // Copied verbatim from the 3.14.4 runtime.
+    const catalog = "async function nPn(e,t){if(t)return{zcodeBuiltinRevision:t.revision,providers:t.providers.entries().flatMap(([s,a])=>{let l=a.access,u=a.builtinModelIds?.find(f=>f.trim())?.trim();return l?.type===\"zhipu-account\"&&l.mode===\"individual-coding-plan\"&&l.accountType&&u?[{family:l.accountType,modelId:u,providerId:s}]:[]})};let n=e[LV]?.trim();if(!n)throw new Error(`${LV} is required for login`);let o=new UO({bundledFilePath:n,watch:!1});try{let s=await o.read();return nPn(e,s)}finally{o.dispose()}}";
+    const snapshot = "async function oPn(e,t,n){let o=await nPn(t,n),s=o.providers,a=s.map(({providerId:b})=>Yie(b)),l=await e.loadMany(a),u=s.flatMap(({family:b,providerId:w})=>{let T=l[Yie(w)]?.trim();if(!T)return[];let I=t3e({providerId:w,accountIdentity:T});return[{accountIdentity:T,credentialKey:I,family:b,providerId:w}]}),f=await e.loadMany(u.map(({credentialKey:b})=>b)),g=new Map(u.map(b=>[b.providerId,b])),_=new uw(s.map(({family:b,providerId:w})=>{let T=g.get(w),I=T?f[T.credentialKey]?.trim():void 0;return!T||!I?[w,new Tk({access:new zj({entitled:!1})})]:[w,new Tk({access:new zj({entitled:!0})})]}));return pAe(o.zcodeBuiltinRevision,_)}";
+    const headersPort = "function SHo(e,t){return{shouldRefreshBeforeModelRequest(){return!0},async refreshBeforeModelRequest(n){n.abortSignal?.throwIfAborted();let o=n.providerId.trim(),s=n.accountAccess;if(!s||s.mode!==\"individual-coding-plan\")throw new Error(`Standalone Account Provider \\u8BF7\\u6C42\\u8EAB\\u4EFD\\u65E0\\u6548: ${o}`);let a=(await e.load(Yie(o)))?.trim();if(!a)throw new Error(`Standalone Account Provider \\u51ED\\u636E\\u5DF2\\u7ECF\\u5931\\u6548: ${o}`);let l=(await e.load(t3e({providerId:o,accountIdentity:a})))?.trim();if(!l)throw new Error(`Standalone Account Provider \\u7F3A\\u5C11\\u8BF7\\u6C42\\u51ED\\u636E: ${o}`);return{headersApplied:!0,requestAuth:{apiKey:l}}}}}";
+    const harness = [
+      "function r(value){return value}",
+      "function Y(init){let done=false;return()=>{if(!done){done=true;init()}}}",
+      "let initialized=false;",
+      "function Yie(id){return'account-provider:'+id+':identity'}",
+      "function t3e({providerId,accountIdentity}){return'account-provider:coding-plan:'+providerId+':account:'+accountIdentity+':api-key'}",
+      "class zj{constructor(value){this.entitled=value.entitled}}",
+      "class Tk{constructor(value){this.access=value.access}}",
+      "class uw{constructor(entries=[]){this.map=new Map([...entries])}overlay(other){return new uw([...this.map,...other.map])}}",
+      "function pAe(revision,providers){return{revision,providers}}",
+      catalog,
+      snapshot,
+      headersPort,
+      "async function OHo(e={}){return{'X-Device-Mid':'device-1','X-ZCode-App-Version':e.env.ZCODE_APP_VERSION}}",
+      "function tail(){}",
+      "var MHo=Y(()=>{\"use strict\";initialized=true;r(OHo,\"createProviderEndpointRoutingSourceHeaders\")});",
+      "r(nPn,\"readStandaloneCodingPlanCatalog\");r(oPn,\"readStandaloneAccountProviderConfigSnapshot\");r(SHo,\"createStandaloneProviderRuntimeHeadersPort\");"
+    ].join("");
+    const patched = patchRuntimeStandaloneStartPlan(harness);
+
+    expect(patched).toContain("MHo();return{headersApplied:!0,requestAuth:{apiKey:$spJwt,headers:await OHo({env:t})}}");
+    expect(patchRuntimeStandaloneStartPlan(patched)).toBe(patched);
+    expect(() => patchRuntimeStandaloneStartPlan("incompatible runtime")).toThrow(/readStandaloneCodingPlanCatalog missing/);
+
+    type Runtime = {
+      initialized(): boolean;
+      snapshot(store: unknown, env: Record<string, string>, catalog: unknown): Promise<{ providers: { map: Map<string, { access: { entitled: boolean } }> } }>;
+      port(store: unknown, env: Record<string, string>): { refreshBeforeModelRequest(request: unknown): Promise<unknown> };
+    };
+    const runtime = new Function(`${patched};return {initialized:()=>initialized,snapshot:oPn,port:SHo};`)() as Runtime;
+    const store = (credentials: Record<string, string>) => ({
+      async load(key: string) { return credentials[key] ?? null; },
+      async loadMany(keys: Iterable<string>) { return Object.fromEntries([...keys].map((key) => [key, credentials[key] ?? null])); }
+    });
+    const catalogInput = {
+      revision: "builtin-1",
+      providers: {
+        entries: () => [
+          ["account:bigmodel-individual-coding-plan", { access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" }, builtinModelIds: ["GLM-5.3"] }],
+          ["account:bigmodel-start-plan", { access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" }, builtinModelIds: ["GLM-5.3-Flash"] }],
+          ["account:zai-start-plan", { access: { type: "zhipu-account", mode: "start-plan", accountType: "zai" }, builtinModelIds: ["GLM-5.3-Flash"] }]
+        ]
+      }
+    };
+    const signedIn = {
+      zcodejwttoken: "zcode-jwt",
+      "oauth:active_provider": "bigmodel",
+      "account-provider:account:bigmodel-individual-coding-plan:identity": "identity-1",
+      "account-provider:coding-plan:account:bigmodel-individual-coding-plan:account:identity-1:api-key": "coding-plan-key"
+    };
+    const entitlement = async (credentials: Record<string, string>, env: Record<string, string> = {}) => {
+      const result = await runtime.snapshot(store(credentials), env, catalogInput);
+      return Object.fromEntries([...result.providers.map].map(([id, config]) => [id, config.access.entitled]));
+    };
+
+    expect(await entitlement(signedIn)).toEqual({
+      "account:bigmodel-individual-coding-plan": true,
+      "account:bigmodel-start-plan": true,
+      "account:zai-start-plan": false
+    });
+    expect(await entitlement({ ...signedIn, zcodejwttoken: "" })).toMatchObject({ "account:bigmodel-start-plan": false });
+    expect(await entitlement(signedIn, { ZCODE_CLI_START_PLAN: "0" })).toMatchObject({
+      "account:bigmodel-individual-coding-plan": true,
+      "account:bigmodel-start-plan": false
+    });
+
+    const env = { ZCODE_APP_VERSION: "3.14.4" };
+    expect(runtime.initialized()).toBe(false);
+    expect(await runtime.port(store(signedIn), env).refreshBeforeModelRequest({
+      providerId: "account:bigmodel-start-plan",
+      accountAccess: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" }
+    })).toEqual({
+      headersApplied: true,
+      requestAuth: { apiKey: "zcode-jwt", headers: { "X-Device-Mid": "device-1", "X-ZCode-App-Version": "3.14.4" } }
+    });
+    expect(runtime.initialized()).toBe(true);
+    await expect(runtime.port(store({}), env).refreshBeforeModelRequest({
+      providerId: "account:bigmodel-start-plan",
+      accountAccess: { mode: "start-plan" }
+    })).rejects.toThrow(/ZCode sign-in/);
+    expect(await runtime.port(store(signedIn), env).refreshBeforeModelRequest({
+      providerId: "account:bigmodel-individual-coding-plan",
+      accountAccess: { mode: "individual-coding-plan" }
+    })).toEqual({ headersApplied: true, requestAuth: { apiKey: "coding-plan-key" } });
   });
 
   test("applies required patches and records optional compatibility skips", () => {

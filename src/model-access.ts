@@ -214,6 +214,11 @@ export async function readConfiguredModelAccess(env: NodeJS.ProcessEnv = process
   if (providerId.startsWith("account:")) {
     try {
       const credentials = record(JSON.parse(await readFile(credentialsPath(env), "utf8")));
+      // The Start Plan authenticates with the ZCode JWT rather than a Coding Plan key.
+      if (providerId.endsWith("-start-plan")) {
+        const jwt = credentials?.zcodejwttoken;
+        return typeof jwt === "string" && jwt.length > 0 && env.ZCODE_CLI_START_PLAN?.trim() !== "0" ? result : null;
+      }
       const identity = credentials?.[`account-provider:${providerId}:identity`];
       const keyPrefix = `account-provider:coding-plan:${providerId}:account:`;
       return typeof identity === "string" && identity.length > 0 && Object.entries(credentials ?? {}).some(

@@ -293,6 +293,16 @@ switch. A resumed session can retain its saved selection.
 Reasoning options omitted from a saved selection are completed using that
 model's registry defaults. Explicit reasoning choices remain intact.
 
+### Start Plan
+
+When a ZCode sign-in is stored in the shared credential file, the Start Plan
+provider of the signed-in family (`account:bigmodel-start-plan` or
+`account:zai-start-plan`) is listed alongside the Coding Plan, as in Desktop.
+Requests authenticate with that sign-in and the runtime's ZCode client headers;
+the ZCode server decides which plan, models and quota apply. Claim a plan in
+Desktop first. A request the server answers with a security verification cannot
+be completed in the terminal. Set `ZCODE_CLI_START_PLAN=0` to hide the provider.
+
 ## First-run setup
 
 The setup wizard appears on the first interactive launch. Choose **Sign in**,
