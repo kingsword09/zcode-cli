@@ -1505,6 +1505,53 @@ export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
   return `${runtime.slice(0, insertionPoint)}${branch}${runtime.slice(insertionPoint)}`;
 }
 
+const bigmodelSessionReuseMarker = "ZCODE_CLI_BIGMODEL_REUSE_SESSION";
+
+/**
+ * Desktop and the CLI share one credential file, so a BigModel session Desktop
+ * already holds can resolve the Coding Plan key without another browser
+ * sign-in. Only the login prologue changes: an expired session falls through to
+ * the unchanged OAuth flow, and ZCODE_CLI_BIGMODEL_REUSE_SESSION=0 skips reuse.
+ */
+export function patchRuntimeBigmodelSessionReuse(runtime: string): string {
+  if (runtime.includes(bigmodelSessionReuseMarker)) return runtime;
+  const name = "[A-Za-z_$][\\w$]*";
+  const label = new RegExp(`${name}\\((${name}),"loginBigmodelCodingPlan"\\)`, "u").exec(runtime)?.[1];
+  const loginStart = label ? runtime.indexOf(`async function ${label}(`) : -1;
+  const loginEnd = loginStart < 0 ? -1 : runtime.indexOf("async function ", loginStart + 1);
+  if (!label || loginStart < 0 || loginEnd < 0) {
+    throw new Error("ZCode runtime is incompatible with BigModel session reuse (login anchor missing).");
+  }
+  const login = runtime.slice(loginStart, loginEnd);
+  const prefix = new RegExp(`^async function ${escapeRegExpName(label)}\\(e=\\{\\}\\)\\{let (${name})=e\\.env\\?\\?process\\.env;`, "u").exec(login);
+  const abortHelper = new RegExp(`;(${name})\\(e\\.abortSignal\\);let`, "u").exec(login)?.[1];
+  const httpClientFactory = new RegExp(`=e\\.httpClient\\?\\?(${name})\\(`, "u").exec(login)?.[1];
+  const apiKeyResolver = new RegExp(`await (${name})\\(\\{accessToken:${name}\\.accessToken,env:${name},httpClient:${name},family:"bigmodel"`, "u").exec(login)?.[1];
+  const credentialStore = new RegExp(`e\\.credentialStore\\?\\?(${name})\\(\\{env:${name}\\}\\)`, "u").exec(login)?.[1];
+  const accountIdentity = new RegExp(`,${name}=(${name})\\(${name}\\);await ${name}\\.saveMany\\(`, "u").exec(login)?.[1];
+  const credentialKeys = new RegExp(`\\[(${name})\\.bigmodelAccessToken\\]`, "u").exec(login)?.[1];
+  const configWriter = new RegExp(`await (${name})\\(\\{accountIdentity:${name},apiKey:${name},credentialStore:${name},env:${name},personalProviderConfigPath:e\\.personalProviderConfigPath,providerId:"bigmodel"\\}\\)`, "u").exec(login)?.[1];
+  if (!prefix || !abortHelper || !httpClientFactory || !apiKeyResolver || !credentialStore
+    || !accountIdentity || !credentialKeys || !configWriter) {
+    throw new Error("ZCode runtime is incompatible with BigModel session reuse (dependency anchor missing).");
+  }
+
+  const env = prefix[1];
+  const reuseSession = [
+    `if(${env}.${bigmodelSessionReuseMarker}!=="0"){`,
+    `${abortHelper}(e.abortSignal);`,
+    `let $bStore=e.credentialStore??${credentialStore}({env:${env}}),$bToken,$bApiKey;`,
+    `try{$bToken=(await $bStore.load(${credentialKeys}.bigmodelAccessToken))?.trim()}catch{}`,
+    `if($bToken)try{$bApiKey=await ${apiKeyResolver}({accessToken:$bToken,env:${env},httpClient:e.httpClient??${httpClientFactory}(${env}),family:"bigmodel",resolver:e.apiKeyResolver})}catch{}`,
+    `if($bApiKey){${abortHelper}(e.abortSignal);`,
+    `let $bConfig=await ${configWriter}({accountIdentity:${accountIdentity}($bApiKey),apiKey:$bApiKey,credentialStore:$bStore,env:${env},personalProviderConfigPath:e.personalProviderConfigPath,providerId:"bigmodel"});`,
+    'return{configPath:$bConfig.path,model:$bConfig.mainModel,providerId:"bigmodel"}}',
+    "}"
+  ].join("");
+  const insertionPoint = loginStart + prefix[0].length;
+  return `${runtime.slice(0, insertionPoint)}${reuseSession}${runtime.slice(insertionPoint)}`;
+}
+
 async function fetchText(url: string, init?: RequestInit): Promise<string> {
   const response = await fetch(url, { ...init, redirect: "follow" });
   if (!response.ok) throw new Error(`GET ${url} failed: ${response.status} ${response.statusText}`);
@@ -1736,6 +1783,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeZaiDesktopOAuth,
     verify: (runtime) => runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
+  },
+  {
+    id: "bigmodel-session-reuse",
+    requirement: "optional",
+    apply: patchRuntimeBigmodelSessionReuse,
+    verify: (runtime) => runtime.includes(bigmodelSessionReuseMarker)
   },
   {
     id: "login-model-defaults",

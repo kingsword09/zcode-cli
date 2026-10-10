@@ -25,6 +25,7 @@ import {
   parseRuntimePatchReports,
   parseRuntimeLock,
   patchRuntimeAgentAutoBackground,
+  patchRuntimeBigmodelSessionReuse,
   patchRuntimeCliHelpContract,
   patchRuntimeCliCredentials,
   patchRuntimeCliSettingsFile,
@@ -685,6 +686,84 @@ describe("runtime synchronization", () => {
         env: { ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" }
       });
     });
+  });
+
+  test("lets BigModel login reuse the Desktop session before starting OAuth", async () => {
+    // Copied verbatim from the 3.14.4 runtime, followed by its esbuild name label.
+    const login = 'async function HHa(e={}){let t=e.env??process.env;UK(e.abortSignal);let n=e.httpClient??CHo(t),o=e.state??MZr(),s=e.callbackServer??await YOe({callbackPath:qHa,state:o}),a=OZr({httpClient:n}),l=a.buildAuthorizeUrl({redirectUri:s.callbackUrl,state:o});await e.onAuthorizeUrl?.({authorize_url:l,callback_url:s.callbackUrl,state:o}),UK(e.abortSignal);let u=e.noBrowser?void 0:await(e.openBrowser??Ydn)(l);u&&await e.onBrowserOpen?.(u),UK(e.abortSignal);try{let f=await kHo({callbackServer:s,createTimeoutError:r(()=>new m9("auth_timeout","Authorization timed out. Please retry login."),"createTimeoutError"),signal:e.abortSignal,timeoutMs:e.timeoutMs??IHo}),g=await a.exchangeCode({code:f.code}),_=await EHo({accessToken:g.accessToken,env:t,httpClient:n,family:"bigmodel",resolver:e.apiKeyResolver}),b=e.credentialStore??jM({env:t}),w=rPn(_);await b.saveMany({[R1.activeProvider]:"bigmodel",[R1.bigmodelAccessToken]:g.accessToken,...g.refreshToken?{[R1.bigmodelRefreshToken]:g.refreshToken}:{},[R1.bigmodelUserInfo]:JSON.stringify({id:w})});let T=await aPn({accountIdentity:w,apiKey:_,credentialStore:b,env:t,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"bigmodel"});return{...u?{browser:u}:{},configPath:T.path,model:T.mainModel,providerId:"bigmodel"}}finally{await s.close()}}async function GHa(e){}r(HHa,"loginBigmodelCodingPlan");';
+    const harness = [
+      "class m9 extends Error{}",
+      "function r(value){return value}",
+      "function UK(signal){signal?.throwIfAborted()}",
+      "function Ydn(){}",
+      "const qHa='/oauth/callback/bigmodel',IHo=1000;",
+      "const R1={activeProvider:'oauth:active_provider',bigmodelAccessToken:'oauth:bigmodel:access_token',bigmodelRefreshToken:'oauth:bigmodel:refresh_token',bigmodelUserInfo:'oauth:bigmodel:user_info'};",
+      "let stored={},resolved=[],authorized=[],written=null;",
+      "function jM(){return{filePath:'/credentials.json',async load(key){return stored[key]??null},async saveMany(values){Object.assign(stored,values)}}}",
+      "function CHo(){return{}}",
+      "function OZr(){return{buildAuthorizeUrl(){return'https://bigmodel.test/login'},async exchangeCode(){return{accessToken:'oauth-token'}}}}",
+      "async function EHo(value){resolved.push(value.accessToken);if(value.accessToken==='expired-token')throw new Error('expired');return'key-'+value.accessToken}",
+      "function rPn(apiKey){return'identity-'+apiKey}",
+      "async function aPn(value){written=value;return{path:'/provider_config.json',mainModel:'account:bigmodel-individual-coding-plan/GLM'}}",
+      "function MZr(){return'state-1'}",
+      "async function YOe(){return{callbackUrl:'http://127.0.0.1:4567/oauth/callback/bigmodel',async close(){}}}",
+      "async function kHo(){return{code:'auth-code'}}",
+      login
+    ].join("");
+    const patched = patchRuntimeBigmodelSessionReuse(harness);
+
+    expect(patched).toContain('if(t.ZCODE_CLI_BIGMODEL_REUSE_SESSION!=="0")');
+    expect(patched).toContain("a.exchangeCode({code:f.code})");
+    expect(patchRuntimeBigmodelSessionReuse(patched)).toBe(patched);
+    expect(() => patchRuntimeBigmodelSessionReuse("incompatible runtime")).toThrow(/login anchor/);
+    // Independent of how the authorization code is exchanged further down.
+    const brokered = harness.replace(
+      "a.exchangeCode({code:f.code})",
+      "broker.exchangeBigmodelOAuthCode({code:f.code,redirectUri:s.callbackUrl,state:o,httpClient:n})"
+    );
+    expect(patchRuntimeBigmodelSessionReuse(brokered)).toContain("ZCODE_CLI_BIGMODEL_REUSE_SESSION");
+
+    type Fixture = {
+      login(options: Record<string, unknown>): Promise<Record<string, unknown>>;
+      read(): { authorized: unknown[]; resolved: string[]; stored: Record<string, string>; written: Record<string, unknown> | null };
+      seed(values: Record<string, string>): void;
+    };
+    const run = async (env: Record<string, string>, token: string) => {
+      const fixture = new Function(
+        `${patched};return {login:HHa,read:()=>({authorized,resolved,stored,written}),seed:(values)=>Object.assign(stored,values)};`
+      )() as Fixture;
+      fixture.seed({ "oauth:bigmodel:access_token": token });
+      const result = await fixture.login({
+        env,
+        noBrowser: true,
+        onAuthorizeUrl: (value: unknown) => { fixture.read().authorized.push(value); }
+      });
+      return { result, ...fixture.read() };
+    };
+
+    const reused = await run({}, "desktop-token");
+    expect(reused.result).toEqual({
+      configPath: "/provider_config.json",
+      model: "account:bigmodel-individual-coding-plan/GLM",
+      providerId: "bigmodel"
+    });
+    expect(reused.authorized).toEqual([]);
+    expect(reused.written).toMatchObject({
+      accountIdentity: "identity-key-desktop-token",
+      apiKey: "key-desktop-token",
+      credentialStore: { filePath: "/credentials.json" },
+      providerId: "bigmodel"
+    });
+
+    const expired = await run({}, "expired-token");
+    expect(expired.resolved).toEqual(["expired-token", "oauth-token"]);
+    expect(expired.authorized).toHaveLength(1);
+    expect(expired.stored).toMatchObject({ "oauth:bigmodel:access_token": "oauth-token" });
+    expect(expired.written).toMatchObject({ apiKey: "key-oauth-token" });
+
+    const optedOut = await run({ ZCODE_CLI_BIGMODEL_REUSE_SESSION: "0" }, "desktop-token");
+    expect(optedOut.resolved).toEqual(["oauth-token"]);
+    expect(optedOut.authorized).toHaveLength(1);
   });
 
   test("applies required patches and records optional compatibility skips", () => {
