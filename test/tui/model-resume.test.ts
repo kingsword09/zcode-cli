@@ -5,6 +5,8 @@ import { ScenarioWorkspace } from "./harness/scenario-workspace.ts";
 import { TerminalSession } from "./harness/terminal-session.ts";
 import { modelResumeScenario } from "./scenarios/model-resume.ts";
 
+const loginModelFixture = new URL("../fixtures/tui-login-model.ts", import.meta.url).pathname;
+
 test("TUI restores the last model selected in a resumed session", async () => {
   await runAutomatedTuiScenario(modelResumeScenario);
 });
@@ -35,4 +37,16 @@ test.each(["glm", "GLM"])("TUI saves the default model after searching for %s an
   await using freshSession = TerminalSession.start({ command, workspace });
   await freshSession.waitForScreen("new session uses saved default", /◈ scenario\/glm-5\.3-flash/u);
   await freshSession.exit();
+}, 20_000);
+
+test("TUI moves the session onto the model saved by a runtime login", async () => {
+  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-login-model-" });
+  await using session = TerminalSession.start({ command: [process.execPath, loginModelFixture], workspace });
+  await session.sendAndWait("/login bigmodel-coding-plan\r", "login response", /Configured BigModel Coding Plan/u);
+  await session.sendAndWait(
+    "check this project\r",
+    "prompt uses the login model",
+    /Echo from account:bigmodel-individual-coding-plan\/GLM-5\.3: check this project/u
+  );
+  await session.exit();
 }, 20_000);

@@ -510,7 +510,10 @@ zcode --prompt 'Reply with exactly: ok'
 
 The browser authorization uses the registered ZCode client ID. The runtime
 stores the login and resolves Coding Plan access using its native account
-provider registry. The credential file remains private (mode 600). These
+provider registry. `/login bigmodel-coding-plan` first reuses a BigModel
+session that Desktop stored in the shared credential file, without opening a
+browser; set `ZCODE_CLI_BIGMODEL_REUSE_SESSION=0` to always sign in again. An
+open TUI session switches to the newly saved model after any login. The credential file remains private (mode 600). These
 overrides leave Desktop's credentials and provider configuration untouched.
 Client headers and a local usage row do not independently prove server-side
 bonus accounting.
