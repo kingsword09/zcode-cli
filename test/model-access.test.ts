@@ -54,6 +54,24 @@ describe("configured model access", () => {
     expect(await readConfiguredModelAccess(isolatedEnv)).toEqual({ configPath, providerId, model: `${providerId}/GLM-5.3` });
   });
 
+  test("accepts a Start Plan default when a ZCode sign-in is stored", async () => {
+    const home = await temporaryHome();
+    const env = { HOME: home, USERPROFILE: home };
+    const directory = join(home, ".zcode", "v2");
+    await mkdir(directory, { recursive: true });
+    const configPath = join(directory, "provider_config.json");
+    const providerId = "account:bigmodel-start-plan";
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, config: {
+      defaultModelSelection: { providerId, modelId: "GLM-5.3-Flash" },
+      providerConfigRules: { providerRules: [] }
+    } }));
+    await writeFile(join(directory, "credentials.json"), JSON.stringify({ "oauth:active_provider": "opaque" }));
+    expect(await readConfiguredModelAccess(env)).toBeNull();
+    await writeFile(join(directory, "credentials.json"), JSON.stringify({ zcodejwttoken: "opaque-encrypted-jwt" }));
+    expect(await readConfiguredModelAccess(env)).toEqual({ configPath, providerId, model: `${providerId}/GLM-5.3-Flash` });
+    expect(await readConfiguredModelAccess({ ...env, ZCODE_CLI_START_PLAN: "0" })).toBeNull();
+  });
+
   test("uses personal registry config as authoritative after migration", async () => {
     const home = await temporaryHome();
     const configPath = join(home, "personal.json");

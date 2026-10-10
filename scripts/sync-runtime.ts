@@ -26,6 +26,8 @@ export {
   hasRuntimeSqliteBusyTimeout, hasRuntimeSqliteWriteRecovery,
   patchRuntimeSqliteBusyTimeout, patchRuntimeSqliteWriteRecovery, sqliteBusyTimeoutMs
 } from "./runtime-sqlite-patches.ts";
+import { hasRuntimeStandaloneStartPlan, patchRuntimeStandaloneStartPlan } from "./runtime-start-plan-patches.ts";
+export { hasRuntimeStandaloneStartPlan, patchRuntimeStandaloneStartPlan } from "./runtime-start-plan-patches.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cdnRoot = "https://cdn-zcode.z.ai/zcode/electron/releases";
@@ -1753,6 +1755,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeAppServerStandaloneAuth,
     verify: hasRuntimeAppServerStandaloneAuth
+  },
+  {
+    id: "standalone-start-plan",
+    requirement: "optional",
+    apply: patchRuntimeStandaloneStartPlan,
+    verify: hasRuntimeStandaloneStartPlan
   }
 ];
 
