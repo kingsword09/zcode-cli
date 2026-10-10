@@ -1348,6 +1348,7 @@ class ZCodeTui {
       this.model = access.model;
       this.setLoginRequired(false);
       this.addNotice(`Model access configured via ${access.configPath}.`, "muted");
+      await this.adoptLoginModel();
     } else if (failure) {
       this.addNotice(`Login command failed: ${failure}`, "error");
     } else if (code !== 0) {
@@ -1871,6 +1872,7 @@ class ZCodeTui {
           callOptions
         );
         await this.handleResult(result, true, settingTargetForCommand(input));
+        if (/^\/login\s+\S/iu.test(input) && isRecord(result) && result.loginRequired === false) await this.adoptLoginModel();
         accepted = true;
       } else {
         const preparedInput = promptInput(runtimeInput, attachments);
@@ -3956,6 +3958,25 @@ class ZCodeTui {
 
     await this.applyModeShortcut(normalizedMode(mode));
     return true;
+  }
+
+  /**
+   * Login writes credentials and the default model behind the running provider
+   * registry, which only re-reads them on refresh. Reload it and move this
+   * session onto the new default, or the next turn starts without a model.
+   */
+  private async adoptLoginModel(): Promise<void> {
+    await this.refreshModelOptions();
+    const access = await readConfiguredModelAccess().catch(() => null);
+    if (!access || !this.options.setTransientModel) return;
+    try {
+      await this.handleResult(await this.options.setTransientModel(access.model), false);
+    } catch (error) {
+      this.addNotice(
+        `Could not switch this session to ${access.model}: ${error instanceof Error ? error.message : String(error)}`,
+        "warning"
+      );
+    }
   }
 
   /** All model selectors re-read the catalog, including after first-run login. */
