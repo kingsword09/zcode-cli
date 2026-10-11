@@ -89,6 +89,18 @@ try {
   const completionStart = output.length;
   terminal.write("inspect @ind");
   await waitForPlain("config-driven async completion", /src\/index\.ts/i, completionStart, 4_000);
+  // Terminal focus reports drive hardware cursor visibility so only the
+  // focused pane (tmux splits, split terminal windows) keeps a live cursor.
+  const cursorHideStart = output.length;
+  terminal.write("\x1b[O");
+  await waitFor("cursor hidden on focus out", /\x1b\[\?25l/, cursorHideStart);
+  await Bun.sleep(150);
+  if (/\x1b\[\?25h/.test(output.slice(cursorHideStart))) {
+    throw new Error("Cursor was re-shown while the terminal was unfocused.");
+  }
+  const cursorShowStart = output.length;
+  terminal.write("\x1b[I");
+  await waitFor("cursor restored on focus in", /\x1b\[\?25h/, cursorShowStart);
   // P1-2: SIGTERM must trigger clean TUI teardown (exit alt screen, show cursor).
   child.kill("SIGTERM");
   await waitFor("alternate screen exit on SIGTERM", /\x1b\[\?1049l/);

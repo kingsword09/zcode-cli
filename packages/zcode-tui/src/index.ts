@@ -130,6 +130,7 @@ import {
   type NotificationCondition,
   type NotificationMethod,
   type NotificationSettings,
+  type TerminalFocusState,
   type TurnNotificationKind
 } from "./notifications.ts";
 import { watchStreamErrors } from "./stream-error-guard.ts";
@@ -667,6 +668,7 @@ class ZCodeTui {
   private executionStateRevision = 0;
   private model: string;
   private tuiMode: TuiMode;
+  private terminalFocus: TerminalFocusState = "unknown";
   private copyOnSelect = true;
   private thoughtLevel?: string;
   private modelOptions: unknown[];
@@ -767,7 +769,10 @@ class ZCodeTui {
     this.ui = this.createTui(this.tuiMode);
     this.notifications = new TurnNotifier({
       writeTerminal: (data) => this.ui.terminal.write(data),
-      focusReportingRequired: this.tuiMode === "fullscreen"
+      onFocusChange: (state) => {
+        this.terminalFocus = state;
+        this.applyTerminalFocus();
+      }
     });
     this.status = new StatusLine();
     this.turnStatus = new FooterBar();
@@ -842,7 +847,6 @@ class ZCodeTui {
       if (effective !== this.tuiMode) {
         this.ui = this.createTui(effective);
         this.tuiMode = effective;
-        this.notifications.setFocusReportingRequired(effective === "fullscreen");
         this.editor = this.createEditor(this.ui);
       }
     } catch {
@@ -885,6 +889,7 @@ class ZCodeTui {
       }
       this.bindInput();
       this.notifications.start();
+      this.applyTerminalFocus();
       this.focusEditor();
       this.updateMetadata();
       this.updateTurnStatus();
@@ -984,6 +989,16 @@ class ZCodeTui {
   private setCopyOnSelect(enabled: boolean): void {
     this.copyOnSelect = enabled;
     this.fullscreenAltScreen?.setCopyOnSelect(enabled);
+  }
+
+  /**
+   * Mirror terminal focus onto the hardware cursor so multiplexer panes
+   * (tmux/windows-style splits) only show a live cursor in the focused pane.
+   * "unknown" keeps the cursor visible; terminals without focus reports
+   * (mode 1004) never report focus loss in the first place.
+   */
+  private applyTerminalFocus(): void {
+    this.ui.setShowHardwareCursor(this.terminalFocus !== "unfocused");
   }
 
   private createTui(mode: TuiMode): TUI {
@@ -1209,7 +1224,6 @@ class ZCodeTui {
       this.ui.stop({ preserveScreen: true });
       this.ui = this.createTui(next);
       this.tuiMode = next;
-      this.notifications.setFocusReportingRequired(next === "fullscreen");
       this.sessionHasContent = hadSessionContent;
       this.fullscreenWelcomeVisible = !hadSessionContent;
       this.fullscreenHeader.setPhase(hadSessionContent ? "rail" : "welcome");
@@ -1223,6 +1237,7 @@ class ZCodeTui {
       if (savedDraft) this.editor.setText(savedDraft);
       this.ui.requestRender(true);
       this.notifications.start();
+      this.applyTerminalFocus();
       try {
         await writeTuiMode(next);
       } catch (error) {
@@ -1239,7 +1254,6 @@ class ZCodeTui {
         }
         this.ui = previousUi;
         this.tuiMode = previousMode;
-        this.notifications.setFocusReportingRequired(previousMode === "fullscreen");
         this.sessionHasContent = hadSessionContent;
         this.fullscreenWelcomeVisible = previousMode === "fullscreen" ? !hadSessionContent : true;
         this.fullscreenHeader.setPhase(hadSessionContent ? "rail" : "welcome");
@@ -1253,6 +1267,7 @@ class ZCodeTui {
           this.bindInput();
           this.focusEditor();
           this.notifications.start();
+          this.applyTerminalFocus();
           this.ui.requestRender(true);
         } catch {
           // Preserve the original switch failure in the user-facing notice.
@@ -1338,6 +1353,7 @@ class ZCodeTui {
       if (!this.stopped) {
         this.ui.start();
         this.notifications.start();
+        this.applyTerminalFocus();
         this.focusEditor();
         this.ui.requestRender(true);
       }

@@ -582,6 +582,18 @@ terminal application is used as both the sender and click target. Exact tab or
 pane restoration remains terminal-dependent; use the default `auto` setting so
 OSC-capable terminals can preserve their native session behavior.
 
+DEC focus reporting is enabled in every TUI mode and notification setting, and
+also drives cursor visibility: while another pane or terminal window has focus,
+ZCode hides the hardware cursor so multiplexer splits (tmux panes, split
+terminal windows) only show a live cursor in the focused session. Terminals
+that do not report focus keep the cursor visible. tmux only forwards focus
+events when `focus-events` is enabled:
+
+```tmux
+# ~/.tmux.conf
+set -g focus-events on
+```
+
 Open the interactive settings picker inside the TUI (both commands are
 equivalent):
 

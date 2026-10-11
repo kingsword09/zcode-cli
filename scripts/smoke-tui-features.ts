@@ -86,6 +86,23 @@ try {
   await waitFor("welcome screen", /ZCode/i);
   await waitFor("restored startup transcript", /Restored startup response\./i);
   await waitFor("interactive editor", /◈ alpha\/model ─ ◉ build/i);
+  // Terminal focus reports drive hardware cursor visibility so only the
+  // focused pane (tmux splits, split terminal windows) keeps a live cursor.
+  const cursorHideStart = output.length;
+  terminal.write("\x1b[O");
+  await Bun.sleep(150);
+  if (!/\x1b\[\?25l/.test(output.slice(cursorHideStart))) {
+    throw new Error("Cursor was not hidden after terminal focus loss.");
+  }
+  if (/\x1b\[\?25h/.test(output.slice(cursorHideStart))) {
+    throw new Error("Cursor was re-shown while the terminal was unfocused.");
+  }
+  const cursorShowStart = output.length;
+  terminal.write("\x1b[I");
+  await Bun.sleep(150);
+  if (!/\x1b\[\?25h/.test(output.slice(cursorShowStart))) {
+    throw new Error("Cursor was not restored after terminal focus regain.");
+  }
   await sendAndWait("\x1b", "double-Esc rewind hint", /Esc again to rewind conversation/i);
   await sendAndWait("\x1b", "rewind target picker", /Rewind conversation[\s\S]*Restored later prompt/i);
   await sendAndWait("\x1b[B\r", "selected older rewind target", /Return to before: Restored startup prompt/i);

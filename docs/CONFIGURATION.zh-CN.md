@@ -488,6 +488,16 @@ macOS 的 `terminal-notifier`、Linux 的 `notify-send` 或 Windows 的 `SnoreTo
 macOS 会将检测到的终端 App 用作发送者和点击目标。能否恢复精确的标签页或窗格取决于终端；
 默认 `auto` 可以保留支持 OSC 的终端原生行为。
 
+DEC 焦点报告在任何 TUI 模式和通知设置下都会启用，同时驱动光标可见性：
+当其他窗格或终端窗口获得焦点时，ZCode 会隐藏硬件光标，使多路复用器分屏
+（tmux 窗格、拆分终端窗口）只在获得焦点的会话中显示活动光标。
+不支持焦点报告的终端会保持光标可见。tmux 只有在启用 `focus-events` 时才会转发焦点事件：
+
+```tmux
+# ~/.tmux.conf
+set -g focus-events on
+```
+
 在 TUI 中打开设置：
 
 ```text
