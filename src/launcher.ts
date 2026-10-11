@@ -304,11 +304,26 @@ function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}, inspectConfiguration 
     ZCODE_APP_CLI_EXECUTABLE: process.execPath,
     ZCODE_APP_CLI_ENTRY: launcherPath,
     ...(appVersion ? { ZCODE_APP_VERSION: inherited.ZCODE_APP_VERSION?.trim() || appVersion } : {}),
-    ...(distributionVersion ? { ZCODE_APP_CLI_VERSION: distributionVersion } : {})
+    ...(distributionVersion ? { ZCODE_APP_CLI_VERSION: distributionVersion } : {}),
+    ...vendoredBuiltinProviderConfigEnv(inherited)
   };
   return Object.fromEntries(
     Object.entries(merged).filter((entry): entry is [string, string] => typeof entry[1] === "string")
   );
+}
+
+// The spawned runtime resolves its bundled ZCode Built-in provider catalog from
+// packaged/SEA locations that never exist in a plain `node vendor/zcode.cjs
+// app-server` context. Without this, an app update that changes the release
+// layout makes both the bundled and active catalog reads fail and every
+// app-server RPC dies at startup with "Bundled 与 Active ZCode Built-in
+// Release 均不可用". The Desktop always passes this variable when it spawns the
+// runtime; mirror it from the synced vendor copy, deferring to an explicit
+// caller-provided value.
+function vendoredBuiltinProviderConfigEnv(inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (inherited.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE?.trim()) return {};
+  const vendoredPath = join(packageRoot, "vendor", "provider", "zcode-builtin.json");
+  return existsSync(vendoredPath) ? { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: vendoredPath } : {};
 }
 
 function signalExitCode(signal: NodeJS.Signals | null): number {
