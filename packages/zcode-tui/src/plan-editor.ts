@@ -6,9 +6,25 @@ export class PlanEditor extends Editor {
   planColor: (text: string) => string = text => text;
   planHint = "Research and plan before making changes";
   hintColor: (text: string) => string = text => text;
+  private terminalFocused = true;
+
+  /**
+   * The hardware cursor is hidden while another terminal pane has focus; the
+   * drawn caret must follow or the unfocused pane still looks like it owns
+   * the cursor. Cell contents and widths are unchanged, only the SGR pair
+   * around the caret grapheme is dropped.
+   */
+  setTerminalFocused(focused: boolean): void {
+    this.terminalFocused = focused;
+  }
 
   override render(width: number): string[] {
     const lines = super.render(width);
+    if (!this.terminalFocused) {
+      for (let i = 0; i < lines.length; i++) {
+        lines[i] = lines[i].replace(/\x1b\[7m([^\x1b]*)\x1b\[0m/gu, "$1");
+      }
+    }
     if (!this.planEnabled || width < 4 || !lines[0]) return lines;
     const label = width >= 10 ? " Plan ──" : "Plan";
     const prefixWidth = width - visibleWidth(label);

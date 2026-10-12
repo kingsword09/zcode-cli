@@ -992,13 +992,16 @@ class ZCodeTui {
   }
 
   /**
-   * Mirror terminal focus onto the hardware cursor so multiplexer panes
-   * (tmux/windows-style splits) only show a live cursor in the focused pane.
-   * "unknown" keeps the cursor visible; terminals without focus reports
-   * (mode 1004) never report focus loss in the first place.
+   * Mirror terminal focus onto the hardware cursor and the drawn editor
+   * caret so multiplexer panes (tmux/windows-style splits) only show a live
+   * cursor in the focused pane. "unknown" keeps the cursor visible;
+   * terminals without focus reports (mode 1004) never report focus loss in
+   * the first place.
    */
   private applyTerminalFocus(): void {
-    this.ui.setShowHardwareCursor(this.terminalFocus !== "unfocused");
+    const focused = this.terminalFocus !== "unfocused";
+    this.ui.setShowHardwareCursor(focused);
+    this.editor.setTerminalFocused(focused);
   }
 
   private createTui(mode: TuiMode): TUI {
