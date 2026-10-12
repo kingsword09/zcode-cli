@@ -72,6 +72,36 @@ bun run test:tui:manual allowlisted-shell --workspace-backend=mountx
 Manual mode prints the temporary workspace path before opening the TUI. Enter
 `/exit` when finished; the workspace, HOME, and Git repository are then removed.
 
+## Visually inspect focus-dependent cursors
+
+Run the offline cursor demo in an interactive terminal:
+
+```bash
+bun run check:tui:focus:manual
+# Inspect the regular-screen renderer instead:
+bun run check:tui:focus:manual --regular
+```
+
+Enter `/focus-demo`. Keep the terminal focused and watch the input caret:
+it remains visible for three seconds, disappears for five seconds, then returns.
+The transcript labels each phase. During the first three seconds, you can also
+open the fullscreen search overlay with Ctrl+Shift+F to inspect its caret.
+This injects focus reports into the real TUI input pipeline, proving rendering
+behavior without depending on the host terminal's focus-report support.
+
+Then type a draft without submitting it and switch to another application or
+terminal pane while keeping the original pane visible. Both hardware and drawn
+carets should disappear and return when you refocus the original pane. Enter
+`/focus-status` to inspect the real focus-report count and last reported state;
+simulated events are excluded. An `unknown` state means no real report has
+arrived, so the TUI deliberately retains the caret. A passing simulated cycle
+alone does not prove host-terminal or multiplexer focus-report support.
+
+Enter `/search React` to verify transcript search. White-background matches
+should remain highlighted even while the input caret is hidden. Enter `/exit`
+when finished. The demo uses temporary configuration and does not call a model
+or require credentials.
+
 ## Structure
 
 - `test/tui/harness/terminal-session.ts` owns the PTY, input, output matching,

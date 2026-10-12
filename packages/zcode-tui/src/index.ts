@@ -36,8 +36,11 @@ import {
   type TUI,
   type TuiMode,
   type Component,
+  type OverlayHandle,
+  type OverlayOptions,
   type SlashCommand
 } from "@earendil-works/pi-tui";
+import { AltScreenSearchComponent } from "@earendil-works/pi-tui/dist/alt-screen-search.js";
 
 import {
   attachmentSummary,
@@ -231,7 +234,7 @@ import {
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
 import { SystemEventView, type SystemEventData } from "./system-event-view.ts";
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sanitizeTerminalText, stripCaretHighlight } from "./terminal-text.ts";
 import { ThinkingView } from "./thinking-view.ts";
 import { ToolGroupView } from "./tool-group-view.ts";
 import { ToolTreeView } from "./tool-tree-view.ts";
@@ -545,6 +548,21 @@ class ZCodeAltScreen extends TuiAltScreen {
 
   setCurrentInput(data: string | undefined): void {
     this.currentInput = data;
+  }
+
+  override showOverlay(component: Component, options?: OverlayOptions): OverlayHandle {
+    // pi-tui constructs its search Input internally. Decorate only that
+    // overlay, before compositing, so transcript matches and selections retain
+    // their inverse styles. The caret is also drawn when the search has lost
+    // keyboard focus to the editor and no longer emits a cursor marker.
+    if (component instanceof AltScreenSearchComponent) {
+      const render = component.render.bind(component);
+      component.render = (width) => {
+        const lines = render(width);
+        return this.getShowHardwareCursor() ? lines : lines.map(stripCaretHighlight);
+      };
+    }
+    return super.showOverlay(component, options);
   }
 
   /**

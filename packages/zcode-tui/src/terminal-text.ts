@@ -234,7 +234,11 @@ export function removeLastGrapheme(value: string): string {
  * Drop the reverse-video SGR pair the editor and input components draw
  * around the caret grapheme (Editor resets with 0, Input with 27). Cell
  * contents and visible widths are unchanged; only the highlight goes away.
+ * Input placeholders may add SGR (e.g. dim) inside the caret; retain it.
  */
 export function stripCaretHighlight(text: string): string {
-  return text.replace(/\x1b\[7m([^\x1b]*)\x1b\[(?:0|27)m/gu, "$1");
+  return text.replace(
+    /\x1b\[7m((?:\x1b\[(?!(?:0|27)m)[0-9;:]*m|[^\x1b])*)\x1b\[(?:0|27)m/gu,
+    "$1"
+  );
 }

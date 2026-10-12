@@ -19,6 +19,8 @@ import {
   terminalNotifierCommand,
   TurnNotifier,
   writeNotificationSettings,
+  type NotificationCondition,
+  type NotificationMethod,
   type NativeNotificationSender
 } from "../packages/zcode-tui/src/notifications.ts";
 import { watchStreamErrors } from "../packages/zcode-tui/src/stream-error-guard.ts";
@@ -32,6 +34,42 @@ afterEach(async () => {
 });
 
 describe("TUI turn notifications", () => {
+  for (const method of ["off", "auto", "osc9", "bel", "native"] satisfies NotificationMethod[]) {
+    for (const condition of ["always", "unfocused"] satisfies NotificationCondition[]) {
+      test(`tracks focus independently of ${method}/${condition} notifications`, async () => {
+        const writes: string[] = [];
+        const states: string[] = [];
+        const notifier = new TurnNotifier({
+          settings: { method, condition },
+          env: { TERM_PROGRAM: "iTerm.app" },
+          nativeNotify: async () => true,
+          writeTerminal: (data) => writes.push(data),
+          onFocusChange: (state) => states.push(state)
+        });
+        notifier.start();
+        expect(writes).toEqual(["\x1b[?1004h"]);
+        // No reports is a supported fallback, not evidence of focus loss.
+        expect(notifier.diagnostics().focus).toBe("unknown");
+        expect(await notifier.notify("completed")).toBe(method !== "off");
+        notifier.handleInput("\x1b[I");
+        expect(await notifier.notify("completed")).toBe(method !== "off" && condition === "always");
+        notifier.handleInput("\x1b[O");
+        notifier.handleInput("\x1b[O");
+        expect(await notifier.notify("completed")).toBe(method !== "off");
+        notifier.setSettings({ method, condition: condition === "always" ? "unfocused" : "always" });
+        expect(notifier.diagnostics().focus).toBe("unfocused");
+        expect(writes.filter((data) => data.includes("1004"))).toEqual(["\x1b[?1004h"]);
+        notifier.stop();
+        notifier.start();
+        expect(states).toEqual(["focused", "unfocused"]);
+        notifier.handleInput("\x1b[I");
+        expect(states).toEqual(["focused", "unfocused", "focused"]);
+        notifier.stop();
+        expect(writes.at(-1)).toBe("\x1b[?1004l");
+      });
+    }
+  }
+
   test("uses quiet defaults and accepts explicit delivery settings", () => {
     expect(notificationSettings({})).toEqual({ method: "auto", condition: "unfocused" });
     expect(notificationSettings({

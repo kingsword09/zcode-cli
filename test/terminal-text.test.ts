@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Input, visibleWidth } from "@earendil-works/pi-tui";
 
 import {
   sanitizeTerminalText,
   removeLastGrapheme,
+  stripCaretHighlight,
   StreamingTerminalTextSanitizer,
   truncateGraphemes,
   truncateTerminalText,
@@ -77,5 +78,32 @@ describe("terminal text safety", () => {
     expect(truncateTerminalText("prefix 👨‍👩‍👧‍👦 suffix", 10)).not.toMatch(/[\uD800-\uDBFF]$/u);
     expect(truncateGraphemes("ab👨‍👩‍👧‍👦cd", 4)).toBe("ab👨‍👩‍👧‍👦…");
     expect(removeLastGrapheme("filter 👨‍👩‍👧‍👦")).toBe("filter ");
+  });
+});
+
+describe("terminal carets", () => {
+  test("preserves placeholder styles, cursor markers and cell widths", () => {
+    const input = new Input({
+      placeholder: "Find in transcript",
+      placeholderStyle: (text) => `\x1b[2m${text}\x1b[22m`
+    });
+    for (const focused of [false, true]) {
+      input.focused = focused;
+      const rendered = input.render(40)[0]!;
+      const stripped = stripCaretHighlight(rendered);
+      expect(stripped).toBe(rendered.replace("\x1b[7m", "").replace("\x1b[27m", ""));
+      expect(stripped).toContain(`${focused ? CURSOR_MARKER : ""}\x1b[2mF\x1b[22m`);
+      expect(visibleWidth(stripped)).toBe(visibleWidth(rendered));
+    }
+  });
+
+  test("handles editor/input reset forms and Unicode with or without keyboard focus", () => {
+    for (const reset of [0, 27]) {
+      for (const grapheme of [" ", "a", "中", "👩‍💻", "é"]) {
+        const caret = `\x1b[7m${grapheme}\x1b[${reset}m`;
+        expect(stripCaretHighlight(caret)).toBe(grapheme);
+        expect(stripCaretHighlight(`${CURSOR_MARKER}${caret}`)).toBe(`${CURSOR_MARKER}${grapheme}`);
+      }
+    }
   });
 });
