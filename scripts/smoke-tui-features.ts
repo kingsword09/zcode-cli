@@ -70,6 +70,22 @@ async function sendAndSettle(input: string): Promise<void> {
   await Bun.sleep(renderSettleMilliseconds);
 }
 
+/**
+ * Like waitFor but for raw output (plainText strips CSI sequences) and
+ * returns the match index so absence checks can start after a known write
+ * instead of racing bytes still streaming through the pty.
+ */
+async function waitForRaw(label: string, pattern: RegExp, start: number, timeoutMs = 8_000): Promise<number> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const index = output.slice(start).search(pattern);
+    if (index >= 0) return start + index;
+    if (child.exitCode !== null) break;
+    await Bun.sleep(renderSettleMilliseconds);
+  }
+  throw new Error(`Timed out waiting for ${label}.\n${plainText(output).slice(-6_000)}`);
+}
+
 async function waitForLoginRefresh(label: string, start: number): Promise<void> {
   // Resuming the UI redraws earlier login notices before the new login finishes.
   // Wait for the completed turn indicator before submitting another command.
@@ -88,13 +104,12 @@ try {
   await waitFor("interactive editor", /◈ alpha\/model ─ ◉ build/i);
   // Terminal focus reports drive hardware cursor visibility so only the
   // focused pane (tmux splits, split terminal windows) keeps a live cursor.
-  const cursorHideStart = output.length;
+  // Anchor the absence check after the observed hide write: the pty may
+  // still be streaming an earlier frame's cursor-show bytes.
   terminal.write("\x1b[O");
+  const hiddenAt = await waitForRaw("cursor hidden on focus out", /\x1b\[\?25l/, output.length);
   await Bun.sleep(150);
-  if (!/\x1b\[\?25l/.test(output.slice(cursorHideStart))) {
-    throw new Error("Cursor was not hidden after terminal focus loss.");
-  }
-  if (/\x1b\[\?25h/.test(output.slice(cursorHideStart))) {
+  if (/\x1b\[\?25h/.test(output.slice(hiddenAt))) {
     throw new Error("Cursor was re-shown while the terminal was unfocused.");
   }
   const cursorShowStart = output.length;
@@ -337,13 +352,15 @@ try {
   await sendAndSettle("\r");
   await sendAndWait("/transcript latest\r", "transcript navigation", /Transcript \d+\/\d+/i);
   await sendAndWait("\x1bp", "Alt+Up transcript navigation", /Transcript \d+\/\d+/i);
-  await sendAndSettle("\x1b");
+  // While a background handoff is active the app swallows Esc, so close
+  // transcript views through their commands instead of relying on Esc.
+  await sendAndSettle("/transcript close\r");
   await sendAndWait("/search inspect\r", "transcript search", /Search 1\/\d+: inspect/i);
   await sendAndWait("n", "next transcript search match", /Search 2\/\d+: inspect/i);
-  await sendAndSettle("\x1b");
+  await sendAndSettle("/search clear\r");
   await sendAndWait("/search Slash commands\r", "oversized transcript match", /Page 1\/\d+ · ←\/→ or PageUp\/PageDown scroll/i);
   await sendAndWait("\x1b[C", "transcript scroll right", /Page 2\/\d+ · ←\/→ or PageUp\/PageDown scroll/i);
-  await sendAndSettle("\x1b");
+  await sendAndSettle("/search clear\r");
 
   await sendAndWait("/mcp\r", "MCP picker", /MCP servers/i);
   await sendAndWait("\r", "MCP action", /MCP connected: docs/i);

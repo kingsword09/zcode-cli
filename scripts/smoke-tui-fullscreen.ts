@@ -49,10 +49,11 @@ function plainText(value: string): string {
     .replace(/\r/g, "");
 }
 
-async function waitFor(label: string, pattern: RegExp, start = 0, timeoutMs = 8_000): Promise<void> {
+async function waitFor(label: string, pattern: RegExp, start = 0, timeoutMs = 8_000): Promise<number> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (pattern.test(output.slice(start))) return;
+    const match = pattern.exec(output.slice(start));
+    if (match) return start + match.index + match[0].length;
     if (child.exitCode !== null) break;
     await Bun.sleep(25);
   }
@@ -91,11 +92,12 @@ try {
   await waitForPlain("config-driven async completion", /src\/index\.ts/i, completionStart, 4_000);
   // Terminal focus reports drive hardware cursor visibility so only the
   // focused pane (tmux splits, split terminal windows) keeps a live cursor.
-  const cursorHideStart = output.length;
+  // Anchor the absence check after the observed hide write: the pty may
+  // still be streaming an earlier frame's cursor-show bytes.
   terminal.write("\x1b[O");
-  await waitFor("cursor hidden on focus out", /\x1b\[\?25l/, cursorHideStart);
+  const hiddenAt = await waitFor("cursor hidden on focus out", /\x1b\[\?25l/, output.length);
   await Bun.sleep(150);
-  if (/\x1b\[\?25h/.test(output.slice(cursorHideStart))) {
+  if (/\x1b\[\?25h/.test(output.slice(hiddenAt))) {
     throw new Error("Cursor was re-shown while the terminal was unfocused.");
   }
   const cursorShowStart = output.length;
