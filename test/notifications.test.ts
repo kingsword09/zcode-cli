@@ -191,12 +191,15 @@ describe("TUI turn notifications", () => {
     });
 
     notifier.start();
+    expect(notifier.handleInput("\x1b[I")).toBe(true);
     notifier.setSettings({ method: "off", condition: "unfocused" });
     notifier.setSettings({ method: "bel", condition: "always" });
     notifier.setSettings({ method: "bel", condition: "unfocused" });
 
     expect(notifier.currentSettings()).toEqual({ method: "bel", condition: "unfocused" });
     expect(writes).toEqual(["\x1b[?1004h"]);
+    // Reporting never turns off mid-session, so focus knowledge survives.
+    expect(notifier.diagnostics().focus).toBe("focused");
   });
 
   test("reports focus transitions even when notifications are off", () => {

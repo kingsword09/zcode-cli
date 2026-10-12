@@ -585,9 +585,11 @@ OSC-capable terminals can preserve their native session behavior.
 DEC focus reporting is enabled in every TUI mode and notification setting, and
 also drives cursor visibility: while another pane or terminal window has focus,
 ZCode hides the hardware cursor so multiplexer splits (tmux panes, split
-terminal windows) only show a live cursor in the focused session. Terminals
-that do not report focus keep the cursor visible. tmux only forwards focus
-events when `focus-events` is enabled:
+terminal windows) only show a live cursor in the focused session. Focus is
+last-known — if the TUI restarts mid-session (display-mode switch, suspended
+login) while another pane takes focus, the cursor can reappear until the next
+focus change. Terminals that do not report focus keep the cursor visible.
+tmux only forwards focus events when `focus-events` is enabled:
 
 ```tmux
 # ~/.tmux.conf

@@ -50,8 +50,8 @@ interface TurnNotifierOptions {
   writeTerminal: (data: string) => void;
   /**
    * Called whenever a focus report moves the terminal between focused and
-   * unfocused. Reset paths that lose focus knowledge (stop, settings change)
-   * do not fire it so consumers can keep their last known state.
+   * unfocused. The stop reset does not fire it so consumers can keep their
+   * last known state.
    */
   onFocusChange?: (state: TerminalFocusState) => void;
   env?: NodeJS.ProcessEnv;
@@ -319,7 +319,8 @@ export class TurnNotifier {
   }
 
   setSettings(settings: NotificationSettings): void {
-    if (this.settings.condition !== settings.condition) this.terminalFocus = "unknown";
+    // Focus reporting stays enabled across settings changes, so focus
+    // knowledge remains valid and is not reset here.
     this.settings = { ...settings };
     this.syncFocusReporting();
   }

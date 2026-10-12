@@ -249,8 +249,50 @@ describe("TUI choice dialog", () => {
     expect(host.children).toHaveLength(0);
   });
 
-  test("masked prompts return the secret without rendering it", async () => {
+  test("text prompts drop the drawn caret while the terminal is unfocused", async () => {
     const root = new Container();
+    const host = new Container();
+    const focusState: { current: Component | null } = { current: null };
+    const ui = {
+      terminal: { rows: 24 },
+      requestRender() {},
+      setFocus(component: Component | null) {
+        focusState.current = component;
+      }
+    } as unknown as TUI;
+    root.addChild(host);
+    const caret = () => /\x1b\[7m[^\x1b]*\x1b\[(?:0|27)m/.test(root.render(80).join("\n"));
+
+    let terminalFocused = false;
+    const pending = promptText(ui, host, createTheme(false), {
+      title: "Implementation instructions",
+      prompt: "Enter guidance for the active turn.",
+      isTerminalFocused: () => terminalFocused
+    });
+    focusState.current?.handleInput?.("keep it simple");
+    expect(caret()).toBe(false);
+    terminalFocused = true;
+    expect(caret()).toBe(true);
+    terminalFocused = false;
+    focusState.current?.handleInput?.("\r");
+    expect(await pending).toBe("keep it simple");
+
+    let maskedFocused = false;
+    const masked = promptText(ui, host, createTheme(false), {
+      title: "Enter API key",
+      prompt: "The key stays hidden.",
+      mask: true,
+      isTerminalFocused: () => maskedFocused
+    });
+    focusState.current?.handleInput?.("secret-value-123");
+    expect(caret()).toBe(false);
+    maskedFocused = true;
+    expect(caret()).toBe(true);
+    focusState.current?.handleInput?.("\r");
+    expect(await masked).toBe("secret-value-123");
+  });
+
+  test("masked prompts return the secret without rendering it", async () => {    const root = new Container();
     const host = new Container();
     const focusState: { current: Component | null } = { current: null };
     const ui = {

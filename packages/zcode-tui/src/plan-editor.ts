@@ -1,30 +1,19 @@
 import { Editor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
+import { stripCaretHighlight } from "./terminal-text.ts";
+
 /** Decorate the existing border without changing editor rows or cursor coordinates. */
 export class PlanEditor extends Editor {
   planEnabled = false;
   planColor: (text: string) => string = text => text;
   planHint = "Research and plan before making changes";
   hintColor: (text: string) => string = text => text;
-  private terminalFocused = true;
-
-  /**
-   * The hardware cursor is hidden while another terminal pane has focus; the
-   * drawn caret must follow or the unfocused pane still looks like it owns
-   * the cursor. Cell contents and widths are unchanged, only the SGR pair
-   * around the caret grapheme is dropped.
-   */
-  setTerminalFocused(focused: boolean): void {
-    this.terminalFocused = focused;
-  }
+  /** Read at render time so terminal focus changes need no state plumbing. */
+  isTerminalFocused: () => boolean = () => true;
 
   override render(width: number): string[] {
-    const lines = super.render(width);
-    if (!this.terminalFocused) {
-      for (let i = 0; i < lines.length; i++) {
-        lines[i] = lines[i].replace(/\x1b\[7m([^\x1b]*)\x1b\[0m/gu, "$1");
-      }
-    }
+    let lines = super.render(width);
+    if (!this.isTerminalFocused()) lines = lines.map(stripCaretHighlight);
     if (!this.planEnabled || width < 4 || !lines[0]) return lines;
     const label = width >= 10 ? " Plan ──" : "Plan";
     const prefixWidth = width - visibleWidth(label);

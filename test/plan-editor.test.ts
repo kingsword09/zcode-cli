@@ -44,9 +44,9 @@ test("terminal-unfocused rendering drops the drawn caret without changing cells"
   for (const text of ["", "inspect @src", "修改登录逻辑 👩‍💻"]) {
     editor.setText(text);
     for (const width of [8, 40, 80]) {
-      editor.setTerminalFocused(true);
+      editor.isTerminalFocused = () => true;
       const focused = editor.render(width);
-      editor.setTerminalFocused(false);
+      editor.isTerminalFocused = () => false;
       const unfocused = editor.render(width);
       expect(focused.join("").includes("\x1b[7m")).toBe(true);
       expect(unfocused.join("").includes("\x1b[7m")).toBe(false);
@@ -54,7 +54,7 @@ test("terminal-unfocused rendering drops the drawn caret without changing cells"
       for (let i = 0; i < focused.length; i++) {
         expect(visibleWidth(unfocused[i]!)).toBe(visibleWidth(focused[i]!));
       }
-      editor.setTerminalFocused(true);
+      editor.isTerminalFocused = () => true;
       expect(editor.render(width)).toEqual(focused);
     }
   }

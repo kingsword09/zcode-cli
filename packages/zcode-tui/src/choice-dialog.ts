@@ -19,6 +19,7 @@ import { isWindowedComponent } from "./renderable.ts";
 import {
   sanitizeTerminalText,
   removeLastGrapheme,
+  stripCaretHighlight,
   truncateTerminalText,
   wrapTerminalText
 } from "./terminal-text.ts";
@@ -585,6 +586,9 @@ class TextPromptDialog implements Component {
 }
 
 class PromptInput extends Input {
+  /** Read at render time so terminal focus changes need no state plumbing. */
+  isTerminalFocused: () => boolean = () => true;
+
   constructor(
     private readonly mask: boolean,
     private readonly placeholderText: string | undefined,
@@ -594,6 +598,11 @@ class PromptInput extends Input {
   }
 
   override render(width: number): string[] {
+    const lines = this.renderInput(width);
+    return this.isTerminalFocused() ? lines : lines.map(stripCaretHighlight);
+  }
+
+  private renderInput(width: number): string[] {
     const value = this.getValue();
     if (this.mask && value) {
       this.setValue("*".repeat(value.length));
@@ -616,6 +625,8 @@ class PromptInput extends Input {
 
 class PromptEditor extends Editor {
   onEscape?: () => void;
+  /** Read at render time so terminal focus changes need no state plumbing. */
+  isTerminalFocused: () => boolean = () => true;
 
   constructor(
     ui: TUI,
@@ -634,6 +645,11 @@ class PromptEditor extends Editor {
   }
 
   override render(width: number): string[] {
+    const lines = this.renderEditor(width);
+    return this.isTerminalFocused() ? lines : lines.map(stripCaretHighlight);
+  }
+
+  private renderEditor(width: number): string[] {
     const lines = super.render(width);
     if (this.getText() || !this.placeholder) return lines;
 
@@ -663,15 +679,18 @@ export function promptText(
     signal?: AbortSignal;
     mask?: boolean;
     placeholder?: string;
+    isTerminalFocused?: () => boolean;
   }
 ): Promise<string | null> {
   return new Promise((resolve) => {
     const placeholder = options.placeholder
       ? sanitizeTerminalText(options.placeholder, { preserveSgr: false })
       : undefined;
+    const isTerminalFocused = options.isTerminalFocused ?? (() => true);
     const input = options.mask === true
       ? new PromptInput(true, placeholder, theme)
       : new PromptEditor(ui, placeholder, theme);
+    input.isTerminalFocused = isTerminalFocused;
     if (options.initialValue) {
       if (input instanceof PromptEditor) input.setText(options.initialValue);
       else input.setValue(options.initialValue);

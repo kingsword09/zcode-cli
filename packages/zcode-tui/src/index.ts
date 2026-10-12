@@ -889,7 +889,6 @@ class ZCodeTui {
       }
       this.bindInput();
       this.notifications.start();
-      this.applyTerminalFocus();
       this.focusEditor();
       this.updateMetadata();
       this.updateTurnStatus();
@@ -992,16 +991,15 @@ class ZCodeTui {
   }
 
   /**
-   * Mirror terminal focus onto the hardware cursor and the drawn editor
-   * caret so multiplexer panes (tmux/windows-style splits) only show a live
-   * cursor in the focused pane. "unknown" keeps the cursor visible;
-   * terminals without focus reports (mode 1004) never report focus loss in
-   * the first place.
+   * Mirror terminal focus onto the hardware cursor so multiplexer panes
+   * (tmux/windows-style splits) only show a live cursor in the focused pane;
+   * the state flip also schedules the render that re-evaluates the drawn
+   * carets (editor and prompt inputs read isTerminalFocused at render time).
+   * "unknown" keeps the cursor visible; terminals without focus reports
+   * (mode 1004) never report focus loss in the first place.
    */
   private applyTerminalFocus(): void {
-    const focused = this.terminalFocus !== "unfocused";
-    this.ui.setShowHardwareCursor(focused);
-    this.editor.setTerminalFocused(focused);
+    this.ui.setShowHardwareCursor(this.terminalFocus !== "unfocused");
   }
 
   private createTui(mode: TuiMode): TUI {
@@ -1178,6 +1176,7 @@ class ZCodeTui {
     editor.planEnabled = this.planEnabled;
     editor.planColor = this.theme.accent;
     editor.hintColor = this.theme.muted;
+    editor.isTerminalFocused = () => this.terminalFocus !== "unfocused";
     if (this.options.locale?.startsWith("zh")) editor.planHint = "先调研与规划，再开始修改";
     for (const input of [...this.editorHistory].reverse()) editor.addToHistory(input);
     const commands = this.autocompleteCommands();
@@ -5379,7 +5378,10 @@ class ZCodeTui {
   private async showTextPrompt(options: Parameters<typeof promptText>[3]): Promise<string | null> {
     this.choiceDepth += 1;
     try {
-      return await promptText(this.ui, this.choiceHost, this.theme, options);
+      return await promptText(this.ui, this.choiceHost, this.theme, {
+        ...options,
+        isTerminalFocused: () => this.terminalFocus !== "unfocused"
+      });
     } finally {
       this.choiceDepth = Math.max(0, this.choiceDepth - 1);
       if (this.choiceDepth === 0) this.focusEditor();
