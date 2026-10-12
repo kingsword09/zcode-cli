@@ -164,6 +164,7 @@ try {
   await sendAndWait("/help\r", "long help", /Use \/help <command> for details/i);
   await sendAndWait("\x1b[Z", "edit mode shortcut", /◈ alpha\/model ─ ◉ edit ─ ⚡ low/i);
   await Bun.sleep(1_100);
+  await sendAndWait("\x1b[Z", "guarded mode shortcut", /◈ alpha\/model ─ ◉ guarded ─ ⚡ low/i);
   await sendAndWait("\x1b[Z", "yolo mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i);
   await sendAndWait("/plan on\r", "independent Plan switch", /Plan enabled · permission mode: yolo/i);
   await sendAndWait("\x0e", "model shortcut", /◈ beta\/model ─ ◉ yolo ─ ⚡ low/i);
@@ -596,6 +597,7 @@ if (plain.includes("feature-secret-api-key") || plain.includes("override-fixture
 let stateOffset = 0;
 for (const [label, pattern] of [
   ["edit mode shortcut", /◈ alpha\/model ─ ◉ edit ─ ⚡ low/i],
+  ["guarded mode shortcut", /◈ alpha\/model ─ ◉ guarded ─ ⚡ low/i],
   ["yolo mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i],
   ["plan mode shortcut", /◈ alpha\/model ─ ◉ yolo ─ ⚡ low/i],
   ["model shortcut preserving plan", /◈ beta\/model ─ ◉ yolo ─ ⚡ low/i],
