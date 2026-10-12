@@ -67,6 +67,7 @@ test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])("Plan 
     const picker = screen.screenText().split("Select mode").at(-1)!;
     expect(picker).toContain("Build");
     expect(picker).toContain("Edit");
+    expect(picker).toContain("Guarded");
     expect(picker).toContain("Yolo");
     expect(picker).not.toMatch(/\bAuto\b/);
     terminal.write("\x1b");
@@ -74,31 +75,33 @@ test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])("Plan 
     terminal.write("\x1b[Z");
     await wait(state("edit", true));
     terminal.write("\x1b[Z");
+    await wait(state("guarded", true));
+    terminal.write("\x1b[Z");
     await wait(state("yolo", true));
     terminal.write("\x1b[Z");
     await wait(state("build", true));
-    terminal.write("/mode edit\r");
-    await wait(state("edit", true));
+    terminal.write("/mode guarded\r");
+    await wait(state("guarded", true));
     terminal.write("/plan\r");
-    await wait(state("edit", false));
+    await wait(state("guarded", false));
     terminal.write("/plan\r");
-    await wait(state("edit", true));
+    await wait(state("guarded", true));
     const sessions = await requestAppServer({ method: "session/list", params: {}, transport: {
       command: node, args: [join(root, "vendor/zcode.cjs"), "app-server"], cwd: home, env
     } }) as { sessions: { sessionId: string }[] };
     const sessionId = sessions.sessions[0]?.sessionId;
     expect(sessionId).toBeString();
     terminal.write("/new\r");
-    await wait(state("edit", false));
+    await wait(state("guarded", false));
     terminal.write("/mode yolo\r");
     await wait(state("yolo", false));
     terminal.write(`/resume ${sessionId}\r`);
-    await wait(state("edit", true));
+    await wait(state("guarded", true));
     child.kill("SIGTERM");
     await child.exited;
     await screen.write("\x1b[2J\x1b[H");
     child = start(["--resume", sessionId!]);
-    await wait(state("edit", true));
+    await wait(state("guarded", true));
     terminal.resize(40, 30);
     screen.resize(40, 30);
     await wait(text => / Plan ──\s*\n/.test(text));

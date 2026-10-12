@@ -173,7 +173,7 @@ MCP 服务器按名称合并。当前 runtime 中，**同名服务器的用户�
 
 下面区分本发行包与上游应用。源码引用固定在上游
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e)。
-本项目 runtime lock 选择的是独立发布的 Desktop 3.14.4 产物，不能据此认定该产物
+本项目 runtime lock 选择的是独立发布的 Desktop 3.15.1 产物，不能据此认定该产物
 由这个公开源码提交构建。
 
 | 客户端／配置源 | 用户级 MCP 文件 | JSON 路径 |
@@ -361,9 +361,16 @@ Anthropic 兼容接口使用 `anthropic-messages`，Chat Completions 使用
 
 ## 权限模式与计划状态
 
-CLI 与桌面端一样提供三种权限模式：`build`（变更前确认）、`edit`（自动编辑）、
-`yolo`（完全访问）。`/mode` 打开选择器，Shift+Tab 在三种模式间循环。
+CLI 提供四种权限模式：`build`（变更前确认）、`edit`（自动编辑）、
+`guarded`（自主模式，风险指令执行前确认）、`yolo`（完全访问）。
+`/mode` 打开选择器，Shift+Tab 在四种模式间循环。
+使用 `/mode guarded` 或启动参数 `--mode guarded` 开启自主模式。
+风险判定和确认由原生 runtime 负责，子代理和工作流也保留该保护。
 底层的 `auto` 值不作为菜单选项。
+
+runtime 3.15.1 的风险确认只允许本次授权：选择器仅提供 **Allow once** 和 **Deny**，
+不会提供项目或会话级永久放行。自主模式是基于规则的确认策略，不是沙箱，
+也不保证识别所有潜在破坏性指令。Plan 开启时，计划模式的执行限制仍然优先。
 
 `/plan` 独立切换计划开关，也可以用 `/plan on`、`/plan off` 明确指定状态。
 切换权限不会改变 Plan 开关，切换 Plan 也不会改变权限。验证由原生 runtime 负责，

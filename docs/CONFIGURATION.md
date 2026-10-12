@@ -200,7 +200,7 @@ Plugin controls remain under `plugins`, hook declarations under
 These paths distinguish the packaged CLI from the upstream application. The
 source references below are pinned to upstream
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e).
-This package's runtime lock selects the separate Desktop 3.14.4 artifact; the
+This package's runtime lock selects the separate Desktop 3.15.1 artifact; the
 public source snapshot is not an assertion of that artifact's build commit.
 
 | Client / source | User MCP file | JSON path |
@@ -425,10 +425,18 @@ there is no need to write upstream capability values into every personal model.
 
 ## Permission and planning state
 
-The CLI follows Desktop's three selectable permission modes: `build` (ask before
-changes), `edit` (edit automatically), and `yolo` (full access). `/mode` opens the
-picker; Shift+Tab cycles these three options. The internal `auto` value is not a
-menu option.
+The CLI exposes four permission modes: `build` (ask before changes), `edit`
+(edit automatically), `guarded` (autonomous mode; confirm risky commands), and
+`yolo` (full access). `/mode` opens the picker; Shift+Tab cycles these four options.
+Use `/mode guarded` or start with `--mode guarded` to enable autonomous mode.
+Risk assessment and confirmation are handled by the native runtime, including
+for child agents and workflows. The internal `auto` value is not a menu option.
+
+In runtime 3.15.1, risk confirmations are single-use: the picker offers only
+**Allow once** and **Deny**, never a project or session-wide grant. Guarded is a
+rule-based confirmation policy, not a sandbox or a guarantee that every
+potentially destructive command will be recognized. Planning restrictions still
+take precedence when Plan is enabled.
 
 `/plan` toggles planning independently. `/plan on` and `/plan off` set it
 explicitly. Changing permissions keeps the Plan switch unchanged; toggling Plan

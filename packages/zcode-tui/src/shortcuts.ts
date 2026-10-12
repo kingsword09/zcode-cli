@@ -2,7 +2,7 @@ import { isKeyRelease, matchesKey } from "@earendil-works/pi-tui";
 
 import type { PickerSpec } from "./selectors.ts";
 
-export const modes = ["build", "edit", "yolo"] as const;
+export const modes = ["build", "edit", "guarded", "yolo"] as const;
 export type Mode = (typeof modes)[number];
 export type SettingTarget = "mode" | "model" | "effort";
 

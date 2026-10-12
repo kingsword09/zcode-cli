@@ -98,10 +98,14 @@ describe("TUI selectors", () => {
   test("builds mode choices with the current mode preselected", () => {
     const picker = modePicker("edit");
     expect(picker.selectedIndex).toBe(1);
-    expect(picker.items.map(item => item.value)).toEqual(["build", "edit", "yolo"]);
+    expect(picker.items.map(item => item.value)).toEqual(["build", "edit", "guarded", "yolo"]);
     expect(picker.items[1]?.description).toBe("Edit automatically · current");
     expect(modePicker("edit", ["build", "edit", "auto", "yolo", "plan"]).items.map(item => item.value))
       .toEqual(["build", "edit", "yolo"]);
+    const guarded = modePicker("guarded");
+    expect(guarded.selectedIndex).toBe(2);
+    expect(guarded.items[2]?.description).toBe("Autonomous · ask before risky commands · current");
+    expect(guarded.items[2]?.command).toBe("/mode guarded");
 
     // Unknown current mode falls back to index 0 with no current marker.
     const fallback = modePicker(undefined);

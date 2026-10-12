@@ -11,10 +11,12 @@ import {
 } from "../packages/zcode-tui/src/shortcuts.ts";
 
 describe("TUI shortcuts", () => {
-  test("cycles only the three Desktop permission modes", () => {
+  test("cycles permission modes including guarded without treating auto or plan as permissions", () => {
     expect(normalizedMode("invalid")).toBe("build");
+    expect(normalizedMode("guarded")).toBe("guarded");
     expect(nextMode("build")).toBe("edit");
-    expect(nextMode("edit")).toBe("yolo");
+    expect(nextMode("edit")).toBe("guarded");
+    expect(nextMode("guarded")).toBe("yolo");
     expect(nextMode("auto")).toBe("build");
     expect(nextMode("yolo")).toBe("build");
     expect(nextMode("plan")).toBe("build");

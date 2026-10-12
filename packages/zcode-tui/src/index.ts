@@ -1760,7 +1760,7 @@ class ZCodeTui {
     if (/^\/mode(?:\s|$)/iu.test(input)) {
       const mode = input.slice(5).trim().toLowerCase();
       if (!modes.includes(mode as Mode)) {
-        this.addNotice("Choose /mode build, edit or yolo. Use /plan on or /plan off for planning.", "warning");
+        this.addNotice("Choose /mode build, edit, guarded or yolo. Use /plan on or /plan off for planning.", "warning");
       } else {
         await this.applyModeShortcut(mode as Mode, true);
       }
@@ -3635,7 +3635,7 @@ class ZCodeTui {
     toolName: string,
     signal?: AbortSignal
   ): Promise<unknown> {
-    const rawOptions = Array.isArray(request.options) ? request.options : [];
+    const rawOptions = request.approvalMode !== "user-once" && Array.isArray(request.options) ? request.options : [];
     const items: ChoiceItem[] = rawOptions.flatMap((option, index) => {
       if (!isRecord(option)) return [];
       const response = isRecord(option.response) ? option.response : undefined;
@@ -3648,7 +3648,7 @@ class ZCodeTui {
       }];
     });
     if (items.length === 0) {
-      items.push(...defaultPermissionChoices(toolName, request.input).map((choice) => ({
+      items.push(...defaultPermissionChoices(toolName, request.input, request.approvalMode).map((choice) => ({
         value: choice.value,
         label: choice.label,
         description: choice.description,
@@ -5480,7 +5480,10 @@ class ZCodeTui {
     this.sessionModelIssue = undefined;
     try {
       const saved = await this.options.readSessionModel?.();
-      if (!isRecord(saved)) return;
+      if (!isRecord(saved)) {
+        if (this.model === "default") this.model = await this.options.readDefaultModel?.() ?? this.model;
+        return;
+      }
       if (typeof saved.model === "string") this.model = saved.model;
       this.thoughtLevel = asString(saved.thoughtLevel);
       if (Array.isArray(saved.effortOptions)) this.effortOptions = saved.effortOptions;

@@ -77,6 +77,16 @@ describe("BigModel Desktop token exchange", () => {
 });
 
 describe("BigModel runtime patch", () => {
+  test("accepts the native polling flow only when it delegates BigModel login and persists both tokens", () => {
+    const native = 'function label(fn){return fn}function poll(options){return options}async function shared(e={}){let tokens=await poll({});await e.credentialStore.saveMany({[keys.zcodeJwtToken]:tokens.token,[keys.bigmodelAccessToken]:tokens.accessToken,other:"preserved"});return persist({authSource:"oauth"})}async function login(e={}){return{...await shared({...e,providerId:"bigmodel"}),providerId:"bigmodel"}}label(poll,"pollUntilReady");label(shared,"loginZCodeCli");label(login,"loginBigmodelCodingPlan");';
+    expect(hasRuntimeBigmodelOAuth(native)).toBe(true);
+    expect(patchRuntimeBigmodelOAuth(native)).toBe(native);
+    for (const broken of [native + native, native.replace("zcodeJwtToken", "otherToken"), native.replace('authSource:"oauth"', 'authSource:"api-key"')]) {
+      expect(hasRuntimeBigmodelOAuth(broken)).toBe(false);
+      expect(() => patchRuntimeBigmodelOAuth(broken)).toThrow("incompatible with BigModel OAuth");
+    }
+  });
+
   test("replaces the failing exchange and persists the ZCode JWT alongside the provider token", async () => {
     const login = new Function("require", "__dirname", `${patchRuntimeBigmodelOAuth(source)};return login;`)(
       (id: string) => id === "node:path" ? { join } : { exchangeBigmodelOAuthCode }, "/fixture"

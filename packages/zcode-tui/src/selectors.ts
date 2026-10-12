@@ -1,4 +1,5 @@
 import { normalizeSessionTitle } from "./session-title.ts";
+import { modes, type Mode } from "./shortcuts.ts";
 import { asString, isRecord } from "./types.ts";
 
 export interface PickerItem {
@@ -29,12 +30,13 @@ export function isModePickerRequest(input: string): boolean {
 }
 
 export function modePicker(currentMode?: string, availableModes?: readonly string[]): PickerSpec {
-  const list = (availableModes?.length ? availableModes : ["build", "edit", "yolo"])
-    .filter(mode => ["build", "edit", "yolo"].includes(mode));
+  const list = (availableModes?.length ? availableModes : modes)
+    .filter(mode => modes.includes(mode as Mode));
   const items: PickerItem[] = list.map((mode) => ({
     value: mode,
     label: mode.charAt(0).toUpperCase() + mode.slice(1),
-    description: [mode === "build" ? "Ask before changes" : mode === "edit" ? "Edit automatically" : "Full access",
+    description: [mode === "build" ? "Ask before changes" : mode === "edit" ? "Edit automatically"
+      : mode === "guarded" ? "Autonomous · ask before risky commands" : "Full access",
       mode === currentMode ? "current" : undefined].filter(Boolean).join(" · "),
     command: `/mode ${mode}`
   }));

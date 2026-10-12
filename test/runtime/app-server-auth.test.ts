@@ -74,7 +74,8 @@ async function withServer(
     const credentialsPath = join(home, ".zcode/v2/credentials.json");
     const localCredentials = credentials === "missing" ? {} : {
       [`account-provider:${providerId}:identity`]: credentials === "corrupt" ? "enc:v1:broken" : "fixture-user",
-      [credentialKey]: "local-fixture-key"
+      [`account-provider:${providerId}:auth-source`]: "manual",
+      [credentialKey]: "local-fixture-key.fixture-secret"
     };
     await writeFile(credentialsPath, JSON.stringify(localCredentials));
     const savedCredentials = await readFile(credentialsPath, "utf8");
@@ -105,7 +106,7 @@ async function withServer(
       } else if (item.id && item.method === "interaction/requestProviderRuntimeHeaders") {
         authRequests.push(item.params.providerId);
         reply(hostAuthFailure ? { headersApplied: false, errorMessage: "host-auth-fixture-failed" }
-          : { headersApplied: true, requestAuth: { apiKey: "host-fixture-key" } });
+          : { headersApplied: true, requestAuth: { apiKey: "host-fixture-key.fixture-secret" } });
       } else if (pending.has(item.id)) {
         const waiter = pending.get(item.id)!;
         pending.delete(item.id);
@@ -139,7 +140,7 @@ async function withServer(
       accountConfig: { revision: "host-fixture-1", basedOnZCodeBuiltinRevision: `zcode-builtin:${builtin.revision}:${createHash("sha256").update(resolve(builtinPath)).digest("hex")}`,
         providers: { [providerId]: { access: { type: "zhipu-account", entitled: true } } },
         states: { [providerId]: { availability: "available", entitled: true, current: true } } },
-      rotateKey: () => writeFile(credentialsPath, JSON.stringify({ ...localCredentials, [credentialKey]: "rotated-fixture-key" })),
+      rotateKey: () => writeFile(credentialsPath, JSON.stringify({ ...localCredentials, [credentialKey]: "rotated-fixture-key.fixture-secret" })),
       rejectHostAuth: () => { hostAuthFailure = true; },
       async turn(sessionId) {
         await request("session/subscribe", { sessionId, deliveryKind: "desktop-continuous" });
@@ -164,10 +165,11 @@ test("app-server defaults to local login and reads rotated credentials on the ne
     await expect(fixture.request("provider/updateAccountConfig", fixture.accountConfig)).rejects.toThrow("Host");
     const snapshot = await fixture.create();
     expect(snapshot.settings.model.available.length).toBeGreaterThan(0);
-    expect((await fixture.turn(snapshot.session.sessionId)).type).toBe("turn.completed");
+    const event = await fixture.turn(snapshot.session.sessionId);
+    expect(event.type, JSON.stringify(event)).toBe("turn.completed");
     await fixture.rotateKey();
     expect((await fixture.turn(snapshot.session.sessionId)).type).toBe("turn.completed");
-    expect(fixture.modelRequests).toEqual(["Bearer local-fixture-key", "Bearer rotated-fixture-key"]);
+    expect(fixture.modelRequests).toEqual(["Bearer local-fixture-key.fixture-secret", "Bearer rotated-fixture-key.fixture-secret"]);
     expect(fixture.authRequests).toEqual([]);
     expect(JSON.stringify(fixture.events)).toContain("APP_SERVER_AUTH_OK");
   });
@@ -180,7 +182,7 @@ test.each(["valid", "corrupt"] as const)("host mode keeps account and request au
     expect(snapshot.settings.model.available.length).toBeGreaterThan(0);
     expect((await fixture.turn(snapshot.session.sessionId)).type).toBe("turn.completed");
     expect(fixture.authRequests).toEqual([providerId]);
-    expect(fixture.modelRequests).toEqual(["Bearer host-fixture-key"]);
+    expect(fixture.modelRequests).toEqual(["Bearer host-fixture-key.fixture-secret"]);
     fixture.rejectHostAuth();
     expect((await fixture.turn(snapshot.session.sessionId)).type).toBe("turn.failed");
     expect(fixture.modelRequests).toHaveLength(1);

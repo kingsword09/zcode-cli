@@ -1057,7 +1057,7 @@ export function patchRuntimeSessionModelRecovery(runtime: string): string {
   const marker = "$zRestoredSessionModel";
   if (runtime.includes(marker) && runtime.includes('"readSessionModelState"')) return runtime;
   const facade = /getModelOption:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)=>[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*)\.providerRegistry,\2\),"getModelOption"\)/u.exec(runtime);
-  const restore = /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)\.validateSelection\(\2\);return ([A-Za-z_$][\w$]*)\(\)\.setSessionModelSelection\(\1\?\.ok\?\2:void 0\),\2\},"restorePersistedModelSelection"/u.exec(runtime);
+  const restore = /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)\.validateSelection\(\2\);return (?:[^;]*?,)?([A-Za-z_$][\w$]*)\(\)\.setSessionModelSelection\(\1\?\.ok\?\2:void 0\),\2\},"restorePersistedModelSelection"/u.exec(runtime);
   const boundary = /([A-Za-z_$][\w$]*)\(async ([A-Za-z_$][\w$]*)=>\{await ([A-Za-z_$][\w$]*)\.prepareUserExecutionBoundary\(\2\)\},"preparePromptBoundary"\)/u.exec(runtime);
   if (!facade || !restore || !boundary) throw new Error("ZCode runtime is incompatible with session model recovery (restore/facade anchors missing).");
   const helper = 'require(require("node:path").join(__dirname,"cli-config.cjs"))';
@@ -1070,9 +1070,9 @@ export function patchRuntimeSessionModelRecovery(runtime: string): string {
 
 export function patchRuntimeTuiExecutionState(runtime: string): string {
   if (runtime.includes('"readExecutionState"') && runtime.includes('"setPlanEnabled"')) return runtime;
-  const modes = /\["plan","build","edit","yolo"\](;[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"formatAvailableCommandCenterModes"\))/u;
+  const modes = /(\["plan","build","edit",(?:"guarded",)?"yolo"\])(;[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"formatAvailableCommandCenterModes"\))/u;
   const getter = /getMode:([A-Za-z_$][\w$]*)\(\(\)=>([A-Za-z_$][\w$]*)\.runtime\.getMode\(\),"getMode"\)/u.exec(runtime);
-  const setter = /setMode:[A-Za-z_$][\w$]*\(async ([A-Za-z_$][\w$]*)=>\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.runtime\.getMode\(\);/u.exec(runtime);
+  const setter = /setMode:[A-Za-z_$][\w$]*\(async ([A-Za-z_$][\w$]*)=>\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.runtime\.getMode\(\)[;,]/u.exec(runtime);
   if (!modes.test(runtime) || !getter || !setter || !runtime.includes("getPlanEnabled")) {
     throw new Error("ZCode runtime is incompatible with the TUI execution state bridge.");
   }
@@ -1082,13 +1082,15 @@ export function patchRuntimeTuiExecutionState(runtime: string): string {
   const result = `{mode:${setter[3]}.runtime.getMode(),previousMode:${setter[2]},traceId:${setter[3]}.traceContext.traceId}`;
   if (!runtime.includes(update) || !runtime.includes(result)) throw new Error("ZCode runtime is incompatible with the TUI execution state result.");
   return runtime
-    .replace(modes, '["build","edit","yolo"]$1')
+    .replace(modes, (_match, values: string, suffix: string) => values.replace('"plan",', "") + suffix)
     .replace("/mode [plan|build|edit|yolo]", "/mode [build|edit|yolo]")
+    .replace("/mode [plan|build|edit|guarded|yolo]", "/mode [build|edit|guarded|yolo]")
     .replaceAll("build, edit, plan, or yolo", "build, edit, or yolo")
     .replaceAll(String.raw`build\u3001edit\u3001plan \u6216 yolo`, String.raw`build\u3001edit \u6216 yolo`)
-    .replace(/if\(([A-Za-z_$][\w$]*)==="build"\|\|\1==="plan"\|\|\1==="edit"\|\|\1==="yolo"\)return \1;throw new Error\(`Unsupported --mode value:/u,
-      'if($1==="build"||$1==="edit"||$1==="yolo")return $1;throw new Error(`Unsupported --mode value:')
+    .replace(/if\(([A-Za-z_$][\w$]*)==="build"\|\|\1==="plan"\|\|\1==="edit"\|\|\1==="yolo"(\|\|\1==="guarded")?\)return \1;throw new Error\(`Unsupported --mode value:/u,
+      'if($1==="build"||$1==="edit"||$1==="yolo"$2)return $1;throw new Error(`Unsupported --mode value:')
     .replace("Supported modes: build, edit, plan, yolo.", "Supported modes: build, edit, yolo. Use /plan in the TUI to toggle planning.")
+    .replace("Supported modes: build, edit, plan, yolo, guarded.", "Supported modes: build, edit, guarded, yolo. Use /plan in the TUI to toggle planning.")
     .replace(getter[0], `${getter[0]},readExecutionState:${label}(async()=>{await ${context}.prepareResume();return ${state}},"readExecutionState"),setPlanEnabled:${label}(async $zEnabled=>{await ${context}.prepareResume();await ${context}.runtime.setExecutionState({planEnabled:$zEnabled},${context}.traceContext);return ${state}},"setPlanEnabled")`)
     .replace(setter[0], setter[0].replace("=>{", `=>{await ${setter[3]}.prepareResume();`))
     .replace(update, `${setter[3]}.runtime.setExecutionState({mode:${setter[1]},planEnabled:${setter[3]}.runtime.getPlanEnabled()}`)
@@ -1126,8 +1128,11 @@ export function patchRuntimeOAuthHttpErrors(runtime: string): string {
 
 /** Avoid Undici rejecting bodies on the Fetch statuses that must be bodyless. */
 export function hasRuntimeHttpNoContentGuard(runtime: string): boolean {
-  return /([A-Za-z_$][\w$]*)\.statusCode===204\|\|\1\.statusCode===205\|\|\1\.statusCode===304\?void 0:/u
-    .test(runtime);
+  if (/([A-Za-z_$][\w$]*)\.statusCode===204\|\|\1\.statusCode===205\|\|\1\.statusCode===304\?void 0:/u.test(runtime)) return true;
+  const bodylessStatuses = /([A-Za-z_$][\w$]*)=new Set\(\[101,103,204,205,304\]\)/u.exec(runtime);
+  if (!bodylessStatuses) return false;
+  return new RegExp(`let ([A-Za-z_$][\\w$]*)=${escapeRegExpName(bodylessStatuses[1])}\\.has\\(([A-Za-z_$][\\w$]*)\\);return \\1&&([A-Za-z_$][\\w$]*)\\.resume\\(\\),\\{body:\\1\\?null:[A-Za-z_$][\\w$]*\\.Readable\\.toWeb\\(\\3\\),headers:[A-Za-z_$][\\w$]*,status:\\2,statusText:`, "u").test(runtime)
+    && runtime.includes('"readIncomingResponse"') && runtime.includes('"toWebResponse"');
 }
 
 export function patchRuntimeHttpNoContent(runtime: string): string {
@@ -1466,21 +1471,28 @@ export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
     throw new Error("ZCode runtime is incompatible with the Desktop OAuth patch (function anchor missing).");
   }
   const originalFunction = runtime.slice(functionStart, nextFunction);
+  const nativePolling = /[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"loginZCodeCli"\)/u.test(runtime)
+    && originalFunction.includes('authSource:"oauth"');
+  const nativeSymbol = (label: string) => nativePolling
+    ? new RegExp(`[A-Za-z_$][\\w$]*\\(([A-Za-z_$][\\w$]*),"${label}"\\)`, "u").exec(runtime)?.[1]
+    : undefined;
   const prefix = /^async function ([A-Za-z_$][\w$]*)\(e=\{\}\)\{/u.exec(originalFunction);
-  const abortHelper = /;([A-Za-z_$][\w$]*)\(e\.abortSignal\);let/u.exec(originalFunction)?.[1];
+  const abortHelper = nativeSymbol("throwIfAborted") ?? /;([A-Za-z_$][\w$]*)\(e\.abortSignal\);let/u.exec(originalFunction)?.[1];
   const credentialStore = /e\.credentialStore\?\?([A-Za-z_$][\w$]*)\(\{env:[A-Za-z_$][\w$]*\}\)/u.exec(originalFunction)?.[1];
   const loginError = /new ([A-Za-z_$][\w$]*)\("credential_write_failed"/u.exec(originalFunction)?.[1];
   const apiKeyResolverMatch = /await ([A-Za-z_$][\w$]*)\(\{accessToken:[^,]+,env:[^,]+,httpClient:e\.httpClient,family:"zai"/u.exec(originalFunction);
-  const apiKeyResolver = apiKeyResolverMatch?.[1];
-  const configWriter = /await ([A-Za-z_$][\w$]*)\(\{accountIdentity:[^,]+\.user\.user_id,apiKey:[^,]+,credentialStore:[^,]+,env:[^,]+,personalProviderConfigPath:e\.personalProviderConfigPath,providerId:"zai"\}\)/u.exec(originalFunction)?.[1];
-  const httpClientFactory = /e\.httpClient\?\?([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*=e\.state\?\?/u.exec(runtime)?.[1];
+  const apiKeyResolver = nativeSymbol("resolveCodingPlanMaterial") ?? apiKeyResolverMatch?.[1];
+  const configWriter = (nativePolling
+    ? /await ([A-Za-z_$][\w$]*)\(\{accountIdentity:[^,]+,authSource:"oauth",credentialStore:[^,]+,env:[^,]+,personalProviderConfigPath:e\.personalProviderConfigPath,providerId:[^}]+\}\)/u
+    : /await ([A-Za-z_$][\w$]*)\(\{accountIdentity:[^,]+\.user\.user_id,apiKey:[^,]+,credentialStore:[^,]+,env:[^,]+,personalProviderConfigPath:e\.personalProviderConfigPath,providerId:"zai"\}\)/u).exec(originalFunction)?.[1];
+  const httpClientFactory = nativeSymbol("createDefaultHttpClient") ?? /e\.httpClient\?\?([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*=e\.state\?\?/u.exec(runtime)?.[1];
   if (!prefix || !abortHelper || !credentialStore || !loginError
     || !apiKeyResolver || !configWriter || !httpClientFactory) {
     throw new Error("ZCode runtime is incompatible with the Desktop OAuth patch (dependency anchor missing).");
   }
 
   const branch = [
-    'if((e.env??process.env).ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"){',
+    `if((e.env??process.env).ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"${nativePolling ? '&&(e.providerId??"zai")==="zai"' : ""}){`,
     "let $zEnv=e.env??process.env;",
     `${abortHelper}(e.abortSignal);`,
     `let $zStore=e.credentialStore??${credentialStore}({env:$zEnv}),$zHttp=e.httpClient??${httpClientFactory}($zEnv),$zPayload;`,
@@ -1500,8 +1512,8 @@ export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
     `if(typeof $zAccessToken!=="string"||typeof $zJwtToken!=="string"||!$zUser||typeof $zUser!=="object")throw new ${loginError}("token_exchange_failed","Z.AI token response is missing credentials or user data.");`,
     `${abortHelper}(e.abortSignal);`,
     `try{await $zStore.saveZaiLoginCredentials({accessToken:$zAccessToken,jwtToken:$zJwtToken,user:$zUser})}catch($zError){throw new ${loginError}("credential_write_failed","Login succeeded but writing credentials failed.",{cause:$zError})}`,
-    `let $zApiKey=await ${apiKeyResolver}({accessToken:$zAccessToken,env:$zEnv,httpClient:$zHttp,family:"zai",resolver:e.apiKeyResolver}),$zConfig;`,
-    `try{$zConfig=await ${configWriter}({accountIdentity:$zUser.user_id,apiKey:$zApiKey,credentialStore:$zStore,env:$zEnv,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"zai"})}catch($zError){throw new ${loginError}("config_update_failed","Login succeeded but updating ZCode config failed.",{cause:$zError})}`,
+    `let $zApiKey=await ${apiKeyResolver}({accessToken:$zAccessToken,env:$zEnv,httpClient:$zHttp,family:"zai",resolver:e.apiKeyResolver${nativePolling ? ",signal:e.abortSignal" : ""}}),$zConfig;`,
+    `try{$zConfig=await ${configWriter}({accountIdentity:$zUser.user_id,${nativePolling ? 'authSource:"oauth"' : "apiKey:$zApiKey"},credentialStore:$zStore,env:$zEnv,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"zai"})}catch($zError){throw new ${loginError}("config_update_failed","Login succeeded but updating ZCode config failed.",{cause:$zError})}`,
     'return{configPath:$zConfig.path,credentialsPath:$zStore.filePath,model:$zConfig.mainModel,providerId:"zai",user:$zUser}',
     "}"
   ].join("");
@@ -1527,6 +1539,38 @@ export function patchRuntimeBigmodelSessionReuse(runtime: string): string {
     throw new Error("ZCode runtime is incompatible with BigModel session reuse (login anchor missing).");
   }
   const login = runtime.slice(loginStart, loginEnd);
+  const nativeSymbol = (label: string) => new RegExp(`${name}\\((${name}),"${label}"\\)`, "u").exec(runtime)?.[1];
+  const sharedLogin = nativeSymbol("loginZCodeCli");
+  if (sharedLogin && login.includes(`${sharedLogin}({...e,providerId:"bigmodel"})`)) {
+    const sharedStart = runtime.indexOf(`async function ${sharedLogin}(`);
+    const sharedEnd = runtime.indexOf("async function ", sharedStart + 1);
+    const shared = runtime.slice(sharedStart, sharedEnd);
+    const abortHelper = nativeSymbol("throwIfAborted");
+    const materialResolver = nativeSymbol("resolveCodingPlanMaterial");
+    const httpClientFactory = nativeSymbol("createDefaultHttpClient");
+    const accountIdentity = nativeSymbol("createStandaloneAccountIdentityFromSecret");
+    const credentialStore = new RegExp(`e\\.credentialStore\\?\\?(${name})\\(\\{env:${name}\\}\\)`, "u").exec(shared)?.[1];
+    const credentialKeys = new RegExp(`\\[(${name})\\.bigmodelAccessToken\\]`, "u").exec(shared)?.[1];
+    const configWriter = new RegExp(`await (${name})\\(\\{accountIdentity:${name},authSource:"oauth",credentialStore:${name},env:${name},personalProviderConfigPath:e\\.personalProviderConfigPath,providerId:${name}\\}\\)`, "u").exec(shared)?.[1];
+    const prefix = new RegExp(`^async function ${escapeRegExpName(label)}\\(e=\\{\\}\\)\\{`, "u").exec(login);
+    if (sharedStart < 0 || sharedEnd < 0 || !prefix || !abortHelper || !materialResolver
+      || !httpClientFactory || !accountIdentity || !credentialStore || !credentialKeys || !configWriter) {
+      throw new Error("ZCode runtime is incompatible with BigModel session reuse (polling dependency anchor missing).");
+    }
+    const reuse = [
+      `if((e.env??process.env).${bigmodelSessionReuseMarker}!=="0"){`,
+      `let $bEnv=e.env??process.env,$bStore=e.credentialStore??${credentialStore}({env:$bEnv}),$bToken,$bMaterial;`,
+      `${abortHelper}(e.abortSignal);`,
+      `try{$bToken=(await $bStore.load(${credentialKeys}.bigmodelAccessToken))?.trim()}catch{}`,
+      `if($bToken)try{$bMaterial=await ${materialResolver}({accessToken:$bToken,env:$bEnv,httpClient:e.httpClient??${httpClientFactory}($bEnv),family:"bigmodel",resolver:e.apiKeyResolver,signal:e.abortSignal})}catch{}`,
+      `if($bMaterial){${abortHelper}(e.abortSignal);`,
+      `let $bConfig=await ${configWriter}({accountIdentity:${accountIdentity}(JSON.stringify([$bMaterial.organizationId,$bMaterial.projectId])),authSource:"oauth",credentialStore:$bStore,env:$bEnv,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"bigmodel"});`,
+      'return{configPath:$bConfig.path,credentialsPath:$bStore.filePath,model:$bConfig.mainModel,providerId:"bigmodel"}}',
+      "}"
+    ].join("");
+    const insertion = loginStart + prefix[0].length;
+    return runtime.slice(0, insertion) + reuse + runtime.slice(insertion);
+  }
   const prefix = new RegExp(`^async function ${escapeRegExpName(label)}\\(e=\\{\\}\\)\\{let (${name})=e\\.env\\?\\?process\\.env;`, "u").exec(login);
   const abortHelper = new RegExp(`;(${name})\\(e\\.abortSignal\\);let`, "u").exec(login)?.[1];
   const httpClientFactory = new RegExp(`=e\\.httpClient\\?\\?(${name})\\(`, "u").exec(login)?.[1];
@@ -1666,7 +1710,7 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
   {
     id: "tui-execution-state", requirement: "required", apply: patchRuntimeTuiExecutionState,
     verify: runtime => runtime.includes('"readExecutionState"') && runtime.includes('"setPlanEnabled"')
-      && /\["build","edit","yolo"\];[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"formatAvailableCommandCenterModes"\)/u.test(runtime)
+      && /\["build","edit",(?:"guarded",)?"yolo"\];[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"formatAvailableCommandCenterModes"\)/u.test(runtime)
   },
   {
     id: "shared-config",

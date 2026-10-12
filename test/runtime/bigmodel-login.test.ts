@@ -46,7 +46,7 @@ async function probe(body: string): Promise<void> {
   }
 }
 
-test("BigModel OAuth completes the native callback, broker exchange and account setup without an app secret", async () => {
+test("BigModel OAuth completes native polling and stores OAuth credentials without a derived API key", async () => {
   await probe(`
     const assert = require("node:assert/strict");
     const fs = require("node:fs/promises");
@@ -54,9 +54,9 @@ test("BigModel OAuth completes the native callback, broker exchange and account 
     const choices=buildLoginSelection("en").items;
     assert.equal(choices.some(item=>item.id==="bigmodel-coding-plan"),true);
     assert.equal(choices.find(item=>item.id==="bigmodel-coding-plan-api-key").input.mask,true);
-    let callbackUrl, requested = false, businessRequests = 0, browserOpened = false;
+    let requested = false, materialRequests = 0, browserOpened = false;
     const response=data=>({status:200,body:new TextEncoder().encode(JSON.stringify({code:0,data}))});
-    const result = await loginBigmodelCodingPlan({env, state:"fixture-state",
+    const result = await loginBigmodelCodingPlan({env, pollToken:"fixture-poll-token",
       openBrowser:authorizeUrl=>openUrlInBrowser(authorizeUrl,{platform:"win32",spawnProcess:(executable,args,options)=>{
         assert.equal(executable,"powershell.exe");
         assert.deepEqual(args.slice(0,3),["-NoProfile","-NonInteractive","-EncodedCommand"]);
@@ -72,74 +72,65 @@ test("BigModel OAuth completes the native callback, broker exchange and account 
         process.nextTick(()=>child.emit("spawn"));
         return child;
       }}),
-      onAuthorizeUrl:async({authorize_url,callback_url})=>{
-        callbackUrl=callback_url;
-        const url=new URL(authorize_url);
-        assert.equal(url.searchParams.get("appId"),"zcode");
-        assert.equal(url.searchParams.get("state"),"fixture-state");
-        assert.equal(url.searchParams.get("redirect"),callbackUrl);
-        const callback=new URL(callbackUrl);
-        callback.searchParams.set("authCode","fixture-code");
-        callback.searchParams.set("state","wrong-state");
-        const rejected=await fetch(callback);await rejected.text();
-        assert.equal(rejected.status,400);
-        callback.searchParams.set("state","fixture-state");
-        const accepted=await fetch(callback);await accepted.text();
-        assert.equal(accepted.status,200);
+      onAuthorizeUrl:async({authorize_url,flow_id})=>{
+        assert.equal(authorize_url,"https://bigmodel.test/authorize");
+        assert.equal(flow_id,"fixture-flow");
       },
+      apiKeyResolver:{resolveMaterial:async(input)=>{
+        materialRequests++;
+        assert.equal(input.accessToken,"fixture-token");
+        assert.equal(input.family,"bigmodel");
+        return {organizationId:"org",projectId:"project",token:"temporary-project-token",apiKeyId:"fixture-id"};
+      }},
       httpClient:{request:async(request)=>{
         const url=new URL(request.url);
-        if(url.pathname==="/api/v1/oauth/token"){
-          requested=true;
-          assert.equal(url.origin,"https://zcode.z.ai");
+        assert.equal(url.origin,"https://zcode.z.ai");
+        assert.equal(request.headers.Authorization,"Bearer fixture-poll-token");
+        if(url.pathname==="/api/v1/oauth/cli/init"){
           assert.equal(request.method,"POST");
-          assert.deepEqual(JSON.parse(new TextDecoder().decode(request.body)),{provider:"bigmodel",code:"fixture-code",redirect_uri:callbackUrl,state:"fixture-state"});
-          return response({token:"fixture-jwt",bigmodel:{access_token:"fixture-token",refresh_token:"fixture-refresh"}});
+          assert.deepEqual(JSON.parse(new TextDecoder().decode(request.body)),{provider:"bigmodel"});
+          return response({authorize_url:"https://bigmodel.test/authorize",flow_id:"fixture-flow",expires_at:Math.ceil(Date.now()/1000)+60,poll_interval_sec:1});
         }
-        businessRequests++;
-        assert.equal(request.headers.Authorization,"fixture-token");
-        assert.equal(request.method,"GET");
-        if(url.pathname==="/api/biz/customer/getCustomerInfo")return response({organizations:[{organizationId:"org",projects:[{projectId:"project"}]}]});
-        if(url.pathname.endsWith("/api_keys"))return response([{name:"zcode-api-key",apiKey:"fixture-id"}]);
-        if(url.pathname.endsWith("/api_keys/copy/fixture-id"))return response({secretKey:"fixture-secret"});
+        if(url.pathname==="/api/v1/oauth/cli/poll/fixture-flow"){
+          requested=true;
+          assert.equal(request.method,"GET");
+          return response({status:"ready",token:"fixture-jwt",user:{user_id:"fixture-user",name:"Fixture"},bigmodel:{access_token:"fixture-token",refresh_token:"fixture-refresh"}});
+        }
         throw new Error("Unexpected login request: "+url.pathname);
       }}
     });
     assert.equal(requested,true);
     assert.equal(browserOpened,true);
     assert.equal(result.browser.opened,true);
-    assert.equal(businessRequests,3);
+    assert.equal(materialRequests,1);
     assert.equal(result.providerId,"bigmodel");
     const store=createSharedZCodeCredentialStore({env});
     const raw=await fs.readFile(store.filePath,"utf8");
     assert.equal(raw.includes("enc:v1:"),true);
     assert.equal(raw.includes("fixture-id.fixture-secret"),false);
     assert.equal(raw.includes("fixture-jwt"),false);
+    assert.equal(raw.includes("temporary-project-token"),false);
     assert.equal(await store.load("zcodejwttoken"),"fixture-jwt");
     assert.equal(await store.load("oauth:bigmodel:refresh_token"),"fixture-refresh");
     const host=await startProcessProviderRegistryRuntime(env,{standalone:{}});
     try {
       const providerId="account:bigmodel-individual-coding-plan";
-      const auth=await host.providerRuntimeHeadersPort.refreshBeforeModelRequest({providerId,accountAccess:{mode:"individual-coding-plan"}});
-      assert.equal(auth.requestAuth.apiKey,"fixture-id.fixture-secret");
-      assert.ok(parseClientSigningCredential(auth.requestAuth.apiKey));
       assert.equal(host.configuredDefaultModelSelection.providerId,providerId);
+      assert.equal(await store.load("account-provider:"+providerId+":auth-source"),"oauth");
     } finally {host.dispose();}
     console.log("BIGMODEL_LOGIN_OK");
   `);
 }, 15_000);
 
-test("a rejected BigModel broker exchange closes the callback and does not save credentials", async () => {
+test("a rejected BigModel polling initialization does not save credentials", async () => {
   await probe(`
     const assert=require("node:assert/strict");
-    let closed=false,saved=false;
-    await assert.rejects(loginBigmodelCodingPlan({env:process.env,noBrowser:true,state:"fixture-state",
-      callbackServer:{callbackUrl:"http://127.0.0.1:54321/callback",waitForCallback:async()=>({code:"expired-code"}),close:async()=>{closed=true;}},
+    let saved=false;
+    await assert.rejects(loginBigmodelCodingPlan({env:process.env,noBrowser:true,
       httpClient:{request:async()=>({status:401,body:new TextEncoder().encode(JSON.stringify({msg:"Expired code"}))})},
-      credentialStore:{saveMany:async()=>{saved=true;}},
-      apiKeyResolver:{resolve:async()=>{throw new Error("Resolved an API key after a rejected exchange");}}
-    }),/BigModel OAuth HTTP 401/);
-    assert.equal(closed,true);
+      credentialStore:{load:async()=>null,saveMany:async()=>{saved=true;}},
+      apiKeyResolver:{resolveMaterial:async()=>{throw new Error("Resolved material after a rejected initialization");}}
+    }),/OAuth HTTP error 401/);
     assert.equal(saved,false);
     console.log("BIGMODEL_LOGIN_OK");
   `);
@@ -158,7 +149,7 @@ test("manual Coding Plan setup decrypts stored credentials for signing and rejec
       const host=await startProcessProviderRegistryRuntime(env,{standalone:{}});
       try {
         const providerId="account:"+family+"-individual-coding-plan";
-        const auth=await host.providerRuntimeHeadersPort.refreshBeforeModelRequest({providerId,accountAccess:{mode:"individual-coding-plan"}});
+        const auth=await host.providerRuntimeHeadersPort.refreshBeforeModelRequest({providerId,accountAccess:{mode:"individual-coding-plan",accountType:family}});
         assert.equal(auth.requestAuth.apiKey,"fixture-id.fixture-secret");
         assert.ok(parseClientSigningCredential(auth.requestAuth.apiKey));
         const wrongStore=createSharedZCodeCredentialStore({env:{...env,ZCODE_CREDENTIAL_SECRET:"wrong-secret"}});

@@ -112,6 +112,13 @@ describe("TUI structured interactions", () => {
     });
   });
 
+  test("limits guarded risk approval to allow once or deny without persistent updates", () => {
+    const choices = defaultPermissionChoices("Bash", { command: "rm -rf build" }, "user-once");
+    expect(choices.map(choice => choice.value)).toEqual(["allow_once", "deny"]);
+    expect(choices[0]?.response).toEqual({ decision: "allow", reason: "Approved once" });
+    expect(choices.every(choice => !choice.response.permissionUpdates && !choice.response.sessionPermissionUpdates)).toBe(true);
+  });
+
   test("recognizes question and plan tools and extracts plan Markdown", () => {
     expect(isAskUserQuestionTool("AskUserQuestion")).toBe(true);
     expect(isExitPlanModeTool("ExitPlanModeV2")).toBe(true);

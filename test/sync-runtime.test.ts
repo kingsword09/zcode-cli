@@ -156,8 +156,9 @@ describe("runtime synchronization", () => {
     }
   });
 
-  test("adds session recovery at native restore and execution boundaries and can run twice", async () => {
-    const runtime = 'async function app(options){let read=()=>runtime,restore=label(async()=>{let ok=saved&&registry.validateSelection(saved);return read().setSessionModelSelection(ok?.ok?saved:void 0),saved},"restorePersistedModelSelection"),prepare=label(async args=>{await options.prepareUserExecutionBoundary(args)},"preparePromptBoundary");return{restore,prepare,getModelOption:label(model=>lookup(context.providerRegistry,model),"getModelOption")}}';
+  test.each(["", "saved&&ok&&!ok.ok&&Boolean(ok.code),"])("adds session recovery at native restore and execution boundaries with diagnostics %j", async (diagnostic) => {
+    const runtime = 'async function app(options){let read=()=>runtime,restore=label(async()=>{let ok=saved&&registry.validateSelection(saved);return '
+      + diagnostic + 'read().setSessionModelSelection(ok?.ok?saved:void 0),saved},"restorePersistedModelSelection"),prepare=label(async args=>{await options.prepareUserExecutionBoundary(args)},"preparePromptBoundary");return{restore,prepare,getModelOption:label(model=>lookup(context.providerRegistry,model),"getModelOption")}}';
     const patched = patchRuntimeSessionModelRecovery(runtime);
     expect(patched).toContain('readSessionModelState:label(async()=>await');
     expect(patched).toContain('read().$zRestoredSessionModel={selection:saved,registry:registry}');
@@ -201,6 +202,35 @@ describe("runtime synchronization", () => {
     expect(await app.setPlanEnabled(false)).toEqual({ mode: "yolo", planEnabled: false });
     expect(patchRuntimeTuiExecutionState(patched)).toBe(patched);
     expect(() => patchRuntimeTuiExecutionState("unknown runtime")).toThrow("execution state");
+  });
+
+  test("preserves guarded mode in the 3.15.1 facade and CLI parser while separating planning", async () => {
+    const source = 'const label=fn=>fn;const modes=["plan","build","edit","guarded","yolo"];label(format,"formatAvailableCommandCenterModes");function format(){return modes.join(", ")}const planning=()=>context.runtime.getPlanEnabled();const app={getMode:label(()=>context.runtime.getMode(),"getMode"),setMode:label(async mode=>{let previous=context.runtime.getMode(),session=await context.sessionStore.getSession(context.sessionId);await context.runtime.setExecutionState({mode:mode},context.traceContext);return{mode:context.runtime.getMode(),previousMode:previous,traceId:context.traceContext.traceId}},"setMode")};function normalize(value){if(value===undefined)return;let mode=value.toLowerCase();if(mode==="build"||mode==="plan"||mode==="edit"||mode==="yolo"||mode==="guarded")return mode;throw new Error(`Unsupported --mode value: ${value}. Supported modes: build, edit, plan, yolo, guarded.`)}';
+    const patched = patchRuntimeTuiExecutionState(source);
+    let mode = "build", planEnabled = true;
+    const fixture = new Function("context", `${patched};return {app,format,normalize};`)({
+      runtime: {
+        getMode: () => mode,
+        getPlanEnabled: () => planEnabled,
+        setExecutionState: async (state: { mode?: string; planEnabled?: boolean }) => {
+          planEnabled = state.planEnabled ?? (state.mode ? false : planEnabled);
+          if (state.mode) mode = state.mode;
+        }
+      },
+      sessionStore: { getSession: async () => ({}) },
+      prepareResume: async () => {},
+      traceContext: { traceId: "guarded-fixture" }
+    });
+    expect(fixture.format()).toBe("build, edit, guarded, yolo");
+    expect(fixture.normalize("GUARDED")).toBe("guarded");
+    expect(() => fixture.normalize("plan")).toThrow("Use /plan in the TUI to toggle planning.");
+    expect(() => fixture.normalize("auto")).toThrow("Unsupported --mode value");
+    expect(await fixture.app.setMode("guarded")).toMatchObject({ mode: "guarded", previousMode: "build", planEnabled: true });
+    expect(await fixture.app.setPlanEnabled(false)).toEqual({ mode: "guarded", planEnabled: false });
+    expect(patchRuntimeTuiExecutionState(patched)).toBe(patched);
+    expect(applyRuntimePatchPlan(source, [
+      { id: "tui-execution-state", requirement: "required", apply: patchRuntimeTuiExecutionState }
+    ]).reports[0]?.status).toBe("applied");
   });
 
   test("copies the registry catalog from Desktop resources and rejects missing assets", async () => {
@@ -434,6 +464,25 @@ describe("runtime synchronization", () => {
     expect(hasRuntimeHttpNoContentGuard("runtime without the HTTP wrapper")).toBe(false);
   });
 
+  test("recognizes the native 3.15.1 bodyless HTTP guard without changing upstream response handling", () => {
+    const runtime = 'const statuses=new Set([101,103,204,205,304]);function readIncomingResponse(response){let status=response.statusCode??502,headers=new Headers;let empty=statuses.has(status);return empty&&response.resume(),{body:empty?null:streams.Readable.toWeb(response),headers:headers,status:status,statusText:response.statusMessage??""}}function toWebResponse(response){return new Response(response.body,{headers:response.headers,status:response.status,statusText:response.statusText})}label(readIncomingResponse,"readIncomingResponse");label(toWebResponse,"toWebResponse");';
+    expect(hasRuntimeHttpNoContentGuard(runtime)).toBe(true);
+    expect(patchRuntimeHttpNoContent(runtime)).toBe(runtime);
+    expect(hasRuntimeHttpNoContentGuard(runtime.replace("empty?null:", "empty?undefinedBody:"))).toBe(false);
+    expect(hasRuntimeHttpNoContentGuard(runtime.replace("[101,103,204,205,304]", "[101,103,204]"))).toBe(false);
+    const fixture = new Function("streams", "label", `${runtime};return {readIncomingResponse,toWebResponse};`)(
+      { Readable: { toWeb: () => new ReadableStream() } }, (value: unknown) => value
+    );
+    let resumed = 0;
+    for (const statusCode of [204, 205, 304]) {
+      const response = fixture.toWebResponse(fixture.readIncomingResponse({ statusCode, resume: () => { resumed++; } }));
+      expect(response.status).toBe(statusCode);
+      expect(response.body).toBeNull();
+    }
+    expect(resumed).toBe(3);
+    expect(fixture.toWebResponse(fixture.readIncomingResponse({ statusCode: 200 })).body).not.toBeNull();
+  });
+
   test("sets the SQLite write timeout after both migration paths without changing startup budgets", async () => {
     const runtime = [
       'const deferred=Symbol();class Store{constructor(t={},n){this.dbPath=t.dbPath??"fixture.sqlite";let r=t.startupLockTimeoutMs??5e3;',
@@ -615,7 +664,7 @@ describe("runtime synchronization", () => {
     expect(decide(cyclic)).toBe(false);
   });
 
-  test("adds Desktop OAuth with registry credential persistence", () => {
+  test.each([false, true])("adds Desktop OAuth with registry credential persistence (native polling: %p)", (nativePolling) => {
     const loginFunctions = [
       "async function sDo(e={}){",
       "let t=e.env??process.env,r=e.now??Date.now,o=e.sleep??fDo;",
@@ -641,13 +690,18 @@ describe("runtime synchronization", () => {
       "async function qz(value){written=value;return{path:'/config.json',mainModel:'zai/model'}}",
       loginFunctions
     ].join("");
-    const patched = patchRuntimeZaiDesktopOAuth(runtime);
+    const native = runtime
+      .replace("let t=e.env??process.env,r=", 'let n="zai",t=e.env??process.env,r=')
+      .replace("accountIdentity:c.user.user_id,apiKey:d,", 'accountIdentity:c.user.user_id,authSource:"oauth",')
+      .replace('personalProviderConfigPath:e.personalProviderConfigPath,providerId:"zai"', "personalProviderConfigPath:e.personalProviderConfigPath,providerId:n")
+      + 'function label(fn){return fn}label(sDo,"loginZCodeCli");label(F1,"throwIfAborted");label(aGr,"resolveCodingPlanMaterial");label(iGr,"createDefaultHttpClient");';
+    const patched = patchRuntimeZaiDesktopOAuth(nativePolling ? native : runtime);
 
     expect(patched).toContain('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"');
     expect(patched).toContain('url:"https://zcode.z.ai/api/v1/oauth/token"');
     expect(patched).toContain("i.saveZaiLoginCredentials");
     expect(patched).toContain("aGr({accessToken:$zAccessToken");
-    expect(patched).toContain("qz({accountIdentity:$zUser.user_id,apiKey:$zApiKey");
+    expect(patched).toContain(`qz({accountIdentity:$zUser.user_id,${nativePolling ? 'authSource:"oauth"' : "apiKey:$zApiKey"}`);
     expect(() => new Function(patched)).not.toThrow();
     expect(patchRuntimeZaiDesktopOAuth(patched)).toBe(patched);
     expect(() => patchRuntimeZaiDesktopOAuth("incompatible runtime")).toThrow(/credential anchor/);
@@ -679,13 +733,31 @@ describe("runtime synchronization", () => {
       expect(fixture.read()).toMatchObject({
         resolved: { accessToken: "oauth-token", family: "zai" },
         saved: { accessToken: "oauth-token", jwtToken: "jwt-token" },
-        written: { apiKey: "coding-plan-key", providerId: "zai" }
+        written: { ...(nativePolling ? { authSource: "oauth" } : { apiKey: "coding-plan-key" }), providerId: "zai" }
       });
       expect(fixture.read().written).toMatchObject({
         accountIdentity: "user-1", credentialStore: { filePath: "/credentials.json" },
         env: { ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" }
       });
+      if (nativePolling) expect(fixture.read().written).not.toHaveProperty("apiKey");
     });
+  });
+
+  test("reuses a native polling BigModel session without persisting a derived key", async () => {
+    const runtime = 'function label(fn){return fn}const keys={bigmodelAccessToken:"access"};let resolved=[],written;function store(){return{filePath:"/credentials",load:async()=>"desktop-token"}}function abort(signal){signal?.throwIfAborted()}function http(){return{}}async function material(input){resolved.push(input);return{organizationId:"org",projectId:"project",token:"derived-token"}}function identity(value){return value}async function persist(input){written=input;return{path:"/providers",mainModel:"bigmodel/fixture"}}async function shared(e={}){let env=e.env??process.env,family=e.providerId,credentials=e.credentialStore??store({env:env});if(false)await credentials.saveMany({[keys.bigmodelAccessToken]:"unused"});if(false)await persist({accountIdentity:"unused",authSource:"oauth",credentialStore:credentials,env:env,personalProviderConfigPath:e.personalProviderConfigPath,providerId:family});return{source:"polling"}}async function login(e={}){return{...await shared({...e,providerId:"bigmodel"}),providerId:"bigmodel"}}async function next(){}label(shared,"loginZCodeCli");label(login,"loginBigmodelCodingPlan");label(abort,"throwIfAborted");label(material,"resolveCodingPlanMaterial");label(http,"createDefaultHttpClient");label(identity,"createStandaloneAccountIdentityFromSecret");';
+    const patched = patchRuntimeBigmodelSessionReuse(runtime.replace('accountIdentity:"unused"', "accountIdentity:family"));
+    expect(patchRuntimeBigmodelSessionReuse(patched)).toBe(patched);
+    const fixture = new Function(`${patched};return {login,read:()=>({resolved,written})};`)();
+    expect(await fixture.login({ env: {} })).toEqual({ configPath: "/providers", credentialsPath: "/credentials", model: "bigmodel/fixture", providerId: "bigmodel" });
+    expect(fixture.read().written).toMatchObject({ accountIdentity: '["org","project"]', authSource: "oauth", providerId: "bigmodel" });
+    expect(fixture.read().written).not.toHaveProperty("apiKey");
+    expect(fixture.read().resolved).toHaveLength(1);
+    expect(await fixture.login({ env: { ZCODE_CLI_BIGMODEL_REUSE_SESSION: "0" } })).toMatchObject({ source: "polling" });
+    expect(fixture.read().resolved).toHaveLength(1);
+    expect(await fixture.login({ env: {}, credentialStore: { load: async () => null } })).toMatchObject({ source: "polling" });
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled"));
+    await expect(fixture.login({ env: {}, abortSignal: controller.signal })).rejects.toThrow("cancelled");
   });
 
   test("lets BigModel login reuse the Desktop session before starting OAuth", async () => {

@@ -81,12 +81,30 @@ function inspect(runtime: string) {
   return { call, exchange, persistenceEnd, jwt, patched: stored };
 }
 
+function hasNativePollingOAuth(runtime: string): boolean {
+  try {
+    const login = namedFunction(runtime, "loginZCodeCli");
+    const wrapper = namedFunction(runtime, "loginBigmodelCodingPlan");
+    const polling = symbol(runtime, "pollUntilReady");
+    const body = runtime.slice(login.body.start + 1, login.body.end - 1);
+    const delegation = runtime.slice(wrapper.body.start + 1, wrapper.body.end - 1);
+    return new RegExp(`${escape(login.id!.name)}\\(\\{\\.\\.\\.${identifier},providerId:"bigmodel"\\}\\)`, "u").test(delegation)
+      && body.includes(`${polling}({`)
+      && body.includes('authSource:"oauth"')
+      && /\[([A-Za-z_$][\w$]*)\.zcodeJwtToken\]:([A-Za-z_$][\w$]*)\.token,\[\1\.bigmodelAccessToken\]:\2\.accessToken,/u.test(body);
+  } catch {
+    return false;
+  }
+}
+
 export function hasRuntimeBigmodelOAuth(runtime: string): boolean {
+  if (hasNativePollingOAuth(runtime)) return true;
   try { return inspect(runtime).patched; } catch { return false; }
 }
 
 /** Exchange through the official Desktop broker and persist both provider and ZCode tokens. */
 export function patchRuntimeBigmodelOAuth(runtime: string): string {
+  if (hasNativePollingOAuth(runtime)) return runtime;
   const { call, exchange, persistenceEnd, jwt, patched } = inspect(runtime);
   if (patched) return runtime;
   const edits = [

@@ -112,9 +112,9 @@ function permissionRuleContent(input: unknown): string | undefined {
   return undefined;
 }
 
-export function defaultPermissionChoices(toolName: string, input: unknown): PermissionChoice[] {
+export function defaultPermissionChoices(toolName: string, input: unknown, approvalMode?: unknown): PermissionChoice[] {
   const ruleContent = permissionRuleContent(input);
-  return [
+  const choices: PermissionChoice[] = [
     {
       value: "allow_once",
       label: "Allow once",
@@ -147,6 +147,9 @@ export function defaultPermissionChoices(toolName: string, input: unknown): Perm
       response: { decision: "deny", reason: "Denied" }
     }
   ];
+  return approvalMode === "user-once"
+    ? choices.filter(choice => choice.value === "allow_once" || choice.value === "deny")
+    : choices;
 }
 
 export function planText(input: unknown): string | undefined {
