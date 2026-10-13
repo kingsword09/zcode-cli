@@ -21,6 +21,8 @@ export { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./ru
 import { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
 export { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
 import { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
+import { hasRuntimeResolvedContextWindow, patchRuntimeResolvedContextWindow } from "./runtime-context-window-patches.ts";
+export { hasRuntimeResolvedContextWindow, patchRuntimeResolvedContextWindow } from "./runtime-context-window-patches.ts";
 import { patchRuntimeWorkflowManagement } from "./runtime-workflow-patches.ts";
 export { patchRuntimeWorkflowManagement } from "./runtime-workflow-patches.ts";
 export { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
@@ -1742,6 +1744,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     id: "official-mcp-availability",
     requirement: "optional",
     apply: patchRuntimeOfficialMcpAvailability
+  },
+  {
+    id: "resolved-context-window",
+    requirement: "required",
+    apply: patchRuntimeResolvedContextWindow,
+    verify: hasRuntimeResolvedContextWindow
   },
   {
     id: "tui-bridge",

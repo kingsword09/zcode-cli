@@ -4,18 +4,24 @@ import { providerConfigPath } from "../../src/model-access.ts";
 
 export function providerFixture(options: {
   providerId?: string; modelId?: string; models?: string[]; apiKey?: string;
-  baseUrl?: string; apiType?: string;
+  baseUrl?: string; apiType?: string; contextWindow?: number;
 } = {}) {
   const providerId = options.providerId ?? "custom", modelId = options.modelId ?? "fixture-model";
+  const models = options.models ?? [modelId];
   // Keep runtime fixtures minimal; the public example also contains disabled
   // reference models and must not supply unrelated overrides to every test.
   return { schemaVersion: 1, config: {
     providerConfigRules: { providerRules: [{ providerId, providerName: "Custom provider", config: {
       group: "standard-personal", access: { type: "api-key", apiKey: options.apiKey },
       api: { type: options.apiType ?? "openai-chat-completions", baseUrl: options.baseUrl ?? "https://example.test/v1" },
-      personalModelIds: options.models ?? [modelId]
+      personalModelIds: models
     } }] },
-    modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] },
+    modelConfigRules: {
+      providerModelRules: options.contextWindow === undefined ? [] : models.map(id => ({
+        providerId, modelId: id, config: { enabled: true, properties: { contextWindow: options.contextWindow } }
+      })),
+      manualProviderModelRules: []
+    },
     defaultModelSelection: { providerId, modelId }
   } };
 }

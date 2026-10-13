@@ -101,6 +101,22 @@ In-flight reads from a previous session or revision cannot overwrite newer
 statistics. Full message bodies are read for statistics only after invalidation
 or when the user opens `/context`; they are not retained in the cache.
 
+## Context window projection (#212)
+
+`bun test test/runtime-context-window-patches.test.ts test/runtime/context-window-projection.test.ts`
+covers the patch that makes the product-state projection report the model's resolved
+context window. The runtime assigns `contextWindow` from a `session_created` event
+that current runtimes no longer append for new sessions, so `/context`, the runtime
+state and the headless `--json` projection kept the 200000 default while compaction
+and the request budget used the configured window.
+`patchRuntimeResolvedContextWindow` merges the window resolved from the session's
+model catalog entry into the reduced event state; models without a declared window
+keep the recorded value.
+
+The regression test drives the real runtime with a mock model endpoint: a headless
+`--json` run must project the configured 1000000-token window, and `/context` must
+render `1M` instead of `200K`.
+
 ## OAuth login
 
 For the OAuth path, run the launcher directly with the login subcommand:
