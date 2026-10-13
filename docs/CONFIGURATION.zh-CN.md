@@ -368,6 +368,13 @@ CLI 提供四种权限模式：`build`（变更前确认）、`edit`（自动编
 风险判定和确认由原生 runtime 负责，子代理和工作流也保留该保护。
 底层的 `auto` 值不作为菜单选项。
 
+### 工作流模式
+
+工作流能力由原生 runtime 的 `--workflow-mode` 控制。默认值是 `disabled`；使用
+`--workflow-mode alwaysOn` 或 `--workflow-mode onDemand` 才能创建、调整和启动工作流。
+`/workflows` 可查看运行中的工作流、原地调整并发或保存当前脚本；`/workflows saved`
+列出项目级和全局已保存定义，并从定义启动一个新的 run，而不是回放旧进度。
+
 runtime 3.15.1 的风险确认只允许本次授权：选择器仅提供 **Allow once** 和 **Deny**，
 不会提供项目或会话级永久放行。自主模式是基于规则的确认策略，不是沙箱，
 也不保证识别所有潜在破坏性指令。Plan 开启时，计划模式的执行限制仍然优先。

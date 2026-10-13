@@ -308,7 +308,8 @@ picker to return to input selection, then `Esc` again to close rewind.
 /queue pause|resume           pause or resume automatic draft submission
 /edit-message                 rewind to an earlier question and edit it
 /retry                        rewind to an earlier question and send it again
-/workflows                    inspect workflow progress, artifacts and recovery
+/workflows                    inspect, tune and save workflow runs
+/workflows saved              list saved definitions and start a new run
 /tasks                        inspect and manage background tasks
 /tasks message <id> <text>    send guidance to a running background agent
 /tasks resume <id> [text]     resume a stopped or failed background agent
@@ -324,6 +325,16 @@ picker to return to input selection, then `Esc` again to close rewind.
 `/cls` clears what the TUI displays without touching the session. The
 runtime's own `/clear` is an alias of `/new` and starts a fresh session, so it
 is forwarded to the runtime unchanged.
+
+Workflow creation and saved-workflow startup require the native workflow mode
+to be enabled explicitly: start the CLI with `--workflow-mode alwaysOn` or
+`--workflow-mode onDemand` (the runtime default is `disabled`). During a
+workflow approval, `Change concurrency` and, when supported, `Change default
+model` apply only to that workflow. From `/workflows`, `Adjust concurrency`
+changes a live run in place without replaying or restarting it. `Save workflow`
+writes the run's actual script to `.zcode/workflows`; `/workflows saved` starts
+a new run from that definition and validates its arguments through the native
+runtime.
 
 `/queue` manages local next-turn drafts and pauses automatic sending while its
 picker is open. Inputs already accepted by the runtime cannot be edited here.

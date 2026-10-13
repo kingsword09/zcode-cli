@@ -172,6 +172,7 @@ import { InputQueue, type QueuedSubmission } from "./input-queue.ts";
 import { QueuedInputView } from "./queued-input-view.ts";
 import { RuntimeActivityView } from "./runtime-activity-view.ts";
 import { DynamicWorkflows, workflowRunDetail } from "./dynamic-workflows.ts";
+import { requestWorkflowApproval, retuneWorkflow, saveWorkflow, showSavedWorkflows, workflowAdjustableSettings, type WorkflowDialogs } from "./workflow-management.ts";
 import { RuntimeContextCache } from "./runtime-context-cache.ts";
 import {
   runtimeActivityActive,
@@ -1425,7 +1426,7 @@ class ZCodeTui {
       { name: "queue", description: "Manage queued drafts", argumentHint: "[pause|resume]" },
       { name: "edit-message", description: "Restore an earlier question for editing" },
       { name: "retry", description: "Retry an earlier question from a conversation rewind" },
-      { name: "workflows", description: "Inspect workflow progress, results and recovery" },
+      { name: "workflows", description: "Inspect, tune and save workflow runs", argumentHint: "[list|saved]" },
       {
         name: "tasks",
         description: "Inspect, message or recover background tasks",
@@ -1701,6 +1702,14 @@ class ZCodeTui {
     }
     if ((input === "/workflows" || input === "/workflows list") && this.options.listWorkflowRuns) {
       await this.showDynamicWorkflows();
+      return;
+    }
+    if (input === "/workflows saved") {
+      try {
+        await showSavedWorkflows(this.options, this.workflowDialogs());
+        await this.dynamicWorkflows.hydrate();
+        this.renderDynamicWorkflow();
+      } catch (error) { this.addNotice(error instanceof Error ? error.message : String(error), "error"); }
       return;
     }
     if (input === "/tasks" || input === "/tasks list") {
@@ -2512,19 +2521,28 @@ class ZCodeTui {
       this.addNotice("Workflow inspection is unavailable in this runtime.", "warning");
       return;
     }
+    const dialogs = this.workflowDialogs();
     await this.dynamicWorkflows.hydrate();
     if (this.dynamicWorkflows.error) this.addNotice(this.dynamicWorkflows.error, "warning");
     const runs = this.dynamicWorkflows.runs();
     if (runs.length === 0) {
       this.addNotice("No workflow runs in this session.", "muted");
+      if (this.options.listSavedWorkflows) await showSavedWorkflows(this.options, dialogs);
       return;
     }
     const choice = await this.showChoice({
       title: "Workflow runs", prompt: "Select a run to inspect its progress and results.",
       items: runs.map((run) => ({ value: String(run.runId), label: asString(run.label) || String(run.runId),
-        description: [run.status, run.resumable === true ? "resumable" : undefined].filter(Boolean).join(" · ") }))
+        description: [run.status, run.resumable === true ? "resumable" : undefined].filter(Boolean).join(" · ") })).concat(
+          this.options.listSavedWorkflows ? [{ value: "$saved", label: "Saved workflows", description: "Run a reusable definition" }] : []
+        )
     });
-    if (!choice) return;
+    if (!choice || !dialogs.isCurrent()) return;
+    if (choice.value === "$saved") {
+      await showSavedWorkflows(this.options, dialogs);
+      await this.dynamicWorkflows.hydrate();
+      return;
+    }
     this.selectedDynamicWorkflow = choice.value;
     const run = this.dynamicWorkflows.runs().find((run) => run.runId === choice.value);
     if (!run) {
@@ -2535,14 +2553,16 @@ class ZCodeTui {
     this.transcript.addBlock(this.dynamicWorkflowView);
     this.ui.requestRender();
     const action = await this.showChoice({
-      title: "Workflow actions", prompt: "Progress remains visible in the transcript.",
+      title: "Workflow actions", prompt: "Progress remains visible in the transcript.", filterMode: "substring",
       items: [
         { value: "close", label: "Back to prompt" },
         ...(["pending", "running"].includes(String(run.status)) ? [{ value: "cancel", label: "Stop workflow" }] : []),
-        ...(run.resumable === true ? [{ value: "resume", label: "Resume workflow" }] : [])
+        ...(run.resumable === true ? [{ value: "resume", label: "Resume workflow" }] : []),
+        ...(this.options.retuneWorkflowConcurrency && ["pending", "running"].includes(String(run.status)) ? [{ value: "concurrency", label: "Adjust concurrency" }] : []),
+        ...(this.options.saveWorkflowRun ? [{ value: "save", label: "Save workflow" }] : [])
       ]
     });
-    if (!action || action.value === "close") return;
+    if (!action || action.value === "close" || !dialogs.isCurrent()) return;
     // The upstream command owns cancellation/resume validation and operates on
     // this same app. Never spawn another app-server to control the live run.
     if (!/^[A-Za-z0-9_.:-]+$/u.test(choice.value)) {
@@ -2550,6 +2570,13 @@ class ZCodeTui {
       return;
     }
     try {
+      if (action.value === "concurrency" || action.value === "save") {
+        if (action.value === "concurrency") await retuneWorkflow(choice.value, this.options, dialogs);
+        else await saveWorkflow(run, this.options, dialogs);
+        await this.dynamicWorkflows.hydrate();
+        this.renderDynamicWorkflow();
+        return;
+      }
       const result = await this.options.submitPrompt(`/dwf ${action.value} ${choice.value}`, {});
       await this.handleResult(result);
       await this.dynamicWorkflows.hydrate();
@@ -3609,6 +3636,8 @@ class ZCodeTui {
       response = await this.requestUserQuestions(request.input, signal);
     } else if (isExitPlanModeTool(toolName)) {
       response = await this.requestPlanApproval(request.input, signal);
+    } else if (workflowAdjustableSettings(toolName, request.input)) {
+      response = await requestWorkflowApproval(request, this.workflowDialogs(), this.permissionPreview(toolName, request.input), signal);
     } else {
       response = await this.requestToolPermission(request, toolName, signal);
     }
@@ -3628,6 +3657,17 @@ class ZCodeTui {
       this.updateToolView(tool, allowed ? "running" : decision === "deny" ? "rejected" : "cancelled");
     }
     return response;
+  }
+
+  private workflowDialogs(): WorkflowDialogs {
+    const sessionId = this.options.getMainSessionId?.();
+    return {
+      choose: options => this.showChoice(options),
+      prompt: options => this.showTextPrompt(options),
+      notice: (message, tone) => this.addNotice(message, tone),
+      models: async () => this.options.listModelOptions ? await this.options.listModelOptions() : this.modelOptions,
+      isCurrent: () => sessionId === this.options.getMainSessionId?.()
+    };
   }
 
   private async requestToolPermission(

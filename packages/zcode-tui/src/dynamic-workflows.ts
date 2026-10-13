@@ -130,7 +130,13 @@ export function workflowRunDetail(run: UnknownRecord): string {
   if (nodes) lines.push(`Steps: ${nodes.filter((node) => node.phase === "settled").length}/${nodes.length} observed steps settled`);
   if (typeof usage?.spentTokens === "number") lines.push(`Tokens: ${usage.spentTokens.toLocaleString()}`);
   if (run.resumable === true) lines.push("This run can be resumed.");
-  if (actors.length) lines.push("", "Agents", ...actors.slice(0, 12).map((actor) => `${safe(actor.name) || safe(actor.sessionId) || "Agent"} · ${safe(actor.status)}`));
+  const concurrency = isRecord(run.concurrency) ? run.concurrency : undefined;
+  if (concurrency) lines.push(`Concurrency: ${concurrency.cap} shared · ${concurrency.limit ?? concurrency.ceiling} run limit`);
+  else if (typeof run.concurrencyCeiling === "number") lines.push(`Concurrency: default ${run.concurrencyCeiling}`);
+  if (typeof run.subagentModel === "string") lines.push(`Subagent default model: ${safe(run.subagentModel)}`);
+  if (actors.length) lines.push("", "Agents", ...actors.slice(0, 12).map((actor) => [
+    safe(actor.name) || safe(actor.sessionId) || "Agent", safe(actor.status), safe(actor.model) || safe(run.subagentModel) || "session model"
+  ].filter(Boolean).join(" · ")));
   if (artifacts.length) lines.push("", "Artifacts", ...artifacts.slice(0, 12).map((artifact) => safe(artifact.title) || safe(artifact.artifactId) || safe(artifact.id)));
   if (asString(run.error)) lines.push("", `Error: ${safe(run.error)}`);
   if (asString(run.resultPreview)) lines.push("", safe(run.resultPreview));

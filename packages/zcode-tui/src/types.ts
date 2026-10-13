@@ -71,6 +71,11 @@ export type ListPluginReferences = () => Promise<unknown>;
 
 /** Stable boundary consumed by the local TUI; upstream details stay in the bridge. */
 export interface RuntimeAdapter {
+  retuneWorkflowConcurrency?: (input: { runId: string; maxConcurrency: number | null }) => Promise<unknown>;
+  saveWorkflowRun?: (input: { runId: string; name: string; scope: "project" | "global"; description: string; overwrite?: boolean }) => Promise<unknown>;
+  listSavedWorkflows?: () => Promise<unknown>;
+  readSavedWorkflow?: (input: { name: string; scope: "project" | "global" }) => Promise<unknown>;
+  startSavedWorkflow?: (input: { name: string; scope: "project" | "global"; args?: Record<string, unknown> }) => Promise<unknown>;
   listWorkflowRuns?: () => Promise<unknown>;
   replayWorkflowRuns?: (input: { excludeRunIds: ReadonlySet<string> }) => Promise<unknown>;
   reduceWorkflowRuns?: (state: unknown, event: unknown) => unknown;

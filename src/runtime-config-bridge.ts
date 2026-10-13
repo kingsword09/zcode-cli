@@ -5,6 +5,7 @@ import { cliSettingsPath, legacyCliConfigPath, providerConfigPath, providerMigra
 
 export { assertSessionModelReady, readSessionModelState } from "./session-model-recovery.ts";
 export { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage } from "./runtime-tui-bridge.ts";
+export { createTuiWorkflowManagement, startTuiSavedWorkflow } from "./runtime-workflow-bridge.ts";
 export { restoreTuiBackgroundTasks } from "./runtime-background-restore.ts";
 export { installSqliteWriteRecovery, pruneSqliteUsage, sqliteRecoveryStats } from "./runtime-sqlite-recovery.ts";
 export { appServerRegistryOptions } from "./app-server-auth.ts";

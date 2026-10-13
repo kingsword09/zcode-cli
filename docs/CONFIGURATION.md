@@ -432,6 +432,15 @@ Use `/mode guarded` or start with `--mode guarded` to enable autonomous mode.
 Risk assessment and confirmation are handled by the native runtime, including
 for child agents and workflows. The internal `auto` value is not a menu option.
 
+### Workflow mode
+
+Workflow features follow the native runtime's `--workflow-mode` setting. The
+default is `disabled`; use `--workflow-mode alwaysOn` or
+`--workflow-mode onDemand` to create, tune, or start workflows. `/workflows`
+inspects live runs, changes concurrency in place, and saves the current script;
+`/workflows saved` lists project and global definitions and starts a new run
+from a definition rather than replaying old progress.
+
 In runtime 3.15.1, risk confirmations are single-use: the picker offers only
 **Allow once** and **Deny**, never a project or session-wide grant. Guarded is a
 rule-based confirmation policy, not a sandbox or a guarantee that every

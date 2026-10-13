@@ -21,6 +21,8 @@ export { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./ru
 import { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
 export { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
 import { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
+import { patchRuntimeWorkflowManagement } from "./runtime-workflow-patches.ts";
+export { patchRuntimeWorkflowManagement } from "./runtime-workflow-patches.ts";
 export { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
 import {
   hasRuntimeSqliteBusyTimeout, hasRuntimeSqliteWriteRecovery,
@@ -1703,6 +1705,10 @@ const terminalProjectionMarkers = [
 ] as const;
 
 export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
+  {
+    id: "tui-workflow-management", requirement: "required", apply: patchRuntimeWorkflowManagement,
+    verify: runtime => runtime.includes("createTuiWorkflowManagement({") && runtime.includes("startSavedWorkflow:")
+  },
   {
     id: "tui-workflow-reducer", requirement: "optional", apply: patchRuntimeWorkflowReducer,
     verify: runtime => runtime.includes("reduceWorkflowRuns:(")
