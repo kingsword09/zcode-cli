@@ -15,6 +15,7 @@ export interface AppServerTransport {
 
 export interface AppServerRequest {
   method: string;
+  onStderr?: (stderr: string) => void;
   params: Record<string, unknown>;
   signal?: AbortSignal;
   transport: AppServerTransport;
@@ -197,6 +198,7 @@ export async function requestAppServer(request: AppServerRequest): Promise<unkno
     if (!envelope || !("result" in envelope)) {
       throw new Error(stderr.trim() || "App-server did not return a response envelope.");
     }
+    if (stderr) request.onStderr?.(stderr);
     return envelope.result;
   } finally {
     if (forceTerminationTimer) clearTimeout(forceTerminationTimer);

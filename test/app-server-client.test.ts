@@ -19,6 +19,21 @@ function transport(script: string) {
 }
 
 describe("app-server NDJSON client", () => {
+  test("makes successful request diagnostics available without mixing them into the result", async () => {
+    const diagnostics: string[] = [];
+    expect(await requestAppServer({
+      method: "session/list", params: {}, onStderr: stderr => diagnostics.push(stderr),
+      transport: transport(`
+        process.stdin.resume();
+        process.stdin.once("data", () => {
+          process.stderr.write("fixture diagnostic\\n");
+          console.log(JSON.stringify({id:1,result:{sessions:[]}}));
+        });
+      `)
+    })).toEqual({ sessions: [] });
+    expect(diagnostics).toEqual(["fixture diagnostic\n"]);
+  });
+
   test("returns the matching response envelope", async () => {
     const script = `
       let input = "";

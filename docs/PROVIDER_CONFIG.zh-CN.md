@@ -11,6 +11,26 @@ ZCode 桌面端与 CLI 共用 `~/.zcode/v2/provider_config.json`，文件名使�
 它是可以解析的标准 JSON，不包含注释；各字段的含义、可选值及互斥关系由本文说明。
 本文的“智能配置”对应英文界面的 **Smart configuration**。
 
+## 内置目录环境变量覆盖
+
+CLI 默认自动发现 `vendor/provider/zcode-builtin.json`，并初始化独立的 active 快照，
+不需要设置 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`。
+
+有效的覆盖路径保持不变；空字符串或纯空白按未设置处理。继承的覆盖路径指向不存在、
+不可读或无效的 built-in release 时，CLI 会告警，并使用已验证的 bundled 目录恢复，
+保留个人 provider 路径及正常的 active 快照初始化。恢复时优先使用有效的
+`ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE`，否则由 runtime 自动发现包内目录。
+没有有效 fallback 时，不会掩盖原有启动失败；恢复过程也不会修改无效覆盖文件。
+
+旧版 CLI 可在单次调用中移除失效的覆盖变量：
+
+```sh
+env -u ZCODE_BUILTIN_PROVIDER_CONFIG_FILE zcode plugins marketplace update <marketplace>
+```
+
+若这样可以恢复，请检查并移除或修正 shell、宿主启动器注入的旧路径，不要将 bundled
+目录手动复制到任意 Desktop 版本的缓存目录。
+
 ## 使用示例文件
 
 示例包含三种用途不同的模型：

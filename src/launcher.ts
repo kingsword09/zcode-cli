@@ -539,6 +539,13 @@ export async function main(args: string[]): Promise<number> {
       request: async ({ method, params, signal, workingDirectory }) => await requestAppServer({
         method,
         params,
+        onStderr: stderr => {
+          for (const line of stderr.split(/\r?\n/u)) {
+            if (line.startsWith("ZCode Built-in: ignoring unavailable ZCODE_BUILTIN_PROVIDER_CONFIG_FILE ")) {
+              process.stderr.write(`${line}\n`);
+            }
+          }
+        },
         signal: signal ?? pluginAbortController.signal,
         transport: {
           args: [runtimePath, "app-server"],

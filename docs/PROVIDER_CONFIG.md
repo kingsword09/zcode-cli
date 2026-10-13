@@ -12,6 +12,31 @@ for the `mcp.servers` structure and HTTP/stdio examples.
 provider schema. It is valid JSON without comments. This reference explains the
 fields, alternatives and restrictions that cannot be expressed as JSON comments.
 
+## Built-in catalog environment overrides
+
+The CLI normally discovers its bundled catalog at `vendor/provider/zcode-builtin.json`
+and initializes a separate active snapshot. It does not require
+`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` to be set.
+
+A valid override is preserved. Blank override values are treated as unset. If an
+inherited override points to a missing, unreadable or invalid built-in release,
+the CLI warns and recovers using a validated bundled catalog, preserving the
+personal provider path and normal active-snapshot initialization. A valid
+`ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE` is preferred during recovery;
+otherwise the runtime discovers the packaged catalog. If no valid fallback is
+available, the original startup failure is not hidden. Recovery does not modify
+the invalid override file.
+
+On older CLI versions, remove a stale override for a single invocation:
+
+```sh
+env -u ZCODE_BUILTIN_PROVIDER_CONFIG_FILE zcode plugins marketplace update <marketplace>
+```
+
+If this resolves the failure, remove or correct the inherited path in the shell
+or host launcher that sets it. Do not copy the bundled catalog into arbitrary
+Desktop-version cache directories.
+
 ## Using the example
 
 The example deliberately contains three different model configurations:
