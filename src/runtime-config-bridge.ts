@@ -11,6 +11,7 @@ export { installSqliteWriteRecovery, pruneSqliteUsage, sqliteRecoveryStats } fro
 export { appServerRegistryOptions } from "./app-server-auth.ts";
 export { exchangeBigmodelOAuthCode } from "./bigmodel-oauth.ts";
 export { browserOpenCommand } from "./browser-open.ts";
+export { sharedOAuthCredentialReader, zaiBusinessAccessToken } from "./shared-oauth.ts";
 export { inspectRuntimeConfiguration, writeConfigurationDoctor } from "./config-diagnostics.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {

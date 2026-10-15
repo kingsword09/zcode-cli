@@ -318,10 +318,18 @@ Plain `zcode login` recognizes a configured native default and reports its
 configuration path. Configuration presence is checked locally; credential
 validation and decryption belong to the runtime.
 
+Desktop and the CLI share OAuth login when they use the same data directory and
+credential secret. Signing in on either side lets the other use that account;
+the CLI reads the active shared profile without requiring a second CLI login.
+Explicitly configured manual API keys retain their own account selection.
+Z.AI credentials use Desktop's business-token format. Older CLI OAuth credentials
+are converted after successful validation on their first request; failed
+validation or a concurrent login never overwrites the newer shared session.
+
 For macOS OAuth, the CLI temporarily registers a callback receiver, checks
 `state`, restores the previous `zcode://` handler and sends the callback through
-stdin. The runtime exchanges the token, stores encrypted credentials, resolves
-the Coding Plan API key and saves the native default model. The TUI then rereads
+stdin. The runtime resolves business and project access before publishing
+encrypted login credentials and saving the native default model. The TUI then rereads
 provider configuration. BigModel uses the runtime's localhost callback, checks
 `state`, and sends the matching callback URI and state to
 `https://zcode.z.ai/api/v1/oauth/token`. Both the BigModel access token and ZCode
