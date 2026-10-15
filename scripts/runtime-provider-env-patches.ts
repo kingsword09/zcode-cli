@@ -40,6 +40,7 @@ function inspect(runtime: string) {
     const match = new RegExp(`^${escapePattern(options)}\\.env\\[(${identifier})\\]\\?\\.trim\\(\\)(\\|\\|void 0)?$`, "u").exec(source);
     if (!match) incompatible();
     return { name: binding.id.name, key: match[1]!, init: binding.init, source,
+      original: `${options}.env[${match[1]}]?.trim()`,
       replacement: `${options}.env[${match[1]}]?.trim()||void 0` };
   });
   const builtin = bindings[0]!;
@@ -74,7 +75,7 @@ function inspect(runtime: string) {
   const inserted = runtime.slice(initial.end, initial.end + recovery.length) === recovery;
   const patched = inserted && bindings.every(binding => binding.source === binding.replacement) && bundledSource === replacement;
   if (runtime.slice(prepare.start, prepare.end).includes(fallbackName) && !patched) incompatible();
-  return { patched, bindings, initial, bundled: bundled.init, replacement, recovery };
+  return { patched, bindings, initial, bundled: bundled.init, original, replacement, recovery };
 }
 
 export function hasRuntimeBuiltinProviderEnvRecovery(runtime: string): boolean {
@@ -88,6 +89,21 @@ export function patchRuntimeBuiltinProviderEnvRecovery(runtime: string): string 
     ...inspected.bindings.map(binding => ({ start: binding.init.start, end: binding.init.end, text: binding.replacement })),
     { start: inspected.initial.end, end: inspected.initial.end, text: inspected.recovery },
     { start: inspected.bundled.start, end: inspected.bundled.end, text: inspected.replacement }
+  ];
+  for (const edit of edits.sort((first, second) => second.start - first.start)) {
+    runtime = runtime.slice(0, edit.start) + edit.text + runtime.slice(edit.end);
+  }
+  return runtime;
+}
+
+/** Restore the upstream bootstrap in test fixtures, preserving all other runtime patches. */
+export function unpatchRuntimeBuiltinProviderEnvRecovery(runtime: string): string {
+  const inspected = inspect(runtime);
+  if (!inspected.patched) return runtime;
+  const edits = [
+    ...inspected.bindings.map(binding => ({ start: binding.init.start, end: binding.init.end, text: binding.original })),
+    { start: inspected.initial.end, end: inspected.initial.end + inspected.recovery.length, text: "" },
+    { start: inspected.bundled.start, end: inspected.bundled.end, text: inspected.original }
   ];
   for (const edit of edits.sort((first, second) => second.start - first.start)) {
     runtime = runtime.slice(0, edit.start) + edit.text + runtime.slice(edit.end);

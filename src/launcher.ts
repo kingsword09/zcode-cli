@@ -533,6 +533,7 @@ export async function main(args: string[]): Promise<number> {
   process.once("SIGINT", onPluginSigint);
   process.once("SIGTERM", onPluginSigterm);
   if (process.platform !== "win32") process.once("SIGHUP", onPluginSighup);
+  const builtinProviderWarnings = new Set<string>();
   let pluginCommand: number | undefined;
   try {
     pluginCommand = await runPluginCommand(args, {
@@ -541,9 +542,10 @@ export async function main(args: string[]): Promise<number> {
         params,
         onStderr: stderr => {
           for (const line of stderr.split(/\r?\n/u)) {
-            if (line.startsWith("ZCode Built-in: ignoring unavailable ZCODE_BUILTIN_PROVIDER_CONFIG_FILE ")) {
-              process.stderr.write(`${line}\n`);
-            }
+            if (!line.startsWith("ZCode Built-in: ignoring unavailable ZCODE_BUILTIN_PROVIDER_CONFIG_FILE ")
+              || builtinProviderWarnings.has(line)) continue;
+            builtinProviderWarnings.add(line);
+            process.stderr.write(`${line}\n`);
           }
         },
         signal: signal ?? pluginAbortController.signal,

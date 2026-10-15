@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hasRuntimeBuiltinProviderEnvRecovery, patchRuntimeBuiltinProviderEnvRecovery } from "../scripts/runtime-provider-env-patches.ts";
+import { hasRuntimeBuiltinProviderEnvRecovery, patchRuntimeBuiltinProviderEnvRecovery, unpatchRuntimeBuiltinProviderEnvRecovery } from "../scripts/runtime-provider-env-patches.ts";
 
 const source = [
   'var active="ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",bundled="ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE",personal="ZCODE_PERSONAL_PROVIDER_CONFIG_FILE";',
@@ -38,6 +38,16 @@ describe("built-in provider environment recovery", () => {
     expect(hasRuntimeBuiltinProviderEnvRecovery(source)).toBe(false);
     expect(hasRuntimeBuiltinProviderEnvRecovery(patched)).toBe(true);
     expect(patchRuntimeBuiltinProviderEnvRecovery(patched)).toBe(patched);
+  });
+
+  test("restores the unpatched bootstrap without removing unrelated runtime changes", () => {
+    const baseline = `${source};const unrelatedPatch=true;`;
+    const patched = patchRuntimeBuiltinProviderEnvRecovery(baseline);
+    const restored = unpatchRuntimeBuiltinProviderEnvRecovery(patched);
+    expect(restored).toBe(baseline);
+    expect(hasRuntimeBuiltinProviderEnvRecovery(restored)).toBe(false);
+    expect(unpatchRuntimeBuiltinProviderEnvRecovery(restored)).toBe(restored);
+    expect(patchRuntimeBuiltinProviderEnvRecovery(restored)).toBe(patched);
   });
 
   test.each([undefined, "", " \t "])("discovers bundled config for an unset or blank override (%j)", async value => {
@@ -122,5 +132,6 @@ describe("built-in provider environment recovery", () => {
     const partial = patchRuntimeBuiltinProviderEnvRecovery(source).replace("using bundled catalog", "partial recovery");
     expect(hasRuntimeBuiltinProviderEnvRecovery(partial)).toBe(false);
     expect(() => patchRuntimeBuiltinProviderEnvRecovery(partial)).toThrow("incompatible");
+    expect(() => unpatchRuntimeBuiltinProviderEnvRecovery(partial)).toThrow("incompatible");
   });
 });

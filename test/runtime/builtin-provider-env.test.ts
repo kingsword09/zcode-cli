@@ -5,14 +5,13 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hasRuntimeBuiltinProviderEnvRecovery, patchRuntimeBuiltinProviderEnvRecovery } from "../../scripts/runtime-provider-env-patches.ts";
+import { hasRuntimeBuiltinProviderEnvRecovery, patchRuntimeBuiltinProviderEnvRecovery, unpatchRuntimeBuiltinProviderEnvRecovery } from "../../scripts/runtime-provider-env-patches.ts";
 import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const node = Bun.which("node");
 const endpoint = "http://127.0.0.1:9";
 let directory = "", packageRoot = "", builtinContent = "";
-let baselineUnpatched = false;
 
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "zcode-builtin-env-"));
@@ -25,10 +24,15 @@ beforeAll(async () => {
     }
   }
   const original = await readFile(join(root, "vendor/zcode.cjs"), "utf8");
-  baselineUnpatched = !hasRuntimeBuiltinProviderEnvRecovery(original);
+  const baseline = unpatchRuntimeBuiltinProviderEnvRecovery(original);
+  const patched = patchRuntimeBuiltinProviderEnvRecovery(original);
+  expect(hasRuntimeBuiltinProviderEnvRecovery(baseline)).toBe(false);
+  if (patchRuntimeBuiltinProviderEnvRecovery(baseline) !== patched) {
+    throw new Error("Unpatched runtime fixture did not preserve the other runtime patches.");
+  }
   builtinContent = await readFile(join(root, "vendor/provider/zcode-builtin.json"), "utf8");
-  await writeFile(join(vendor, "zcode.cjs"), patchRuntimeBuiltinProviderEnvRecovery(original));
-  await writeFile(join(vendor, "unpatched.cjs"), original);
+  await writeFile(join(vendor, "zcode.cjs"), patched);
+  await writeFile(join(vendor, "unpatched.cjs"), baseline);
   await writeFile(join(vendor, "provider/zcode-builtin.json"), builtinContent);
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ type: "module", version: "0.0.0-test" }));
   const build = await Bun.build({ entrypoints: [join(root, "bin/zcode.ts")], outdir: join(packageRoot, "bin"), target: "node", format: "esm" });
@@ -145,18 +149,52 @@ test("fails with a diagnostic when neither override nor bundled fallback is usab
   expect(result.stderr).toContain("no valid bundled fallback");
 }, 10000);
 
-test("recovers the real launcher plugin-validation path, reproducing failure when an unpatched runtime is available", async () => {
+test("reproduces an unavailable builtin override failure with the unpatched runtime", async () => {
   const { home, env } = await homeEnv(false);
   env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = join(home, "stale.json");
-  if (baselineUnpatched) {
-    const control = await run(home, env, [join(packageRoot, "vendor/unpatched.cjs"), "app-server"]);
-    expect(control.code).toBe(1);
-    expect(control.stderr).toContain("均不可用");
-  }
+  const control = await run(home, env, [join(packageRoot, "vendor/unpatched.cjs"), "app-server"]);
+  expect(control.code).toBe(1);
+  expect(control.stderr).toContain("均不可用");
+}, 10000);
+
+test("recovers the real launcher plugin-validation source path with one warning", async () => {
+  const { home, env } = await homeEnv(false);
+  env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = join(home, "stale.json");
   const marketplace = join(home, "marketplace.json");
   await writeFile(marketplace, JSON.stringify({ name: "builtin-env-fixture", plugins: [] }));
   const fixed = await run(home, env, [join(packageRoot, "bin/zcode.js"), "plugins", "validate", "--source", marketplace], false);
   expect(fixed.code).toBe(0);
   expect(fixed.stdout).toContain("Plugin validation completed.");
-  expect(fixed.stderr).toContain("using bundled catalog");
+  expect(fixed.stderr.match(/using bundled catalog/gu)).toHaveLength(1);
 }, 15000);
+
+test("warns once per command when plugin-coordinate validation starts multiple app-servers", async () => {
+  const { home, env } = await homeEnv(false);
+  const marketplace = join(home, "marketplace");
+  const plugin = join(marketplace, "plugin");
+  await mkdir(join(plugin, ".zcode-plugin"), { recursive: true });
+  await mkdir(join(plugin, "skills", "probe"), { recursive: true });
+  await writeFile(join(marketplace, "marketplace.json"), JSON.stringify({
+    name: "builtin-env-fixture", pluginRoot: ".",
+    plugins: [{ name: "probe", source: "./plugin", version: "1.0.0", description: "Validation fixture" }]
+  }));
+  await writeFile(join(plugin, ".zcode-plugin", "plugin.json"), JSON.stringify({
+    name: "probe", version: "1.0.0", description: "Validation fixture", skills: "skills"
+  }));
+  await writeFile(join(plugin, "skills", "probe", "SKILL.md"),
+    "---\nname: probe\ndescription: Validation fixture\n---\nValidation fixture.\n");
+  const launcher = join(packageRoot, "bin/zcode.js");
+  const added = await run(home, env, [launcher, "plugins", "marketplace", "add", marketplace, "--yes"], false);
+  expect(added.code).toBe(0);
+  expect(added.stderr).not.toContain("using bundled catalog");
+
+  env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = join(home, "stale.json");
+  for (const json of [false, true]) {
+    const result = await run(home, env,
+      [launcher, "plugins", "validate", "probe@builtin-env-fixture", ...json ? ["--json"] : []], false);
+    expect(result.code).toBe(0);
+    if (json) expect(JSON.parse(result.stdout)).toMatchObject({ diagnostics: [] });
+    else expect(result.stdout).toContain("Plugin validation completed.");
+    expect(result.stderr.match(/using bundled catalog/gu)).toHaveLength(1);
+  }
+}, 30000);
