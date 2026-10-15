@@ -4,6 +4,7 @@ import { constants as osConstants } from "node:os";
 import { basename } from "node:path";
 
 import { missingCodingPlanKey } from "../../../src/prompt-preflight.ts";
+import { loadTuiStartupOptions } from "./startup.ts";
 import { preflightSubmission } from "./prompt-preflight.ts";
 import {
   clearSetupPending,
@@ -6081,5 +6082,6 @@ class ZCodeTui {
 
 export async function runTui(options: TuiOptions): Promise<void> {
   suppressTuiAiSdkWarnings();
-  await new ZCodeTui(options).run();
+  const readyOptions = await loadTuiStartupOptions(options);
+  if (readyOptions) await new ZCodeTui(readyOptions).run();
 }

@@ -58,6 +58,31 @@ Ctrl+C cancellation remain responsive during rapid Bash progress output. The
 scenarios advance from observed terminal output instead of fixed timers and do
 not make model API calls.
 
+## TUI startup compatibility
+
+Recent upstream runtimes pass session metadata and slash commands through
+`loadStartupOptions()` rather than top-level TUI options. The local TUI paints a
+cancellable startup screen, calls this loader once, and merges its result before
+constructing the editor and session state. Older runtimes that pass top-level
+options continue to work. Startup failures propagate after terminal cleanup;
+Ctrl+C exits without creating the session UI when the loader finishes later.
+
+Run the isolated startup regression tests and synchronize the built TUI:
+
+```bash
+bun test test/tui/startup.test.ts
+bun run sync:local # macOS with /Applications/ZCode.app; otherwise use bun run sync:locked
+bun scripts/smoke-tui.ts
+```
+
+The tests cover lazy and legacy command lists, custom commands, MCP picker
+dispatch, cancellation, late rejection, and raw-mode restoration on failure. The
+runtime smoke test also checks `/mc` suggestions from the real upstream loader.
+For manual verification, launch `zcode`, type `/mc` without submitting, and check
+that `mcp` appears. Clear the draft and repeat with `/he` and `/mod`; submitting
+`/mcp` should open the configured server picker (or show that none are configured).
+Restart the CLI after syncing; an already running process keeps its loaded TUI.
+
 ## Reproduce invalid models in resumed sessions (#160)
 
 Build the current CLI, then start an isolated reproduction:

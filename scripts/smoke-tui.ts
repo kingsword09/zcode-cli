@@ -163,7 +163,7 @@ const timeout = setTimeout(() => {
 
 let interactionError: unknown;
 try {
-  await waitFor("welcome screen", /ZCode/i);
+  await waitFor("welcome screen", /Ask a task about this workspace/i);
   if (!plainText(output).includes("Ask a task about this workspace")) {
     throw new Error("Regular TUI did not render the session welcome intro.");
   }
@@ -246,6 +246,9 @@ try {
   await sendAndWait("/plan on\r", "plan enabled", /Plan enabled · permission mode: build/i);
   await sendAndWait("/mode edit\r", "edit permission mode", /mode switched to edit/i);
   await sendAndWait("/plan off\r", "plan disabled with permissions preserved", /Plan disabled · permission mode: edit/i);
+  await sendAndWait("/mc", "runtime slash command suggestions", /mcp\s+\/mcp \[list\|status\|connect <server>/i);
+  terminal.write("\x03");
+  await Bun.sleep(50);
   terminal.write("/exit\r");
 } catch (error) {
   interactionError = error;

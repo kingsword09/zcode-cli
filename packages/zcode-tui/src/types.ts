@@ -127,6 +127,7 @@ export interface RuntimeAdapter {
 }
 
 export interface TuiOptions extends RuntimeAdapter {
+  loadStartupOptions?: () => Promise<TuiStartupOptions>;
   initialMode?: string;
   initialPlanEnabled?: boolean;
   initialModel?: unknown;
@@ -150,6 +151,19 @@ export interface TuiOptions extends RuntimeAdapter {
   writeClipboardText?: (text: string) => Promise<void>;
   readClipboardImage?: (options?: { abortSignal?: AbortSignal }) => Promise<unknown>;
 }
+
+export type TuiStartupOptions = Pick<TuiOptions,
+  | "initialMode"
+  | "initialModel"
+  | "initialThoughtLevel"
+  | "loginRequired"
+  | "locale"
+  | "theme"
+  | "modelOptions"
+  | "effortOptions"
+  | "slashCommands"
+  | "workspaceGitBranch"
+>;
 
 export function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
