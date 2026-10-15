@@ -15,6 +15,8 @@ import {
 import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts";
 import { markRuntimeModified } from "./runtime-attribution.ts";
 import { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
+import { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
+export { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
 export { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
 import { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
 export { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
@@ -1869,6 +1871,10 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "optional",
     apply: patchRuntimeBigmodelSessionReuse,
     verify: (runtime) => runtime.includes(bigmodelSessionReuseMarker)
+  },
+  {
+    id: "shared-oauth", requirement: "required", apply: patchRuntimeSharedOAuth,
+    verify: hasRuntimeSharedOAuth
   },
   {
     id: "login-model-defaults",

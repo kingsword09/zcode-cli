@@ -119,6 +119,16 @@ render `1M` instead of `200K`.
 
 ## OAuth login
 
+The required `shared-oauth` runtime patch keeps Desktop and standalone CLI
+credentials compatible. `oauth:zai:access_token` contains the business token
+returned by `/api/auth/z/login`, while the OAuth input remains transient.
+Standalone account identities come from the active shared profile; explicit
+manual API-key connections keep their native identity. Legacy CLI OAuth tokens
+are exchanged only after a business HTTP 401, then replaced under the native
+credential lock if the stored value still matches. Run
+`bun test test/shared-oauth.test.ts test/runtime/shared-oauth.test.ts` after
+syncing to cover both login transports, Desktop session reuse and mutation races.
+
 For the OAuth path, run the launcher directly with the login subcommand:
 
 ```bash

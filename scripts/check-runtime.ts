@@ -23,6 +23,7 @@ import {
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeResolvedContextWindow,
+  hasRuntimeSharedOAuth,
   hasRuntimeSqliteBusyTimeout,
   hasRuntimeSqliteWriteRecovery,
   hasRuntimeStreamEofFinishGuard,
@@ -103,6 +104,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeBrowserUrlOpening(runtimeSource)
   || !hasRuntimeConfigurationDiagnostics(runtimeSource)
   || !hasRuntimeResolvedContextWindow(runtimeSource)
+  || !hasRuntimeSharedOAuth(runtimeSource)
   || !hasRuntimeCliSettingsFile(runtimeSource)
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
   || !runtimeSource.includes('"plugin://"')

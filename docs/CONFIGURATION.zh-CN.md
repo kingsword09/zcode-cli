@@ -273,9 +273,14 @@ Provider 文件中的 `config.defaultModelSelection` 决定新会话使用的模
 普通的 `zcode login` 会识别已经配置的原生默认模型并提示配置路径。
 本地仅检查配置是否存在，凭证校验与解密由 runtime 负责。
 
+桌面端与 CLI 使用相同的数据目录和凭证加密密钥时，共享 OAuth 登录状态。
+任意一端登录后，另一端即可使用该账号；CLI 直接读取共享的当前账号资料，无需再次登录。
+显式配置的手动 API Key 仍使用其独立的账号选择。Z.AI 凭证统一采用桌面端的业务令牌格式；
+旧版 CLI 保存的 OAuth 令牌会在首次请求验证成功后转换，验证失败或并发登录不会覆盖更新的共享会话。
+
 macOS OAuth 会临时注册回调接收器、校验 `state`，恢复原来的 `zcode://` 处理程序，并通过
-stdin 把回调交给 runtime。Runtime 交换令牌、保存加密凭证、解析 Coding Plan API Key，
-再保存原生默认模型；TUI 随后重新读取 provider 配置。BigModel 使用 runtime 的 localhost
+stdin 把回调交给 runtime。Runtime 先取得业务和项目访问令牌，再保存加密登录凭证与
+原生默认模型；TUI 随后重新读取 provider 配置。BigModel 使用 runtime 的 localhost
 回调，校验 `state` 后，将匹配的回调地址和 state 提交到
 `https://zcode.z.ai/api/v1/oauth/token`。BigModel access token 和 ZCode JWT 均通过原生
 凭证存储加密保存。回调须能访问运行 CLI 的机器；SSH 环境需要将回调 URL 中的端口转发到该机器。
