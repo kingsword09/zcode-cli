@@ -11,7 +11,8 @@ test("TUI restores the last model selected in a resumed session", async () => {
   await runAutomatedTuiScenario(modelResumeScenario);
 });
 
-test.each(["glm", "GLM"])("TUI saves the default model after searching for %s and uses it in a new session", async (query) => {
+test("TUI saves a default model after a mixed-case search and uses it in a new session", async () => {
+  const query = "gLm";
   await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-default-model-" });
   const command = [process.execPath, modelResumeScenario.fixture];
   await using session = TerminalSession.start({ command, workspace });

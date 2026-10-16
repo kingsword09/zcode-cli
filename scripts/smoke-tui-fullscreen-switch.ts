@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { terminalOutputText as plainText } from "./terminal-output.ts";
 import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -35,13 +36,6 @@ const child = Bun.spawn([process.execPath, fixture], {
   terminal
 });
 
-function plainText(value: string): string {
-  return value
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\r/g, "");
-}
 
 function screenRows(): string[] {
   const rows: string[] = [];

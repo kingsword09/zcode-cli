@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { terminalOutputText as plainText } from "./terminal-output.ts";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -72,13 +73,6 @@ const child = Bun.spawn(command, {
   terminal
 });
 
-function plainText(value: string): string {
-  return value
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\r/g, "");
-}
 
 async function waitFor(label: string, pattern: RegExp, start = 0, timeoutMs = 8_000): Promise<void> {
   const startedAt = Date.now();

@@ -56,8 +56,8 @@ import { readBackgroundTaskOutput } from "./background-task-output.ts";
 import { BoundedToolText, toolTextValue } from "./bounded-tool-text.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
 import {
-  colorSchemeFromRgb,
   initialColorScheme,
+  queryTerminalColorScheme,
   themePreference,
   type ZCodeThemePreference
 } from "./color-scheme.ts";
@@ -536,9 +536,8 @@ export function suppressTuiAiSdkWarnings(): void {
 suppressTuiAiSdkWarnings();
 
 /**
- * The upstream alternate-screen renderer intentionally reserves Home/End and
- * PageUp/PageDown for viewport navigation. ZCode's composer is a real editor,
- * so it needs the same priority as a modal overlay while it has focus.
+ * Give the composer priority for page navigation and modified Home/End keys
+ * while editing. Bare Home/End are already editor keys in pi-tui 1.x.
  */
 class ZCodeAltScreen extends TuiAltScreen {
   private viewportInputDeferral?: (data: string) => boolean;
@@ -989,11 +988,7 @@ class ZCodeTui {
   private async resolveTerminalColorScheme(): Promise<void> {
     if (!this.colorsEnabled || this.themePreference !== "auto") return;
     try {
-      const [background, reportedScheme] = await Promise.all([
-        this.ui.queryTerminalBackgroundColor({ timeoutMs: terminalThemeQueryTimeoutMs }),
-        this.ui.queryTerminalColorScheme({ timeoutMs: terminalThemeQueryTimeoutMs })
-      ]);
-      const colorScheme = background ? colorSchemeFromRgb(background) : reportedScheme;
+      const colorScheme = await queryTerminalColorScheme(this.ui, terminalThemeQueryTimeoutMs);
       if (colorScheme) this.theme.setColorScheme(colorScheme);
     } catch {
       // Terminal color probing is optional; COLORFGBG or the dark fallback remains active.

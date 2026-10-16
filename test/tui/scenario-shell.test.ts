@@ -81,6 +81,41 @@ test("scenario shell rejects an empty command allowlist", async () => {
   })).toThrow("requires at least one allowed command");
 });
 
+test("scenario shell contains floating-point precision failures and remains usable", async () => {
+  await using workspace = await ScenarioWorkspace.create();
+  const shell = createScenarioShell({ workspaceDirectory: workspace.directory });
+
+  for (const specifier of ["e", "f", "g"]) {
+    expect((await shell.exec(`printf '%.100${specifier}' 1.25`)).stdout.length).toBeLessThanOrEqual(107);
+    // just-bash implements ordinary float formats itself and contains their
+    // RangeErrors at the command boundary; sprintf-js handles fallback formats.
+    for (const command of [
+      `printf '%.101${specifier}' 1.25`,
+      `printf '%.*${specifier}' 101 1.25`,
+      `printf -v formatted '%.*${specifier}' 101 1.25`
+    ]) {
+      const result = await shell.exec(command, { expectedExitCode: 1 });
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toMatch(/^printf: .+argument must be between /u);
+    }
+  }
+  expect(await shell.exec("printf '%.0g %.0f' 1.25 1.25")).toMatchObject({
+    exitCode: 0, stdout: "1 1", stderr: ""
+  });
+  expect((await shell.exec("echo ready")).stdout).toBe("ready\n");
+});
+
+test("scenario shell rejects excessive awk printf and sprintf precision before formatting", async () => {
+  await using workspace = await ScenarioWorkspace.create();
+  const shell = createScenarioShell({ workspaceDirectory: workspace.directory, commands: ["awk"] });
+  for (const expression of ['printf "%.101f", 1.25', 'print sprintf("%.101f", 1.25)']) {
+    const result = await shell.exec(`awk 'BEGIN { ${expression} }'`, { expectedExitCode: 126 });
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("floating-point precision limit exceeded (100 digits)");
+  }
+  expect((await shell.exec(`awk 'BEGIN { printf "%.2f", 1.25 }'`)).stdout).toBe("1.25");
+});
+
 test("scenario shell rejects ambiguous journals and invalid exit expectations", async () => {
   await using workspace = await ScenarioWorkspace.create();
   const journalPath = workspace.runtimeJournalPath;

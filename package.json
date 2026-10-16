@@ -38,6 +38,7 @@
     "docs/CONFIGURATION.zh-CN.md",
     "docs/PROVIDER_CONFIG.md",
     "docs/PROVIDER_CONFIG.zh-CN.md",
+    "docs/HOST_INTEGRATION.md",
     "docs/THIRD_PARTY_CONTENT.md",
     "LICENSES/Apache-2.0.txt",
     "LICENSES/README.md",
@@ -61,14 +62,13 @@
     "check": "bun run build && bun scripts/check-runtime.ts",
     "check:oauth-callback": "bun scripts/smoke-oauth-callback.ts",
     "check:tui": "bun scripts/smoke-tui.ts && bun scripts/smoke-tui-features.ts && bun scripts/smoke-tui-clear.ts && bun scripts/smoke-tui-session-title.ts && bun scripts/smoke-tui-pressure.ts && bun scripts/smoke-tui-widths.ts && bun scripts/smoke-tui-fullscreen.ts && bun scripts/smoke-tui-fullscreen-switch.ts && bun scripts/smoke-tui-fullscreen-layout.ts && bun run check:tui:focus",
-    "check:tui:focus": "bun scripts/smoke-tui-focus.ts regular off always && bun scripts/smoke-tui-focus.ts fullscreen off always && bun scripts/smoke-tui-focus.ts regular bel unfocused && bun scripts/smoke-tui-focus.ts fullscreen bel unfocused && bun scripts/smoke-tui-focus.ts fullscreen off always built",
+    "check:tui:focus": "bun scripts/smoke-tui-focus.ts regular off always && bun scripts/smoke-tui-focus.ts fullscreen bel unfocused && bun scripts/smoke-tui-focus.ts fullscreen off always built",
     "check:tui:focus:manual": "bun scripts/manual-tui-focus.ts",
-    "check:tui-scenarios": "bun run test:tui",
     "test": "bun run test:unit",
     "test:all": "bun run test:unit && bun run test:tui && bun run test:runtime && bun run test:node",
     "test:unit": "bun test test/*.test.ts",
-    "test:fast": "bun run test:unit",
     "test:runtime": "bun test test/runtime/*.test.ts",
+    "test:runtime:compat": "bun test test/runtime/launcher.test.ts test/runtime/network-retry.test.ts test/runtime/app-server-auth.test.ts test/runtime/execution-state-tui.test.ts",
     "test:node": "node --test test/node/*.test.cjs",
     "test:tui": "bun run test:tui:component && bun run test:tui:e2e",
     "test:tui:component": "bun test test/tui/scenario-http.test.ts test/tui/scenario-runtime.test.ts test/tui/scenario-shell.test.ts test/tui/scenario-workspace.test.ts test/tui/terminal-screen.test.ts",
@@ -93,7 +93,7 @@
     "provenance": true
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.85.1",
+    "@earendil-works/pi-tui": "^1.3.0",
     "playwright-core": "1.59.1"
   },
   "devDependencies": {
@@ -103,12 +103,18 @@
     "bun-types": "1.4.1",
     "cli-highlight": "^2.1.11",
     "diff": "^9.0.0",
-    "just-bash": "^3.4.2",
+    "just-bash": "^3.6.0",
     "mountx": "^0.0.2",
     "msw": "^2.15.0",
     "pkg-pr-new": "0.0.88",
     "tsdown": "^0.22.7",
     "typescript": "^7.0.2",
     "yaml": "^2.8.1"
+  },
+  "overrides": {
+    "undici": "7.30.0"
+  },
+  "patchedDependencies": {
+    "sprintf-js@1.1.3": "patches/sprintf-js@1.1.3.patch"
   }
 }

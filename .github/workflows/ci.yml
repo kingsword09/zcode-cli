@@ -82,7 +82,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        node: ["22.19.0", "24", "26"]
+        # validate already runs every suite and install-checks the package on
+        # Node 22.19.0 / Linux. Only add distinct runtime environments here.
+        node: ["24", "26"]
         include:
           - os: macos-latest
             node: "24"
@@ -121,8 +123,11 @@ jobs:
           bun scripts/check-runtime.ts
           bun scripts/smoke-package.ts
 
-      - name: Run runtime integration tests
-        run: bun run test:runtime
+      # Business-logic regressions run once in validate. Exercise the boundaries
+      # affected by Node/OS differences here: launch, HTTP streaming, app-server
+      # auth, both terminal modes, and the real SQLite driver below.
+      - name: Run Node and OS compatibility tests
+        run: bun run test:runtime:compat
 
       - name: Run real Node SQLite concurrency tests
         run: bun run test:node

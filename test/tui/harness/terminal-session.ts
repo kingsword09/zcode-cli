@@ -1,3 +1,4 @@
+import { terminalOutputText as terminalPlainText } from "../../../scripts/terminal-output.ts";
 import { ScenarioJournal } from "./scenario-journal.ts";
 import type { ScenarioWorkspace } from "./scenario-workspace.ts";
 import { TerminalScreen, type TerminalScreenSnapshot } from "./terminal-screen.ts";
@@ -5,13 +6,6 @@ import { TerminalScreen, type TerminalScreenSnapshot } from "./terminal-screen.t
 const defaultWaitMilliseconds = 8_000;
 const renderSettleMilliseconds = 30;
 
-function terminalPlainText(value: string): string {
-  return value
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\r/g, "");
-}
 
 export interface TerminalSessionOptions {
   command: string[];

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { CURSOR_MARKER, Input, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Input, renderFakeCursor, visibleWidth } from "@earendil-works/pi-tui";
+import { terminalOutputText } from "../scripts/terminal-output.ts";
 
 import {
   sanitizeTerminalText,
@@ -12,6 +13,15 @@ import {
 } from "../packages/zcode-tui/src/terminal-text.ts";
 
 describe("terminal text safety", () => {
+  test("keeps PTY text after an ST-terminated status query followed by a BEL-terminated title", () => {
+    const trace = "\x1b]7501;?\x1b\\\x1b[?1;2c"
+      + "\x1b[32m╭─ ◆ ZCODE\x1b[0m\r\n"
+      + "\x1b]0;ZCode\x07Ask a task about this workspace\r\n";
+    expect(terminalOutputText(trace)).toBe("╭─ ◆ ZCODE\nAsk a task about this workspace\n");
+    expect(terminalOutputText("before\x1bPpayload\x1b\\middle\x1b]9;notice\x07after"))
+      .toBe("beforemiddleafter");
+  });
+
   test("removes cursor, screen, OSC and string control sequences", () => {
     const unsafe = [
       "before",
@@ -91,9 +101,22 @@ describe("terminal carets", () => {
       input.focused = focused;
       const rendered = input.render(40)[0]!;
       const stripped = stripCaretHighlight(rendered);
-      expect(stripped).toBe(rendered.replace("\x1b[7m", "").replace("\x1b[27m", ""));
+      expect(stripped).not.toContain("\x1b_pi:fc\x07");
+      expect(stripped).not.toContain("\x1b_pi:/fc\x07");
       expect(stripped).toContain(`${focused ? CURSOR_MARKER : ""}\x1b[2mF\x1b[22m`);
       expect(visibleWidth(stripped)).toBe(visibleWidth(rendered));
+    }
+  });
+
+  test("removes pi-tui fake cursors while retaining styled Unicode and hardware cursor positions", () => {
+    for (const grapheme of [" ", "a", "中", "👩‍💻", "é"]) {
+      const styled = `\x1b[2m${grapheme}\x1b[22m`;
+      expect(stripCaretHighlight(renderFakeCursor(styled))).toBe(styled);
+      expect(stripCaretHighlight(`${CURSOR_MARKER}${renderFakeCursor(styled)}`))
+        .toBe(`${CURSOR_MARKER}${styled}`);
+      // Width truncation can remove the closing APC marker at the right edge.
+      expect(stripCaretHighlight(`${CURSOR_MARKER}\x1b_pi:fc\x07${styled}`))
+        .toBe(`${CURSOR_MARKER}${styled}`);
     }
   });
 

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import type { TerminalColors } from "@earendil-works/pi-tui";
 
 import {
   colorSchemeFromColorFgBg,
   colorSchemeFromRgb,
   initialColorScheme,
+  queryTerminalColorScheme,
   themePreference
 } from "../packages/zcode-tui/src/color-scheme.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
@@ -68,6 +70,35 @@ describe("TUI terminal theme", () => {
     expect(initialColorScheme("light", "15;0")).toBe("light");
     expect(initialColorScheme("auto", "0;15")).toBe("light");
     expect(initialColorScheme("auto", "invalid")).toBe("dark");
+  });
+
+  test.each([
+    [{ background: { r: 0, g: 0, b: 0 } }, "light", "dark"],
+    [{ background: { r: 255, g: 255, b: 255 } }, "dark", "light"],
+    [{}, "light", "light"],
+    [{}, undefined, undefined]
+  ] as const)("uses the palette background or scheme-only terminal reply: %j, %s", async (colors, report, expected) => {
+    let listener: ((scheme: "dark" | "light") => void) | undefined;
+    const ui = {
+      terminal: { write: () => { if (report) listener?.(report); } },
+      onTerminalColorSchemeChange: (callback: typeof listener) => {
+        listener = callback;
+        return () => { listener = undefined; };
+      },
+      queryTerminalColors: async (): Promise<TerminalColors> => colors
+    };
+    expect(await queryTerminalColorScheme(ui, 100)).toBe(expected);
+    expect(listener).toBeUndefined();
+  });
+
+  test("cleans up the theme listener when the palette query fails", async () => {
+    let removed = false;
+    await expect(queryTerminalColorScheme({
+      terminal: { write: () => {} },
+      onTerminalColorSchemeChange: () => () => { removed = true; },
+      queryTerminalColors: async () => { throw new Error("terminal closed"); }
+    }, 100)).rejects.toThrow("terminal closed");
+    expect(removed).toBe(true);
   });
 
   test("pairs every card background with a readable foreground", () => {

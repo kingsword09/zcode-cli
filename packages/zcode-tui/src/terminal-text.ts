@@ -231,13 +231,12 @@ export function removeLastGrapheme(value: string): string {
 }
 
 /**
- * Drop the reverse-video SGR pair the editor and input components draw
- * around the caret grapheme (Editor resets with 0, Input with 27). Cell
- * contents and visible widths are unchanged; only the highlight goes away.
- * Input placeholders may add SGR (e.g. dim) inside the caret; retain it.
+ * Drop pi-tui's fake-cursor APC markers before the renderer turns them into
+ * reverse video. Retain the hardware cursor marker, text and placeholder styles.
+ * Also accept the SGR caret form used by custom/legacy input components.
  */
 export function stripCaretHighlight(text: string): string {
-  return text.replace(
+  return text.replace(/\x1b_pi:\/?fc\x07/gu, "").replace(
     /\x1b\[7m((?:\x1b\[(?!(?:0|27)m)[0-9;:]*m|[^\x1b])*)\x1b\[(?:0|27)m/gu,
     "$1"
   );

@@ -6,7 +6,7 @@ can be run by CI or opened interactively for visual inspection.
 
 ## Test groups
 
-The project has four execution layers based on cost and environment:
+Tests are grouped by execution cost and environment:
 
 ```bash
 # In-process application and pure unit tests.
@@ -27,13 +27,20 @@ bun run test:tui
 # Tests that require vendor/zcode.cjs, Node, sockets, or local networking.
 bun run test:runtime
 
-# Run the portable layers and runtime integration in order.
+# Node/OS compatibility subset used by the additional CI matrix jobs.
+bun run test:runtime:compat
+
+# Storage regressions using real Node SQLite.
+bun run test:node
+
+# Run the portable layers, runtime integration and Node SQLite tests in order.
 bun run test:all
 ```
 
 `bun run test` intentionally aliases the unit group for normal development.
-The built-in `bun test` command still discovers every `*.test.ts` recursively,
-so it behaves like the complete suite and requires a synchronized runtime.
+The built-in `bun test` command also discovers the Node-only `.test.cjs` files
+and runs them with the wrong SQLite implementation. Use `bun run test:all`
+for the complete suite; runtime and Node tests require a synchronized runtime.
 Run `bun run sync:local` first when testing against an installed macOS App. In
 a Delta worktree, use `TMPDIR=/tmp bun run test:runtime` to keep Unix socket
 paths below the platform limit.
@@ -91,7 +98,8 @@ behavior without depending on the host terminal's focus-report support.
 
 Then type a draft without submitting it and switch to another application or
 terminal pane while keeping the original pane visible. Both hardware and drawn
-carets should disappear and return when you refocus the original pane. Enter
+carets should disappear; the focused input's hardware cursor should return when
+you refocus the original pane. Enter
 `/focus-status` to inspect the real focus-report count and last reported state;
 simulated events are excluded. An `unknown` state means no real report has
 arrived, so the TUI deliberately retains the caret. A passing simulated cycle
@@ -225,5 +233,6 @@ container/VM runtime test instead of weakening the hermetic TUI suite.
 2. Add a declaration under `test/tui/scenarios/` with optional baseline files
    and the automatic interaction.
 3. Register it in `test/tui/scenarios/index.ts`.
-4. Add a `bun:test` entry when the scenario should run as part of `bun test`.
+4. Add a `bun:test` entry and register it in the matching `test:tui` package script
+   when the scenario should run in the automated suite.
 5. Verify both automatic and `--manual` modes before enabling it in CI.

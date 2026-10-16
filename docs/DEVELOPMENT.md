@@ -5,8 +5,10 @@ For installation as an end user, see the [main README](../README.md).
 
 ## Prerequisites
 
-Developing or publishing from source requires Bun 1.3 or newer. `7z` is needed
-only when downloading and extracting a remote installer.
+Use Bun 1.4.1, the version pinned in `packageManager` and CI, for development
+and publishing. Older Bun releases are not part of the validated toolchain.
+The CLI and SQLite tests require Node >=22.19.0. `7z` is needed only when
+downloading and extracting a remote installer.
 
 ## Quick start
 
@@ -40,10 +42,19 @@ Run all validation layers:
 
 ```bash
 bun run typecheck
-bun test
+bun run test:all
 bun run check
 bun run check:tui
 ```
+
+For a fast feedback loop, use `bun run test:unit`. `test:all` runs the unit,
+TUI, runtime and real Node SQLite suites in order; `bun run test:node` runs
+the storage layer on its own. Bare `bun test` also discovers the Node-only
+tests and is not a substitute for these entry points.
+
+See [TUI scenario testing](./TUI_SCENARIO_TESTING.md) for fixture and PTY
+guidance, and [SQLite concurrency](./SQLITE_CONCURRENCY.md) for storage retry
+boundaries and real Node regression coverage.
 
 `check:tui` runs real-PTY scenarios. The official runtime scenario completes
 masked Coding Plan API-key setup in a temporary home, verifies the official
@@ -57,6 +68,28 @@ workflow panel. A pressure scenario verifies that steering, UTF-8 input and
 Ctrl+C cancellation remain responsive during rapid Bash progress output. The
 scenarios advance from observed terminal output instead of fixed timers and do
 not make model API calls.
+
+Dependency security fixes and their regression commands are documented in
+[`patches/README.md`](../patches/README.md). Source installs must use Bun so
+the recorded `sprintf-js` patch is applied.
+
+## pi-tui compatibility
+
+The root package and TUI adapter use pi-tui 1.3.0. Theme detection uses
+`queryTerminalColors()` with the scheme-report fallback. Prompt placeholders
+and terminal-focus handling recognize pi-tui's fake-cursor APC markers;
+the hardware cursor remains the only caret on the focused input. The
+`ProcessTerminal` subclass inherits the new `setProgramStatus()` contract.
+PTY trace checks share `scripts/terminal-output.ts`, which handles both BEL
+and ST control-string terminators without consuming subsequent visible text.
+
+After changing pi-tui, `bun run check:tui` verifies regular/fullscreen input,
+focus, search, selection, images and overlays. `bun run verify:tui-perf` runs
+the complete quality and performance gate, including those smoke checks.
+The three runtime patches
+`http-no-content`, `bigmodel-oauth` and `cli-help-contract` also remain in the
+patch plan: Desktop 3.15.3 already supplies their behavior, while their
+verification and legacy branches still support older local Desktop artifacts.
 
 ## TUI startup compatibility
 
@@ -267,6 +300,17 @@ instead.
 `.github/workflows/ci.yml` runs for pull requests, pushes to `main` and manual
 dispatches. It validates the project on the minimum supported Node.js 22.19,
 including the locked runtime build, TypeScript and unit tests, PTY scenarios,
-the reviewed npm tarball and an isolated installed-package smoke test. A newer
-commit to the same pull request or branch automatically cancels its superseded
-CI run; unrelated pull requests continue independently.
+the reviewed npm tarball and an isolated installed-package smoke test.
+The complete runtime suite runs once in that job. Additional Node 24/26 Linux
+and Node 24 macOS jobs reuse the same tarball and run `test:runtime:compat`,
+the installed-package checks and the real Node SQLite suite. The compatibility
+subset covers launch, HTTP streaming/retry, app-server authentication and both
+TUI modes; it does not repeat the entire model/configuration/workflow matrix.
+
+`check:tui:focus` uses three representative configurations: regular with
+notifications off, fullscreen with unfocused BEL notifications, and the built
+fullscreen adapter with notifications off. Backend selection is also covered
+by the notification unit tests.
+
+A newer commit to the same pull request or branch automatically cancels its
+superseded CI run; unrelated pull requests continue independently.

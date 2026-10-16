@@ -294,7 +294,7 @@ async function runJsonCommand(label: string, command: string[]): Promise<unknown
 
 export async function verifyTuiPerf(): Promise<TuiPerfGateResult> {
   const bun = process.execPath;
-  await runCommand("tests", [bun, "test"]);
+  await runCommand("tests", [bun, "run", "test:all"]);
   await runCommand("typecheck", [bun, "run", "typecheck"]);
   await runCommand("build", [bun, "run", "build"]);
   await runCommand("TUI smoke tests", [bun, "run", "check:tui"]);

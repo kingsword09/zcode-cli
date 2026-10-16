@@ -1,3 +1,5 @@
+import type { TUI } from "@earendil-works/pi-tui";
+
 export type ZCodeColorScheme = "dark" | "light";
 export type ZCodeThemePreference = ZCodeColorScheme | "auto";
 
@@ -11,6 +13,28 @@ export interface RgbColor {
 export function colorSchemeFromRgb(color: RgbColor): ZCodeColorScheme {
   const luminance = (0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b) / 255;
   return luminance > 0.5 ? "light" : "dark";
+}
+
+/** Query pi-tui's combined palette, retaining the terminal scheme-report fallback. */
+export async function queryTerminalColorScheme(
+  ui: Pick<TUI, "onTerminalColorSchemeChange" | "queryTerminalColors"> & {
+    terminal: Pick<TUI["terminal"], "write">;
+  },
+  timeoutMs: number
+): Promise<ZCodeColorScheme | undefined> {
+  let reportedScheme: ZCodeColorScheme | undefined;
+  const unsubscribe = ui.onTerminalColorSchemeChange((scheme) => {
+    reportedScheme = scheme;
+  });
+  try {
+    // Ask before the palette query's DA1 sentinel so a scheme-only terminal
+    // can answer before queryTerminalColors completes.
+    ui.terminal.write("\x1b[?996n");
+    const colors = await ui.queryTerminalColors({ timeoutMs });
+    return colors.background ? colorSchemeFromRgb(colors.background) : reportedScheme;
+  } finally {
+    unsubscribe();
+  }
 }
 
 /**

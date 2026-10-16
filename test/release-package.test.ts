@@ -30,6 +30,7 @@ const requiredPaths = [
   "docs/CONFIGURATION.zh-CN.md",
   "docs/PROVIDER_CONFIG.md",
   "docs/PROVIDER_CONFIG.zh-CN.md",
+  "docs/HOST_INTEGRATION.md",
   "docs/THIRD_PARTY_CONTENT.md",
   "package.json",
   "vendor/extraction.json",
@@ -71,6 +72,16 @@ describe("release package", () => {
         name: "zcode-app-cli", version: "3.3.5-1"
       })).toThrow(`missing: ${path}`);
     }
+  });
+
+  test("ships the host integration contract referenced by the README", () => {
+    expect(() => validatePackResult(result(), {
+      name: "zcode-app-cli", version: "3.3.5-1"
+    })).not.toThrow();
+    expect(() => validatePackResult(result(requiredPaths
+      .filter(path => path !== "docs/HOST_INTEGRATION.md").map(packFile)), {
+      name: "zcode-app-cli", version: "3.3.5-1"
+    })).toThrow("missing: docs/HOST_INTEGRATION.md");
   });
 
   test("marks modified runtime bundles without removing the shebang or upstream text", () => {
@@ -143,8 +154,10 @@ describe("release package", () => {
       if (name === "ci") {
         const matrix = workflow.jobs["node-runtime"];
         expect(matrix.needs).toBe("validate");
-        expect(matrix.strategy.matrix.node).toEqual(["22.19.0", "24", "26"]);
+        expect(matrix.strategy.matrix.node).toEqual(["24", "26"]);
         expect(matrix.strategy.matrix.include).toContainEqual({ os: "macos-latest", node: "24" });
+        expect(matrix.steps.some((step: { run?: string }) => step.run === "bun run test:runtime:compat")).toBe(true);
+        expect(matrix.steps.some((step: { run?: string }) => step.run === "bun run test:runtime")).toBe(false);
         expect(matrix.steps.some((step: { run?: string }) => step.run === "bun run test:node")).toBe(true);
         expect(matrix.steps.some((step: { uses?: string }) => step.uses?.startsWith("actions/download-artifact@"))).toBe(true);
       }
@@ -219,6 +232,7 @@ describe("release package", () => {
       "docs/CONFIGURATION.zh-CN.md": "# Fixture documentation\n",
       "docs/PROVIDER_CONFIG.md": "# Fixture documentation\n",
       "docs/PROVIDER_CONFIG.zh-CN.md": "# Fixture documentation\n",
+      "docs/HOST_INTEGRATION.md": "# Fixture host integration contract\n",
       "docs/THIRD_PARTY_CONTENT.md": "# Fixture documentation\n",
       "LICENSES/Apache-2.0.txt": "license\n",
       "LICENSES/README.md": "notice provenance\n",

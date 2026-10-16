@@ -38,7 +38,6 @@ export {
 } from "./runtime-sqlite-patches.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const cdnRoot = "https://cdn-zcode.z.ai/zcode/electron/releases";
 const updateServiceRoot = "https://zcode.z.ai";
 const updateServiceManifestPath = "/api/v1/releases/electron/manifest";
 const stableReleaseChannel = "1";
@@ -81,7 +80,7 @@ export interface RuntimeLock {
 
 export interface RuntimeManifestResolution {
   lock: RuntimeLock;
-  source: "service" | "static";
+  source: "service";
   url: string;
 }
 
@@ -280,12 +279,6 @@ export function selectRuntimeLock(candidate: RuntimeLock, current?: RuntimeLock)
   return candidate;
 }
 
-export function manifestUrl(platform: SyncOptions["platform"], arch: string): string {
-  if (platform === "darwin") return `${cdnRoot}/update/mac/${arch}/latest-mac.yml`;
-  if (platform === "linux") return `${cdnRoot}/update/linux/${arch}/latest-linux.yml`;
-  return `${cdnRoot}/update/win/${arch}/latest.yml`;
-}
-
 export function serviceReleasePlatform(platform: SyncOptions["platform"], arch: string): string {
   const releasePlatform = platform === "darwin"
     ? "darwin"
@@ -367,11 +360,12 @@ export async function resolveLatestRuntimeLock(
     );
     return { lock, source: "service", url: serviceUrl };
   } catch (error) {
-    const fallbackUrl = manifestUrl(options.platform, options.arch);
     const reason = error instanceof Error ? error.message : String(error);
-    console.warn(`Stable update service manifest failed (${reason}); falling back to ${fallbackUrl}.`);
-    const lock = await runtimeLockFromManifest(options, fallbackUrl, fallbackUrl, fetcher);
-    return { lock, source: "static", url: fallbackUrl };
+    throw new Error(
+      `Could not resolve the latest ZCode runtime for ${options.platform}-${options.arch} from ${serviceUrl}: ${reason}. `
+      + "Retry when the stable update service is available, or run bun run sync:locked to rebuild the existing locked artifact without checking for a newer version.",
+      { cause: error }
+    );
   }
 }
 

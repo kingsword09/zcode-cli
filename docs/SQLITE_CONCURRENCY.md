@@ -38,7 +38,12 @@ capability through this bridge. Cross-process contention is coordinated by
 SQLite and bounded backoff, not by the process-local queue.
 
 The operation allowlist and maintenance SQL were reviewed against upstream
-`zai-org/ZCode` commit `29628c9acdb81b703bbd4080c207a0e7ce5e276e`. The required
+`zai-org/ZCode` commit `29628c9acdb81b703bbd4080c207a0e7ce5e276e`.
+On 2026-10-16 the store implementation was rechecked against
+`aac4755666d09fdcd70272fcf063c077a639015f` (public 3.15.1); the
+`sqlite-session-store.ts` facade is unchanged between those revisions. These
+source references do not identify the separate Desktop artifact's build commit.
+The required
 `sqlite-write-recovery` patch validates both post-migration hooks and the native
 cleanup transaction. Missing, ambiguous or partially patched anchors stop
 synchronization. The implementation is in `src/runtime-sqlite-recovery.ts`,
@@ -108,13 +113,17 @@ Lock holders use independent processes. One test schedules their release from
 the writer's event loop to verify that the new recovery yields instead of
 blocking that timer. Each test creates its own database and holder.
 
-CI builds and packs once, then tests that exact artifact on Node 22.19.0, 24, and
-26 on Linux, plus Node 24 on macOS. Bun's `node:sqlite` compatibility implementation
+CI runs the full suite on Node 22.19.0 / Linux, then packs that validated runtime.
+Additional Node 24/26 Linux and Node 24 macOS jobs reuse the tarball for the
+compatibility subset and this SQLite suite. The minimum-version environment
+is not repeated in the matrix. Bun's `node:sqlite` compatibility implementation
 is not used as a substitute for Node's SQLite driver.
 
 ## Follow-up boundary
 
-The regressions use the locked Desktop 3.14.3 / runtime 0.16.9 artifact. They do
+The current lock selects Desktop 3.15.3 / runtime 0.16.9. Rebuild with
+`sync:locked` before release validation; `sync:local` records a local App source
+and does not establish the locked installer's provenance. The regressions do
 not establish that every production workload is free of contention. Keep #162
 open for validation on the reported workload. On recovery exhaustion, the error
 includes `operation`, `attempts`, `elapsedMs` and the original SQLite cause;

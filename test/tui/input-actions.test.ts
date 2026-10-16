@@ -111,3 +111,27 @@ test("ctrl+f replaces editor text with the /search prefill on screen", async () 
   await session.settle();
   await session.exit();
 }, 20_000);
+
+test("fragmented terminal palette replies do not enter the draft or trigger input actions", async () => {
+  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-color-replies-" });
+  await using session = TerminalSession.start({
+    command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")],
+    workspace,
+    env: { NO_COLOR: "", COLORFGBG: "15;0", EDITOR: "true", VISUAL: "true" }
+  });
+  await session.waitForScreen("ready", /Original answer/u);
+  session.send("retained draft");
+  await session.waitForScreen("draft visible", /retained draft/u);
+  for (const fragment of [
+    "\x1b]10;rgb:", "1111/2222/3333", "\x07",
+    "\x1b]11;rgb:ffff", "/eeee/dddd", "\x1b\\",
+    "\x1b]4;2;rgb:", "1234/5678/9abc", "\x07",
+    "\x1b[?1;2c"
+  ]) {
+    session.send(fragment);
+    await session.settle();
+  }
+  await session.assertScreenExcludes("palette replies stay out of the draft", /rgb:|1111|2222|ffff|9abc/u);
+  await session.sendAndWait(" tail\r", "unaltered draft submitted", /Sent: retained draft tail/u);
+  await session.exit();
+}, 20_000);

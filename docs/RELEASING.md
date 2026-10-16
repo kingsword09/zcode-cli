@@ -27,9 +27,11 @@ bun run sync:locked
 
 The synchronization command:
 
-1. reads the public stable-channel manifest used by ZCode Desktop, with the
-   static CDN manifest as a fallback only when the service response is
-   unavailable or invalid;
+1. reads the public stable-channel manifest used by ZCode Desktop; if the
+   service is unavailable or its response is invalid, synchronization stops
+   with the original error and instructions to retry or explicitly use
+   `bun run sync:locked`. The obsolete static CDN manifests are no longer used,
+   and rebuilding from the lock does not check for a newer version;
 2. downloads the matching installer;
 3. verifies its SHA-512 from the manifest;
 4. extracts `resources/glm`;
@@ -55,7 +57,7 @@ It contains only:
   their original licenses) and the compiled local `@zcode/tui` adapter;
 - `setting.example.json`, `provider.example.json` and `zcode-runtime.lock.json`;
 - the English and Simplified Chinese configuration guides and provider field
-  references in `docs/`;
+  references in `docs/`, plus `docs/HOST_INTEGRATION.md`;
 - `docs/THIRD_PARTY_CONTENT.md` and the license texts, upstream notices and
   source provenance in `LICENSES/`;
 - `README.md`, `LICENSE` and the required npm `package.json`.

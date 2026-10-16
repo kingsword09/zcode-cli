@@ -1,3 +1,4 @@
+import { terminalOutputText as plainText } from "../../scripts/terminal-output.ts";
 import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,10 +9,6 @@ import { writeProviderFixture } from "../fixtures/provider-config.ts";
 import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 import { requestAppServer } from "../../src/app-server-client.ts";
 
-function plainText(text: string): string {
-  return text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
-}
 
 test.skipIf(process.platform === "win32").each([false, true])("registry TUI starts and reloads personal models (first install: %p)", async (firstInstall) => {
   const node = Bun.which("node")!;

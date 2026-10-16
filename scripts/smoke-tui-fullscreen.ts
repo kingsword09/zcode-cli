@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { terminalOutputText as plainText } from "./terminal-output.ts";
 import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,7 +22,7 @@ const terminal = new Bun.Terminal({
   }
 });
 
-// Pre-write config.json with ui.tuiMode=fullscreen to verify P1-1: the TUI
+// Pre-write setting.json with ui.tuiMode=fullscreen to verify P1-1: the TUI
 // reads the persisted mode on startup even when the vendor runtime does not
 // forward an initialTuiMode option.
 await mkdir(configDir, { recursive: true });
@@ -41,13 +42,6 @@ const child = Bun.spawn([process.execPath, fixture], {
   terminal
 });
 
-function plainText(value: string): string {
-  return value
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\r/g, "");
-}
 
 async function waitFor(label: string, pattern: RegExp, start = 0, timeoutMs = 8_000): Promise<number> {
   const startedAt = Date.now();
@@ -84,7 +78,8 @@ try {
   // complete fullscreen frame is painted again.
   const focusRecoveryStart = output.length;
   terminal.write("\x1b[O\x1b[I");
-  await waitFor("fullscreen focus recovery repaint", /\x1b\[\?2026h\x1b\[2J[\s\S]*alpha\/model/i, focusRecoveryStart);
+  // pi-tui may delete Kitty image placements before clearing the text screen.
+  await waitFor("fullscreen focus recovery repaint", /\x1b\[\?2026h[\s\S]*?\x1b\[2J[\s\S]*alpha\/model/i, focusRecoveryStart);
   // The editor must be constructed against the config-selected fullscreen TUI,
   // so delayed autocomplete repaints without a follow-up key.
   const completionStart = output.length;

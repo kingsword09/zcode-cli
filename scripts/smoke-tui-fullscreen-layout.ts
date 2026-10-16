@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { terminalOutputText as plain } from "./terminal-output.ts";
 import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -46,14 +47,6 @@ async function runPhase(options: { copyOnSelect: boolean; multiplexer?: boolean 
     terminal
   });
 
-  function plain(value: string): string {
-    return value
-      .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-      .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/g, "")
-      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-      .replace(/\x1b_p[^\x07]*\x07/g, "")
-      .replace(/\r/g, "");
-  }
 
   async function waitFor(pattern: RegExp, start = 0, timeoutMs = 8_000): Promise<void> {
     const startedAt = Date.now();

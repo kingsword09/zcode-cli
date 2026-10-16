@@ -5,6 +5,7 @@ import {
   Input,
   isKeyRelease,
   matchesKey,
+  renderFakeCursor,
   SelectList,
   truncateToWidth,
   type Component,
@@ -616,7 +617,8 @@ class PromptInput extends Input {
     const lines = super.render(width);
     if (!value && this.placeholderText && lines[0]) {
       const placeholder = this.theme.muted(this.placeholderText);
-      const line = lines[0].replace("\x1b[7m \x1b[27m", `\x1b[7m \x1b[27m${placeholder}`);
+      const cursor = renderFakeCursor(" ");
+      const line = lines[0].replace(cursor, `${cursor}${placeholder}`);
       return [truncateToWidth(line, width, "", true)];
     }
     return lines;
@@ -653,7 +655,7 @@ class PromptEditor extends Editor {
     const lines = super.render(width);
     if (this.getText() || !this.placeholder) return lines;
 
-    const cursor = "\x1b[7m \x1b[0m";
+    const cursor = renderFakeCursor(" ");
     const cursorLine = lines.findIndex((line) => line.includes(cursor));
     if (cursorLine >= 0) {
       lines[cursorLine] = truncateToWidth(

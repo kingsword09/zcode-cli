@@ -1,0 +1,19 @@
+diff --git a/src/sprintf.js b/src/sprintf.js
+index 65d6324645ef1d0133614a71497751009dc5c912..85b2285aa088ff3195ccbc611b262f4fe130bcd3 100644
+--- a/src/sprintf.js
++++ b/src/sprintf.js
+@@ -184,6 +184,13 @@
+                     throw new Error('[sprintf] mixing positional and named placeholders is not (yet) supported')
+                 }
+-
++
++                // GHSA-hp3w-g68c-fv3c: keep floating-point precision within
++                // the range accepted by toExponential/toFixed/toPrecision.
++                // Preserve string "0" so the formatter still applies %.0f/%.0e.
++                if (match[7] !== undefined && /[efg]/.test(match[8])) {
++                    match[7] = String(Math.min(100, Math.max(match[8] === 'g' ? 1 : 0, Number(match[7]))))
++                }
++
+                 parse_tree.push(
+                     {
+                         placeholder: match[0],

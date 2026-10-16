@@ -20,7 +20,6 @@ import {
   hasRuntimeSqliteBusyTimeout,
   hasRuntimeStreamEofFinishGuard,
   installRuntimeProviderConfig,
-  manifestUrl,
   parseArgs,
   parseRuntimePatchReports,
   parseRuntimeLock,
@@ -905,12 +904,6 @@ describe("runtime synchronization", () => {
     }
   });
 
-  test("maps supported static updater manifests", () => {
-    expect(manifestUrl("linux", "x64")).toMatch(/update\/linux\/x64\/latest-linux\.yml$/);
-    expect(manifestUrl("darwin", "arm64")).toMatch(/update\/mac\/arm64\/latest-mac\.yml$/);
-    expect(manifestUrl("win32", "x64")).toMatch(/update\/win\/x64\/latest\.yml$/);
-  });
-
   test("maps platforms to the Desktop stable update service", () => {
     expect(serviceReleasePlatform("linux", "x64")).toBe("linux-x86_64");
     expect(serviceReleasePlatform("darwin", "arm64")).toBe("darwin-aarch64");
@@ -957,48 +950,54 @@ describe("runtime synchronization", () => {
     expect(headers.get("X-Device-Mid")).toBeNull();
   });
 
-  test("falls back to the static manifest when the service manifest is unusable", async () => {
+  test("rejects an unusable service manifest without trying an obsolete CDN fallback", async () => {
     const calls: string[] = [];
     const sha512 = Buffer.alloc(64, 6).toString("base64");
-    const result = await resolveLatestRuntimeLock(
+    const resolution = resolveLatestRuntimeLock(
       { platform: "linux", arch: "x64" },
       async (url) => {
         calls.push(url);
-        if (calls.length === 1) {
-          return JSON.stringify({
-            version: "3.7.3",
-            files: [{ url: "ZCode.AppImage", sha512 }]
-          });
-        }
         return JSON.stringify({
-          version: "3.6.5",
-          files: [{ url: "ZCode-3.6.5-linux-x64.deb", sha512 }]
+          version: "3.7.3",
+          files: [{ url: "ZCode.AppImage", sha512 }]
         });
       }
     );
 
-    const fallbackUrl = manifestUrl("linux", "x64");
-    expect(calls).toEqual([serviceManifestUrl("linux", "x64"), fallbackUrl]);
-    expect(result).toEqual({
-      source: "static",
-      url: fallbackUrl,
-      lock: {
-        schemaVersion: 1,
-        appVersion: "3.6.5",
-        platform: "linux",
-        arch: "x64",
-        url: "https://cdn-zcode.z.ai/zcode/electron/releases/update/linux/x64/ZCode-3.6.5-linux-x64.deb",
-        sha512
-      }
-    });
+    await expect(resolution).rejects.toThrow("No .deb artifact with sha512");
+    await expect(resolution).rejects.toThrow("bun run sync:locked");
+    expect(calls).toEqual([serviceManifestUrl("linux", "x64")]);
   });
 
+  test.each(["linux", "darwin", "win32"] as const)(
+    "preserves %s service failures and explains how to use the existing lock explicitly",
+    async (platform) => {
+      const calls: string[] = [];
+      const cause = new Error("HTTP 503 Service Unavailable");
+      const resolution = resolveLatestRuntimeLock({ platform, arch: "x64" }, async (url) => {
+        calls.push(url);
+        throw cause;
+      });
+      try {
+        await resolution;
+        throw new Error("Expected manifest resolution to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).cause).toBe(cause);
+        expect((error as Error).message).toContain(`latest ZCode runtime for ${platform}-x64`);
+        expect((error as Error).message).toContain("bun run sync:locked");
+        expect((error as Error).message).toContain("without checking for a newer version");
+      }
+      expect(calls).toEqual([serviceManifestUrl(platform, "x64")]);
+    }
+  );
+
   test("resolves relative and absolute updater artifact URLs", () => {
-    const manifest = manifestUrl("linux", "x64");
+    const manifest = "https://zcode.z.ai/releases/latest.yml";
     const absolute = "https://cdn-zcode.z.ai/zcode/electron/releases/3.3.6/linux-x64/ZCode.deb";
 
     expect(resolveArtifactUrl(manifest, "ZCode.deb")).toBe(
-      "https://cdn-zcode.z.ai/zcode/electron/releases/update/linux/x64/ZCode.deb"
+      "https://zcode.z.ai/releases/ZCode.deb"
     );
     expect(resolveArtifactUrl(manifest, absolute)).toBe(absolute);
   });

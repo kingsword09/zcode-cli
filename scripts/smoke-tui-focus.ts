@@ -81,7 +81,7 @@ async function send(input: string): Promise<void> {
 
 async function focusCycle(label: string): Promise<void> {
   assert.equal(cursorVisible, true, `${label}: hardware cursor starts visible`);
-  assert.equal(caretInverse(), true, `${label}: drawn caret starts visible`);
+  assert.equal(caretInverse(), false, `${label}: hardware cursor is not doubled by a drawn caret`);
   const before = screenText();
   const position = { x: screen.buffer.active.cursorX, y: screen.buffer.active.cursorY };
   terminal.write("\x1b[O");
@@ -91,7 +91,7 @@ async function focusCycle(label: string): Promise<void> {
   assert.equal(cursorVisible, false, `${label}: repeated focus-out stays hidden`);
   assert.equal(caretInverse(), false, `${label}: repeated focus-out keeps the drawn caret hidden`);
   terminal.write("\x1b[I");
-  await waitFor(`${label}: both carets restored`, () => cursorVisible && caretInverse());
+  await waitFor(`${label}: hardware cursor restored`, () => cursorVisible && !caretInverse());
   assert.equal(screenText(), before, `${label}: restoring the caret preserves text`);
   assert.deepEqual(
     { x: screen.buffer.active.cursorX, y: screen.buffer.active.cursorY },
@@ -101,7 +101,7 @@ async function focusCycle(label: string): Promise<void> {
 }
 
 async function editorReady(): Promise<void> {
-  await waitFor("editor focus", () => cursorVisible && caretInverse() && screen.buffer.active.cursorY >= screen.rows - 5);
+  await waitFor("editor focus", () => cursorVisible && !caretInverse() && screen.buffer.active.cursorY >= screen.rows - 5);
 }
 
 async function openPrompt(mask: boolean): Promise<void> {
@@ -110,9 +110,10 @@ async function openPrompt(mask: boolean): Promise<void> {
   await waitFor("prompt picker", () => screenText().includes("Choose an input."));
   await send(mask ? "\x1b[B\r" : "\r");
   await waitFor("text prompt", () => screenText().includes(mask ? "Focus masked prompt" : "Focus text prompt"));
+  assert.ok(screenText().includes(mask ? "Secret placeholder" : "Text placeholder"), "empty prompt retains its placeholder");
   assert.equal(cursorVisible || caretInverse(), false, "opening a prompt while unfocused keeps carets hidden");
   await send("\x1b[I");
-  await waitFor("focused prompt", () => cursorVisible && caretInverse());
+  await waitFor("focused prompt", () => cursorVisible && !caretInverse());
 }
 
 async function resize(cols: number, rows: number): Promise<void> {
@@ -148,7 +149,7 @@ async function switchMode(next: "regular" | "fullscreen"): Promise<void> {
   assert.equal(cursorVisible, false, "mode switch preserves unfocused hardware cursor");
   assert.equal(caretInverse(), false, "mode switch preserves unfocused drawn caret");
   await send("\x1b[I");
-  await waitFor("mode switch restores editor caret", () => cursorVisible && caretInverse());
+  await waitFor("mode switch restores editor caret", () => cursorVisible && !caretInverse());
   await focusCycle(`editor after switch to ${next}`);
   if (next === "fullscreen") {
     await send("\x1b[102;6u");
@@ -159,8 +160,8 @@ async function switchMode(next: "regular" | "fullscreen"): Promise<void> {
 }
 
 try {
-  await waitFor("interactive editor", () => screenText().includes("alpha/model") && cursorVisible && caretInverse(), 20_000);
-  // No focus report has arrived: terminals without mode 1004 retain both carets.
+  await waitFor("interactive editor", () => screenText().includes("alpha/model") && cursorVisible && !caretInverse(), 20_000);
+  // No focus report has arrived: terminals without mode 1004 retain the hardware cursor.
   assert.ok(output.includes("\x1b[?1004h"), "focus reporting is enabled regardless of notification settings");
   await focusCycle("empty editor");
   await send("中文👩‍💻é");
@@ -174,19 +175,24 @@ try {
   terminal.write("\x1b[");
   await Bun.sleep(5); // Stay within the terminal parser's incomplete-CSI timeout.
   await send("I");
-  await waitFor("split focus-in", () => cursorVisible && caretInverse());
+  await waitFor("split focus-in", () => cursorVisible && !caretInverse());
   await send("\x1b[I\x1b[I");
-  assert.equal(cursorVisible && caretInverse(), true, "duplicate focus-in preserves the caret");
+  assert.equal(cursorVisible && !caretInverse(), true, "duplicate focus-in preserves the hardware cursor without a drawn caret");
 
   await send("Focus transcript fixture\r");
   await waitFor("transcript search fixture", () => screenText().includes("Focus fixture response."));
+  if (mode === "fullscreen") {
+    // Focus assertions compare identical content; let the first-turn welcome
+    // animation finish before taking the screen and cursor snapshots.
+    await waitFor("fullscreen welcome transition", () => !screenText().includes("Ask a task about this workspace"));
+  }
   await send("/search Focus\r");
   await waitFor("slash-command search", () => /Search 1\/\d+: Focus/.test(screenText()));
   await focusCycle("slash-command search with matching text");
   await send("\x1b[O");
   assert.ok(inverseCount() > 0, "slash-command search highlighting survives focus loss");
   await send("\x1b[I");
-  await waitFor("editor after slash-command search", () => cursorVisible && caretInverse());
+  await waitFor("editor after slash-command search", () => cursorVisible && !caretInverse());
   await send("/search clear\r");
   await waitFor("slash-command search cleared", () => !/Search \d+\/\d+: Focus/.test(screenText()));
 
@@ -213,7 +219,7 @@ try {
     await resize(48, 18);
     assert.equal(cursorVisible || caretInverse(), false, "resizing preserves unfocused carets");
     await send("\x1b[I");
-    await waitFor("search restored after resize", () => cursorVisible && caretInverse());
+    await waitFor("search restored after resize", () => cursorVisible && !caretInverse());
     await focusCycle("narrow search");
     await resize(100, 32);
     await send("\x1b");
@@ -232,21 +238,21 @@ try {
     await send("\x1b");
     assert.equal(cursorVisible || caretInverse(), false, "closing a prompt while unfocused keeps carets hidden");
     await send("\x1b[I");
-    await waitFor("editor after prompt", () => cursorVisible && caretInverse());
+    await waitFor("editor after prompt", () => cursorVisible && !caretInverse());
   }
 
   await send("/focus-stream\r\x1b[O");
   await waitFor("background redraw", () => screenText().includes("Stream focus still running finished."));
   assert.equal(cursorVisible || caretInverse(), false, "stream redraw stays unfocused");
   await send("\x1b[I");
-  await waitFor("editor after stream", () => cursorVisible && caretInverse());
+  await waitFor("editor after stream", () => cursorVisible && !caretInverse());
   // Establish the last known state before the login command disables reports.
   await send("\x1b[O");
   await send("/login\r");
   await waitFor("suspended login resumed", () => output.includes("Focus fixture login finished.") && screenText().includes("Login command finished,"));
   assert.equal(cursorVisible || caretInverse(), false, "login resume preserves last known focus");
   await send("\x1b[I");
-  await waitFor("editor after login", () => cursorVisible && caretInverse());
+  await waitFor("editor after login", () => cursorVisible && !caretInverse());
   await focusCycle("editor after suspended login");
 
   await switchMode(mode === "fullscreen" ? "regular" : "fullscreen");

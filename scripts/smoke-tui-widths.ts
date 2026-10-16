@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { terminalOutputText as plainText } from "./terminal-output.ts";
 import { runtimeTestEnv } from "./runtime-test-env.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,13 +9,6 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..");
 const fixture = join(root, "test", "fixtures", "tui-features.ts");
 
-function plainText(value: string): string {
-  return value
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/gu, "")
-    .replace(/\x1bP[^\x07]*(?:\x07|\x1b\\)/gu, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/\r/gu, "");
-}
 
 async function verifyWidth(
   width: number,

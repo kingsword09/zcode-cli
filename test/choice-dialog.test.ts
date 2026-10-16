@@ -261,7 +261,7 @@ describe("TUI choice dialog", () => {
       }
     } as unknown as TUI;
     root.addChild(host);
-    const caret = () => /\x1b\[7m[^\x1b]*\x1b\[(?:0|27)m/.test(root.render(80).join("\n"));
+    const caret = () => root.render(80).join("\n").includes("\x1b_pi:fc\x07");
 
     let terminalFocused = false;
     const pending = promptText(ui, host, createTheme(false), {

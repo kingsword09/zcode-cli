@@ -1,3 +1,4 @@
+import { terminalOutputText as plainText } from "../../scripts/terminal-output.ts";
 import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,10 +13,6 @@ const node = Bun.which("node")!;
 const configuredContextWindow = 1_000_000;
 const fixtureReply = "CONTEXT_WINDOW_REPLY";
 
-function plainText(text: string): string {
-  return text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
-}
 
 /** A real runtime and session store; only the model HTTP endpoint is mocked. */
 async function fixture() {
@@ -117,4 +114,3 @@ test.skipIf(process.platform === "win32")(
   },
   40_000
 );
-

@@ -21,6 +21,7 @@ export const sqliteWriteRecoveryPolicy = {
 
 // Audited against ZCode 29628c9: native transactions roll back before throwing;
 // nontransactional methods upsert/delete stable IDs and preserve input/message sequences.
+// Rechecked 2026-10-16 against aac4755: the session-store facade is unchanged.
 export const sqliteReplayableWrites = [
   "createSession", "updateSession", "createForkedSessionWithMetadata", "commitForkBundle",
   "commitSharedContextImportBundle", "transitionSharedContextImport", "saveMessage",

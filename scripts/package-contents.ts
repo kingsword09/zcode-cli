@@ -22,6 +22,7 @@ export const publishedFiles = [
   "docs/CONFIGURATION.zh-CN.md",
   "docs/PROVIDER_CONFIG.md",
   "docs/PROVIDER_CONFIG.zh-CN.md",
+  "docs/HOST_INTEGRATION.md",
   ...attributionFiles,
   "zcode-runtime.lock.json",
   "README.md",

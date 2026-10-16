@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Editor, visibleWidth, type TUI } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Editor, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { PlanEditor } from "../packages/zcode-tui/src/plan-editor.ts";
 import { createTheme } from "../packages/zcode-tui/src/theme.ts";
 
@@ -30,8 +30,9 @@ test("Plan uses the existing border without moving the editor cursor or adding r
       if (text) expect(after.slice(1)).toEqual(before.slice(1));
       else {
         expect(editor.getText()).toBe("");
-        expect(after[1]?.slice(0, after[1].indexOf("\x1b[7m") + 4))
-          .toBe(before[1]?.slice(0, before[1].indexOf("\x1b[7m") + 4));
+        expect(after[1]).toContain(CURSOR_MARKER);
+        expect(after[1]?.slice(0, after[1].indexOf(CURSOR_MARKER) + CURSOR_MARKER.length))
+          .toBe(before[1]?.slice(0, before[1].indexOf(CURSOR_MARKER) + CURSOR_MARKER.length));
         expect(visibleWidth(after[1]!)).toBe(width);
       }
       if (width >= 40 && before[0]?.includes("↑")) expect(after[0]).toContain("↑");
@@ -48,8 +49,8 @@ test("terminal-unfocused rendering drops the drawn caret without changing cells"
       const focused = editor.render(width);
       editor.isTerminalFocused = () => false;
       const unfocused = editor.render(width);
-      expect(focused.join("").includes("\x1b[7m")).toBe(true);
-      expect(unfocused.join("").includes("\x1b[7m")).toBe(false);
+      expect(focused.join("")).toContain("\x1b_pi:fc\x07");
+      expect(unfocused.join("")).not.toContain("\x1b_pi:fc\x07");
       expect(unfocused.length).toBe(focused.length);
       for (let i = 0; i < focused.length; i++) {
         expect(visibleWidth(unfocused[i]!)).toBe(visibleWidth(focused[i]!));
