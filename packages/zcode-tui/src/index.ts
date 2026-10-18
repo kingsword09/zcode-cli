@@ -52,6 +52,7 @@ import {
 import { AttachmentBar } from "./attachment-bar.ts";
 import { AssistantStream } from "./assistant-stream.ts";
 import { BackgroundTaskEventStore } from "./background-task-events.ts";
+import { deliveredBackgroundTaskIds } from "./background-task-notifications.ts";
 import { readBackgroundTaskOutput } from "./background-task-output.ts";
 import { BoundedToolText, toolTextValue } from "./bounded-tool-text.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
@@ -698,6 +699,8 @@ class ZCodeTui {
   private unsubscribeSession?: () => void;
   private readonly backgroundTaskEvents = new BackgroundTaskEventStore();
   private readonly restoredNoticeSeen = new Set<string>();
+  private readonly notifiedBackgroundTaskIds = new Set<string>();
+  private transcriptNotificationsReady = false;
   private readonly turnWork = new TurnWorkTracker();
   private readonly backgroundCoordinatorMessageIds = new Set<string>();
   private workflowPanel?: Record<string, unknown>;
@@ -2647,8 +2650,23 @@ class ZCodeTui {
       });
       void this.notifications.notify(notice.notification, notice.detail ?? `${notice.title} · ${notice.summary}`);
     }
-    if (update.handoffSettled) this.drainInputAfterBackgroundHandoff();
+    if (update.handoffSettled) {
+      this.renderSettledHandoffResponse(update.settledTurnId);
+      this.drainInputAfterBackgroundHandoff();
+    }
     if (update.changed || update.notices.length > 0) this.requestStreamRender();
+  }
+
+  /**
+   * Turns that a background task handed off to are task-scoped out of the
+   * main transcript while they run, so without this the response to a
+   * completed task is only reachable from /tasks and the assistant appears to
+   * stay silent after "Background task completed".
+   */
+  private renderSettledHandoffResponse(turnId: string | undefined): void {
+    if (!turnId) return;
+    const text = this.backgroundTaskEvents.takeHandoffText(turnId);
+    if (text && text.trim()) this.addAssistantMessage(text);
   }
 
   private drainInputAfterBackgroundHandoff(): void {
@@ -3377,6 +3395,8 @@ class ZCodeTui {
     this.currentToolGroupBlockId = undefined;
     this.currentToolGroupMessageId = undefined;
     this.assistantStream.breakSegment();
+    for (const taskId of deliveredBackgroundTaskIds(messages)) this.notifiedBackgroundTaskIds.add(taskId);
+    this.transcriptNotificationsReady = true;
     if (lastAssistantModel) this.model = lastAssistantModel;
   }
 
@@ -5507,6 +5527,9 @@ class ZCodeTui {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.addNotice(`Unable to restore session transcript: ${message}`, "warning");
+        // Classification of restored notifications degrades to unfiltered;
+        // the transcript history itself is unavailable either way.
+        this.transcriptNotificationsReady = true;
       }
     }
     await this.restoreSessionModel();
@@ -5779,7 +5802,14 @@ class ZCodeTui {
    * model-facing task_status attachment alone does not reach the user.
    */
   private noticeRestoredBackgroundTasks(projection: RuntimeProjectionSnapshot): void {
-    for (const job of projection.restoredBackgroundTasks ?? []) {
+    // Classification needs the restored transcript; until it loads, a
+    // delivered notification is indistinguishable from a silent one.
+    if (!this.transcriptNotificationsReady) return;
+    const jobs = projection.restoredBackgroundTasks ?? [];
+    for (const job of jobs) {
+      // Terminal notifications already present in the conversation were
+      // consumed by a prior turn; re-announcing them is pure noise.
+      if (this.notifiedBackgroundTaskIds.has(job.taskId)) continue;
       const seenKey = `${projection.sessionId ?? ""}/${job.taskId}`;
       if (this.restoredNoticeSeen.has(seenKey)) continue;
       this.restoredNoticeSeen.add(seenKey);

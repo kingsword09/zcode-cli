@@ -23,6 +23,7 @@ export interface TaskEventUpdate {
   changed: boolean;
   handoffSettled: boolean;
   notices: TaskEventNotice[];
+  settledTurnId?: string;
 }
 
 interface HandoffTurn {
@@ -107,6 +108,7 @@ function toolScope(event: StreamEvent): {
 export class BackgroundTaskEventStore {
   private readonly activities = new Map<string, TaskActivityEntry[]>();
   private readonly handoffTurns = new Map<string, HandoffTurn>();
+  private readonly handoffTexts = new Map<string, string>();
   private readonly pendingBackgroundTasks = new Set<string>();
   private readonly pendingSubagentMessages = new Set<string>();
   private readonly scopedTurnIds = new Set<string>();
@@ -125,6 +127,7 @@ export class BackgroundTaskEventStore {
     const notices: TaskEventNotice[] = [];
     let changed = false;
     let handoffSettled = false;
+    let settledTurnId: string | undefined;
     const taskId = taskIdFor(event);
 
     if (event.type === "background_task_completed" && taskId) {
@@ -195,6 +198,7 @@ export class BackgroundTaskEventStore {
     if (handoff && (completed || failed)) {
       this.handoffTurns.delete(event.turnId!);
       handoffSettled = true;
+      settledTurnId = event.turnId;
       if (failed) {
         const detail = event.message ?? "The task finished, but ZCode could not process its result.";
         for (const id of handoff.taskIds) this.record(id, "error", detail, event.turnId);
@@ -210,7 +214,18 @@ export class BackgroundTaskEventStore {
       }
     }
 
-    return { changed, handoffSettled, notices };
+    return { changed, handoffSettled, notices, settledTurnId };
+  }
+
+  /**
+   * The response text a background handoff turn produced for the conversation.
+   * Handoff turns are task-scoped away from the main transcript while they
+   * run, so the transcript render needs the accumulated text when they settle.
+   */
+  takeHandoffText(turnId: string): string | undefined {
+    const text = this.handoffTexts.get(turnId);
+    this.handoffTexts.delete(turnId);
+    return text;
   }
 
   entries(taskId: string): readonly TaskActivityEntry[] {
@@ -224,6 +239,7 @@ export class BackgroundTaskEventStore {
   settleActiveHandoffs(): number {
     const count = this.handoffTurns.size;
     this.handoffTurns.clear();
+    this.handoffTexts.clear();
     return count;
   }
 
@@ -252,6 +268,12 @@ export class BackgroundTaskEventStore {
   }
 
   private appendHandoffDelta(taskId: string, turnId: string, delta: string): void {
+    const accumulated = bounded((this.handoffTexts.get(turnId) ?? "") + delta);
+    this.handoffTexts.set(turnId, accumulated);
+    if (this.handoffTexts.size > 32) {
+      const oldest = this.handoffTexts.keys().next().value;
+      if (oldest !== undefined && oldest !== turnId) this.handoffTexts.delete(oldest);
+    }
     const entries = this.activities.get(taskId) ?? [];
     const id = `handoff:${turnId}`;
     const existing = entries.find((entry) => entry.id === id);

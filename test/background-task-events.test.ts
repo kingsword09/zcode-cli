@@ -10,6 +10,64 @@ function event(value: unknown) {
 }
 
 describe("background task event store", () => {
+  test("exposes the settled handoff turn's response text exactly once", () => {
+    const store = new BackgroundTaskEventStore();
+    store.handle(event({
+      id: "text-task-completed",
+      type: "background_task_completed",
+      payload: { taskId: "bg-text", status: "completed" }
+    }));
+    store.handle(event({
+      id: "text-handoff-started",
+      type: "turn_started",
+      turnId: "handoff-text-turn",
+      payload: { inputSource: "background_task" }
+    }));
+    store.handle(event({
+      id: "text-handoff-delta-1",
+      type: "model.streaming",
+      turnId: "handoff-text-turn",
+      payload: { kind: "text_delta", delta: "Result processed." }
+    }));
+    store.handle(event({
+      id: "text-handoff-delta-2",
+      type: "model.streaming",
+      turnId: "handoff-text-turn",
+      payload: { kind: "text_delta", delta: " All clear." }
+    }));
+    const settled = store.handle(event({
+      id: "text-handoff-completed",
+      type: "turn_complete",
+      turnId: "handoff-text-turn",
+      payload: {}
+    }));
+
+    expect(settled.handoffSettled).toBe(true);
+    expect(settled.settledTurnId).toBe("handoff-text-turn");
+    expect(store.takeHandoffText("handoff-text-turn")).toBe("Result processed. All clear.");
+    expect(store.takeHandoffText("handoff-text-turn")).toBeUndefined();
+  });
+
+  test("drops pending handoff response text when the user preempts the handoff", () => {
+    const store = new BackgroundTaskEventStore();
+    store.handle(event({
+      id: "preempt-handoff-started",
+      type: "turn_started",
+      turnId: "preempted-handoff-turn",
+      payload: { inputSource: "background_task" }
+    }));
+    store.handle(event({
+      id: "preempt-handoff-delta",
+      type: "model.streaming",
+      turnId: "preempted-handoff-turn",
+      payload: { kind: "text_delta", delta: "Partial response." }
+    }));
+
+    store.settleActiveHandoffs();
+
+    expect(store.takeHandoffText("preempted-handoff-turn")).toBeUndefined();
+  });
+
   test("scopes subagent execution without starting a foreground result handoff", () => {
     const store = new BackgroundTaskEventStore();
     const started = event({
