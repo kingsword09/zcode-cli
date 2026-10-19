@@ -5531,7 +5531,7 @@ class ZCodeTui {
         // the transcript history itself is unavailable either way.
         this.transcriptNotificationsReady = true;
       }
-    }
+    } else this.transcriptNotificationsReady = true;
     await this.restoreSessionModel();
   }
 
