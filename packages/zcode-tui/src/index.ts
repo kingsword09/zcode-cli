@@ -319,7 +319,7 @@ const exitUsageQueryTimeoutMs = 250;
 const fullscreenWelcomeTransitionMs = 180;
 const terminalFocusIn = "\x1b[I";
 const updateAvailableBlockId = "update_available";
-const modelRetryBlockIdPrefix = "model_retry_status";
+const modelStatusBlockIdPrefix = "model_status";
 const questionBackValue = "__back__";
 const questionOtherValue = "__other__";
 const questionDoneValue = "__done__";
@@ -662,7 +662,7 @@ class ZCodeTui {
   private activeTurnId?: string;
   private turnEpoch = 0;
   private activeTurnEpoch?: number;
-  private modelRetryBlockId?: string;
+  private modelStatusBlockId?: string;
   private pendingSteerInterrupt?: PendingSteerInterrupt;
   private recentSteerCommit?: { at: number; turnEpoch: number };
   private currentThinking?: ThinkingView;
@@ -2450,15 +2450,22 @@ class ZCodeTui {
         title: event.type === "streamRecovery.updated" ? "Recovering model stream" : "Retrying model request",
         summary: [retry, delay].filter(Boolean).join(" · "),
         detail: event.message
-      }, this.modelRetryBlockId);
+      }, this.modelStatusBlockId);
     } else if (event.type === "model_request_failed") {
       if (!isModelCancellationEvent(event)) {
         this.updateActivity(
           event.retryable === true ? "model request failed · waiting to retry…" : "model request failed…",
           false
         );
+        // A failed attempt is turn status, not a transcript record: the runtime
+        // can still recover it (stream recovery, model fallback), so it updates the
+        // per-turn status row instead of appending one error row per attempt.
         if (event.retryable !== true) {
-          this.addSystemEvent({ tone: "error", title: "Model request failed", detail: event.message });
+          this.addSystemEvent({
+            tone: "error",
+            title: "Model request failed",
+            detail: event.message
+          }, this.modelStatusBlockId);
         }
       }
     } else if (event.type === "model_stream_stalled") {
@@ -2469,9 +2476,10 @@ class ZCodeTui {
         title: "Model stream stalled",
         summary: idle,
         detail: event.message
-      });
+      }, this.modelStatusBlockId);
     } else if (event.type === "model_request_completed") {
       this.updateActivity("processing model response…", false);
+      this.clearModelStatus();
     } else if (event.type === "compact_boundary" || event.type === "session_compacted") {
       this.addSystemEvent({
         tone: "muted",
@@ -2873,7 +2881,7 @@ class ZCodeTui {
   private beginTurn(prompt?: string): void {
     this.completeThinking();
     this.presentationRegistry.beginTurn();
-    this.modelRetryBlockId = `${modelRetryBlockIdPrefix}_${this.turnEpoch}`;
+    this.modelStatusBlockId = `${modelStatusBlockIdPrefix}_${this.turnEpoch}`;
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
     this.currentToolGroup = undefined;
@@ -3004,6 +3012,15 @@ class ZCodeTui {
       id: blockId,
       kind: "system-event"
     });
+    this.ui.requestRender();
+  }
+
+  /**
+   * The model status row reports the current attempt (stalled, failed, retrying).
+   * A completed request proves the connection is back, so the row must not outlive it.
+   */
+  private clearModelStatus(): void {
+    if (!this.modelStatusBlockId || !this.transcript.removeBlock(this.modelStatusBlockId)) return;
     this.ui.requestRender();
   }
 

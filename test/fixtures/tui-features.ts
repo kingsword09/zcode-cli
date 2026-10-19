@@ -52,6 +52,10 @@ let goal = {
   timeUsedSeconds: 120
 };
 
+// Model status rows are replaced in place and cleared once a request completes,
+// so the smoke test needs a window to observe each step.
+const statusObservationMilliseconds = 400;
+
 const assistantResponse = [
   "Feature prompt complete.",
   "",
@@ -751,6 +755,9 @@ await runTui({
       timeoutMs: 60_000,
       message: "Model stream stalled: no event received for 60000ms."
     });
+    // The status row is replaced in place and cleared once a request completes,
+    // so keep each step observable for the smoke assertions.
+    await Bun.sleep(statusObservationMilliseconds);
     await emitRuntime(options, "model.network_status", {
       type: "model_request_failed",
       attempt: 1,
@@ -767,6 +774,7 @@ await runTui({
       retryable: true,
       message: "Retrying after model stream idle timeout."
     });
+    await Bun.sleep(statusObservationMilliseconds);
     await emitRuntime(options, "model.network_status", {
       type: "model_request_started",
       attempt: 2,
