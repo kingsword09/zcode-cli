@@ -320,7 +320,14 @@ try {
     /Background result processing was interrupted; starting your queued input\.[\s\S]*Queued input started after interrupting the stuck background handoff\./i
   );
   const foregroundBeforeTaskCenter = plainText(output.slice(featureTurnStart));
-  if (/Task-scoped agent handoff completed|Coordinator began processing the failed task result|Background-only reasoning|background_fetch|Coordinator dispatching background research|background-research|Inspect nested rendering|RAW_CHILD_/i.test(foregroundBeforeTaskCenter)) {
+  // Settled handoff responses are rendered into the foreground transcript on
+  // purpose; the task's internal activity must stay scoped to /tasks.
+  for (const response of ["Task-scoped agent handoff completed.", "Coordinator began processing the failed task result."]) {
+    if (!foregroundBeforeTaskCenter.includes(response)) {
+      throw new Error(`Settled background handoff response is missing from the foreground transcript: ${response}`);
+    }
+  }
+  if (/Background-only reasoning|background_fetch|Coordinator dispatching background research|background-research|Inspect nested rendering|RAW_CHILD_/i.test(foregroundBeforeTaskCenter)) {
     throw new Error("Task-scoped background output leaked into the foreground transcript.");
   }
   if (!/TaskOutput task agent_feature[\s\S]*Compact child result preserved\./i.test(foregroundBeforeTaskCenter)) {
