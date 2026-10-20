@@ -39,18 +39,21 @@ SQLite and bounded backoff, not by the process-local queue.
 
 The operation allowlist and maintenance SQL were reviewed against upstream
 `zai-org/ZCode` commit `29628c9acdb81b703bbd4080c207a0e7ce5e276e`.
-On 2026-10-16 the store implementation was rechecked against
-`aac4755666d09fdcd70272fcf063c077a639015f` (public 3.15.1); the
-`sqlite-session-store.ts` facade is unchanged between those revisions. These
-source references do not identify the separate Desktop artifact's build commit.
-The required
-`sqlite-write-recovery` patch validates both post-migration hooks and the native
-cleanup transaction. Missing, ambiguous or partially patched anchors stop
-synchronization. The implementation is in `src/runtime-sqlite-recovery.ts`,
-with scoped native waits and cleanup admission in its two SQLite helpers;
-`vendor/cli-config.cjs` is their existing distribution boundary.
+On 2026-10-20 the store implementation was rechecked against
+`0a1fc56d279fd1001f78387bd81aec1c26767411` (public 0.17.0 / Desktop 3.16.2).
+That revision replaces the synchronous constructor and the separate
+`openStartup()` migration with one `SqliteSessionStore.open()` path, adds
+`softDeleteSession`, and runs checksum-validated migrations with a backup
+directory. These source references do not identify the separate Desktop
+artifact's build commit.
+The required `sqlite-write-recovery` patch validates the single post-migration
+hook and the native cleanup transaction. Missing, ambiguous or partially
+patched anchors stop synchronization. The implementation is in
+`src/runtime-sqlite-recovery.ts`, with scoped native waits and cleanup admission
+in its two SQLite helpers; `vendor/cli-config.cjs` is their existing
+distribution boundary.
 
-Required regression coverage includes both store-open paths, recovered and
+Required regression coverage includes the single store-open path, recovered and
 exhausted locks, responsive timers during backoff, same-process connections,
 input-promotion rollback, ordered updates, close during recovery, preserved
 non-BUSY errors, and sustained writes from 10–15 independent processes. Cleanup
@@ -64,9 +67,12 @@ The CLI's shared session database uses SQLite WAL. Readers can overlap a writer,
 but different CLI processes still serialize writes to this file. The original
 #163 mitigation sets a 10-second connection timeout after initialization. This
 remains the default outside the scoped retryable calls described above.
-Both the synchronous constructor and asynchronous `openStartup()` path apply this
-setting **after** migrations finish. Startup migration lock budgets, short busy
-waits, backoff, rollback, and failure cleanup are unchanged.
+Desktop 3.16.2 opens the store once through `SqliteSessionStore.open()`; its
+migration helper restores a 5-second `busy_timeout` in `finally`, so the patch
+re-applies 10 seconds on the same connection before the store is returned.
+Startup migration lock budgets, short busy waits, backoff, rollback, and failure
+cleanup are unchanged. The runtime creates a migration backup under the CLI data
+root and validates `schema_migration` checksums before applying SQL.
 
 This is a bounded contention mitigation, not unlimited concurrency or a retry of
 an entire agent turn. A lock held beyond the budget can still fail. The change
@@ -121,7 +127,7 @@ is not used as a substitute for Node's SQLite driver.
 
 ## Follow-up boundary
 
-The current lock selects Desktop 3.15.3 / runtime 0.16.9. Rebuild with
+The current lock selects Desktop 3.16.2 / runtime 0.17.0. Rebuild with
 `sync:locked` before release validation; `sync:local` records a local App source
 and does not establish the locked installer's provenance. The regressions do
 not establish that every production workload is free of contention. Keep #162

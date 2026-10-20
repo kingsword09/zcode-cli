@@ -18,6 +18,7 @@ import {
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeSqliteBusyTimeout,
+  hasRuntimeSqliteWriteRecovery,
   hasRuntimeStreamEofFinishGuard,
   installRuntimeProviderConfig,
   parseArgs,
@@ -36,6 +37,7 @@ import {
   patchRuntimeOAuthHttpErrors,
   patchRuntimeSessionModelRecovery,
   patchRuntimeSqliteBusyTimeout,
+  patchRuntimeSqliteWriteRecovery,
   patchRuntimeStreamEofFinishGuard,
   patchRuntimeTerminalToolProjection,
   patchRuntimeTuiBridge as patchExtractedRuntimeTuiBridge,
@@ -156,14 +158,17 @@ describe("runtime synchronization", () => {
   });
 
   test.each(["", "saved&&ok&&!ok.ok&&Boolean(ok.code),"])("adds session recovery at native restore and execution boundaries with diagnostics %j", async (diagnostic) => {
-    const runtime = 'async function app(options){let read=()=>runtime,restore=label(async()=>{let ok=saved&&registry.validateSelection(saved);return '
-      + diagnostic + 'read().setSessionModelSelection(ok?.ok?saved:void 0),saved},"restorePersistedModelSelection"),prepare=label(async args=>{await options.prepareUserExecutionBoundary(args)},"preparePromptBoundary");return{restore,prepare,getModelOption:label(model=>lookup(context.providerRegistry,model),"getModelOption")}}';
+    const runtime = 'async function app(options){let cliDefault={set(){}},read=()=>runtime,restore=label(async()=>{let ok=saved&&registry.validateSelection(saved);return '
+      + diagnostic + 'read().setSessionModelSelection(ok?.ok?saved:void 0),cliDefault?.set(ok?.ok?saved:void 0),saved},"restorePersistedModelSelection"),prepare=label(async args=>{await options.prepareUserExecutionBoundary(args)},"preparePromptBoundary");return{restore,prepare,getModelOption:label(model=>lookup(context.providerRegistry,model),"getModelOption")}}';
     const patched = patchRuntimeSessionModelRecovery(runtime);
     expect(patched).toContain('readSessionModelState:label(async()=>await');
     expect(patched).toContain('read().$zRestoredSessionModel={selection:saved,registry:registry}');
+    expect(patched).toContain('cliDefaultSelection?.get?.()');
     expect(patched).toContain('assertSessionModelReady({registry:options.runtime.$zRestoredSessionModel?.registry');
     expect(patchRuntimeSessionModelRecovery(patched)).toBe(patched);
     expect(() => patchRuntimeSessionModelRecovery(runtime.replace('"restorePersistedModelSelection"', '"renamed"')))
+      .toThrow("restore/facade anchors missing");
+    expect(() => patchRuntimeSessionModelRecovery(runtime.replace(",cliDefault?.set(ok?.ok?saved:void 0)", "")))
       .toThrow("restore/facade anchors missing");
     const saved = { providerId: "old", modelId: "model" };
     const registry = {
@@ -180,6 +185,13 @@ describe("runtime synchronization", () => {
     const facade = await create({ runtime: core, sessionId: "test", prepareUserExecutionBoundary: async () => { await facade.restore(); } });
     await expect(facade.prepare({})).rejects.toThrow("the provider is unavailable");
     await expect(facade.prepare({ intent: { modelSelection: { providerId: "valid", modelId: "model" } } })).resolves.toBeUndefined();
+    // cli-default admission reads CliDefaultSelection; a replacement chosen there must clear the saved-model block.
+    const recovered = await create({
+      runtime: core, sessionId: "test",
+      cliDefaultSelection: { get: () => ({ providerId: "valid", modelId: "model" }) },
+      prepareUserExecutionBoundary: async () => { await recovered.restore(); }
+    });
+    await expect(recovered.prepare({})).resolves.toBeUndefined();
   });
 
   test("projects native planEnabled separately from permission mode", async () => {
@@ -263,7 +275,7 @@ describe("runtime synchronization", () => {
       'async function persist(e){let p=await resolveProvider(e.providerId,e.env),id=p.providerId,model=p.modelId,unused;await store.saveConfiguredDefault({providerId:id,modelId:model});return saved}',
       'function initial(e){return e.configuredDefault?.options?.reasoningLevel?e.configuredDefault:{providerId:"wrong",modelId:"fallback"}}',
       'function complete(registry,selection){return {...selection,options:{reasoningLevel:"high"}}}',
-      'function switchModel(e,t){let selected=t;return e.runtime.setSessionModelSelection(selected),t?.transient||void 0,selected}',
+      'function switchModel(e,t){let selected=t;return e.cliDefaultSelection&&(!t?.transient||t?.cliDefault)?e.cliDefaultSelection.set(selected):e.runtime.setSessionModelSelection(selected),t?.transient||void 0,selected}',
       'label(initial,"resolveInitialModelSelection");label(complete,"completeNewModelSelection");',
       'label(catalog,"readStandaloneCodingPlanCatalog");label(resolveProvider,"resolveStandaloneCodingPlanProvider");label(persist,"persistStandaloneCodingPlanConnection");'
     ].join("");
@@ -282,8 +294,17 @@ describe("runtime synchronization", () => {
     const context = { runtime: { setSessionModelSelection: () => {} }, providerRegistry: { getView: () => ({}) } };
     expect(switchModel(context, { providerId: "custom", modelId: "chosen" })).toMatchObject({ options: { reasoningLevel: "high" } });
     expect(switchModel(context, { providerId: "custom", modelId: "chosen", options: { reasoningLevel: "low" } })).toMatchObject({ options: { reasoningLevel: "low" } });
+    let cliSelection: unknown;
+    const cliContext = {
+      runtime: { setSessionModelSelection: () => { throw new Error("session write"); } },
+      cliDefaultSelection: { set: (value: unknown) => { cliSelection = value; } },
+      providerRegistry: { getView: () => ({}) }
+    };
+    expect(switchModel(cliContext, { providerId: "custom", modelId: "chosen" })).toMatchObject({ options: { reasoningLevel: "high" } });
+    expect(cliSelection).toMatchObject({ options: { reasoningLevel: "high" } });
     await expect(persist({ providerId: "bigmodel", env })).rejects.toThrow("ambiguous provider");
     expect(() => patchRuntimeLoginModelDefaults(source.replace("modelId:model}", "modelId:hardcoded}"))).toThrow("anchors missing");
+    expect(() => patchRuntimeLoginModelDefaults(source.replace("e.cliDefaultSelection&&", "false&&"))).toThrow(/model switch anchor missing/);
   });
 
   test("pins the exact remote runtime used by release workflows", async () => {
@@ -482,12 +503,13 @@ describe("runtime synchronization", () => {
     expect(fixture.toWebResponse(fixture.readIncomingResponse({ statusCode: 200 })).body).not.toBeNull();
   });
 
-  test("sets the SQLite write timeout after both migration paths without changing startup budgets", async () => {
+  test("sets the SQLite write timeout after the single async migration open", async () => {
     const runtime = [
-      'const deferred=Symbol();class Store{constructor(t={},n){this.dbPath=t.dbPath??"fixture.sqlite";let r=t.startupLockTimeoutMs??5e3;',
-      'this.db=new sqlite.DatabaseSync(this.dbPath,{timeout:r});',
-      'try{n!==deferred&&migrateSync(this.db,this.dbPath,r)}catch(e){this.db.close();throw e}}',
-      'static async openStartup(t={},n={}){let o=new Store(t,deferred);try{return await migrateAsync(o.db,o.dbPath,n),o}catch(e){try{o.close()}catch{}throw e}}',
+      'class Store{',
+      'static async open(t={},n={}){let o=t.dbPath??"fixture.sqlite",i=t.startupLockTimeoutMs??5e3;',
+      'let a=new sqlite.DatabaseSync(o,{timeout:i});',
+      'try{let c=await migrateAsync(a,o,n??{lockWaitTimeoutMs:i});return new Store(a,o,t,c)}catch(e){try{a.close()}catch{}throw e}}',
+      'constructor(a,o,t,c){this.db=a;this.dbPath=o;this.migrationResult=c}',
       'close(){this.db.close()}}'
     ].join("");
     const patched = patchRuntimeSqliteBusyTimeout(runtime);
@@ -505,41 +527,83 @@ describe("runtime synchronization", () => {
         this.close = () => { statements.push("close"); };
       }
     };
-    const Store = new Function("sqlite", "migrateSync", "migrateAsync", `${patched};return Store;`)(
+    const Store = new Function("sqlite", "migrateAsync", `${patched};return Store;`)(
       sqlite,
-      (_db: Database, _path: string, timeout: number) => {
-        statements.push(`sync migration budget: ${timeout}`);
-        if (migrationFailure) throw new Error("migration failed");
-      },
       async (db: Database) => {
         db.exec("pragma busy_timeout = 25");
         try { if (migrationFailure) throw new Error("migration failed"); }
         finally { db.exec("pragma busy_timeout = 5000"); }
       }
     );
-    new Store({ startupLockTimeoutMs: 2500 });
+    await Store.open({ startupLockTimeoutMs: 2500 });
     expect(opened).toEqual([{ options: { timeout: 2500 }, path: "fixture.sqlite" }]);
-    expect(statements).toEqual(["sync migration budget: 2500", `pragma busy_timeout = ${sqliteBusyTimeoutMs}`]);
-    statements.length = 0;
-    await Store.openStartup();
     expect(statements).toEqual(["pragma busy_timeout = 25", "pragma busy_timeout = 5000", `pragma busy_timeout = ${sqliteBusyTimeoutMs}`]);
 
     // Failed migration paths must close the connection, not hand it to callers.
     migrationFailure = true;
     statements.length = 0;
-    await expect(Store.openStartup()).rejects.toThrow("migration failed");
+    await expect(Store.open()).rejects.toThrow("migration failed");
     expect(statements).toEqual(["pragma busy_timeout = 25", "pragma busy_timeout = 5000", "close"]);
-    statements.length = 0;
-    expect(() => new Store()).toThrow("migration failed");
-    expect(statements).toEqual(["sync migration budget: 5000", "close"]);
     expect(patchRuntimeSqliteBusyTimeout(patched)).toBe(patched);
-    expect(() => patchRuntimeSqliteBusyTimeout("incompatible runtime")).toThrow(/migration anchors/);
+    expect(() => patchRuntimeSqliteBusyTimeout("incompatible runtime")).toThrow(/store open anchor/);
     expect(() => patchRuntimeSqliteBusyTimeout(runtime.replace("await migrateAsync", "await changed"))).not.toThrow();
-    expect(() => patchRuntimeSqliteBusyTimeout(runtime.replace("o.dbPath,n", "o.dbPath"))).toThrow(/migration anchors/);
+    expect(() => patchRuntimeSqliteBusyTimeout(runtime.replace("n??{lockWaitTimeoutMs:i}", "n"))).toThrow(/store open anchor/);
     expect(() => patchRuntimeSqliteBusyTimeout(runtime + runtime)).toThrow(/ambiguous/);
-    const partial = patched.replace(`,o.db.exec("pragma busy_timeout = ${sqliteBusyTimeoutMs}")`, "");
-    expect(hasRuntimeSqliteBusyTimeout(partial)).toBe(false);
-    expect(() => patchRuntimeSqliteBusyTimeout(partial)).toThrow(/migration anchors/);
+  });
+
+  test("installs write recovery and usage admission on the single store open", async () => {
+    const runtime = [
+      'function label(v){return v}',
+      'class Store{',
+      'static async open(t={},n={}){let o=t.dbPath??"fixture.sqlite",i=t.startupLockTimeoutMs??5e3;',
+      'let a=new sqlite.DatabaseSync(o,{timeout:i});',
+      'try{let c=await migrateAsync(a,o,n??{lockWaitTimeoutMs:i});return new Store(a,o,t,c)}catch(e){try{a.close()}catch{}throw e}}',
+      'constructor(a,o,t,c){this.db=a;this.dbPath=o;this.migrationResult=c}',
+      'close(){this.db.close()}}',
+      'async function pruneUsage(e,t={}){let n=t.beforeTime??Date.now()-1000;e.exec("begin immediate");try{e.prepare("delete from model_usage where started_at < ?").run(n),e.prepare("delete from turn_usage where started_at < ?").run(n),e.prepare("delete from tool_usage where started_at < ?").run(n),e.exec("commit")}catch(o){throw e.exec("rollback"),o}}',
+      'label(pruneUsage,"pruneUsage");'
+    ].join("");
+    const patched = patchRuntimeSqliteWriteRecovery(patchRuntimeSqliteBusyTimeout(runtime));
+    expect(hasRuntimeSqliteWriteRecovery(patched)).toBe(true);
+    expect(patched).toContain("installSqliteWriteRecovery($zStore)");
+    expect(patched).toContain(".pruneSqliteUsage(");
+    expect(patchRuntimeSqliteWriteRecovery(patched)).toBe(patched);
+    expect(() => patchRuntimeSqliteWriteRecovery("incompatible runtime")).toThrow(/post-migration timeout/);
+    const calls: string[] = [];
+    const helper = {
+      installSqliteWriteRecovery: (store: unknown) => {
+        calls.push("install");
+        (store as { installed?: boolean }).installed = true;
+      },
+      pruneSqliteUsage: (_db: unknown, _options: unknown, cutoff: number, prune: () => void) => {
+        calls.push(`prune:${cutoff}`);
+        prune();
+      }
+    };
+    const require = (id: string) => id === "node:path"
+      ? { join: (...parts: string[]) => parts.join("/") }
+      : helper;
+    let pruned = 0;
+    type Database = {
+      exec: (sql: string) => void;
+      prepare: (sql: string) => { run: (value?: unknown) => void };
+      close: () => void;
+    };
+    const sqlite = {
+      DatabaseSync: function DatabaseSync(this: Database, _path: string, _options: unknown) {
+        this.exec = (sql: string) => { if (sql.startsWith("delete from")) pruned += 1; };
+        this.prepare = () => ({ run: () => { pruned += 1; } });
+        this.close = () => {};
+      }
+    };
+    const fixture = new Function("sqlite", "migrateAsync", "require", "__dirname", `${patched};return {Store,pruneUsage};`)(
+      sqlite, async () => undefined, require, "/fixture"
+    );
+    const store = await fixture.Store.open({ dbPath: "fixture.sqlite" });
+    expect(calls).toContain("install");
+    await fixture.pruneUsage(store.db);
+    expect(calls.some(call => call.startsWith("prune:"))).toBe(true);
+    expect(pruned).toBe(3);
   });
 
   test.each(["legacy", "budgeted"])("classifies transport failures without retrying after output (%s)", budget => {

@@ -7,11 +7,11 @@ assert.equal(process.versions.bun, undefined, "Run with npm run test:node / node
 const Store = loadSessionStore();
 const BoundedStore = loadSessionStore({ recoveryOptions: { writeBudgetMs: 250 } });
 
-test("real runtime keeps the write timeout after sync open, async startup and reopen", { timeout: 15_000 }, async t => {
+test("real runtime keeps the write timeout after open and reopen", { timeout: 15_000 }, async t => {
   await withDirectory(async (_directory, dbPath) => {
-    const sync = new Store({ dbPath, startupLockTimeoutMs: 750 });
-    try { assert.equal(sync.db.prepare("PRAGMA busy_timeout").get().timeout, 10_000); }
-    finally { sync.close(); }
+    const opened = await Store.open({ dbPath, startupLockTimeoutMs: 750 });
+    try { assert.equal(opened.db.prepare("PRAGMA busy_timeout").get().timeout, 10_000); }
+    finally { opened.close(); }
     for (let attempt = 0; attempt < 2; attempt++) {
       const store = await Store.openStartup({ dbPath });
       try {

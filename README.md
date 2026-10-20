@@ -328,13 +328,16 @@ is forwarded to the runtime unchanged.
 
 Workflow creation and saved-workflow startup require the native workflow mode
 to be enabled explicitly: start the CLI with `--workflow-mode alwaysOn` or
-`--workflow-mode onDemand` (the runtime default is `disabled`). During a
-workflow approval, `Change concurrency` and, when supported, `Change default
-model` apply only to that workflow. From `/workflows`, `Adjust concurrency`
-changes a live run in place without replaying or restarting it. `Save workflow`
-writes the run's actual script to `.zcode/workflows`; `/workflows saved` starts
-a new run from that definition and validates its arguments through the native
-runtime.
+`--workflow-mode onDemand` (the runtime default is `disabled`). Tool search is
+opt-in per launch: `--toolsearch-mode auto|native|local|off` (default `off`).
+`auto` uses the provider's native tool-search protocol when available and falls
+back to local discovery, `native` requires an Anthropic Messages provider, and
+`local` requires tool-call support. During a workflow approval, `Change
+concurrency` and, when supported, `Change default model` apply only to that
+workflow. From `/workflows`, `Adjust concurrency` changes a live run in place
+without replaying or restarting it. `Save workflow` writes the run's actual
+script to `.zcode/workflows`; `/workflows saved` starts a new run from that
+definition and validates its arguments through the native runtime.
 
 `/queue` manages local next-turn drafts and pauses automatic sending while its
 picker is open. Inputs already accepted by the runtime cannot be edited here.

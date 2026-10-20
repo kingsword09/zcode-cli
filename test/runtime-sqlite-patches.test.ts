@@ -8,9 +8,9 @@ import {
 
 function fixture(): string {
   return [
-    'const deferred=Symbol(),retention=30*86400000;class Store{constructor(t={},n){this.dbPath="test.sqlite";let r=5000;this.db=t.db;',
-    'try{n!==deferred&&migrateSync(this.db,this.dbPath,r)}catch(e){this.db.close();throw e}}',
-    'static async openStartup(t={},n={}){let o=new Store(t,deferred);try{return await migrateAsync(o.db,o.dbPath,n),o}catch(e){try{o.close()}catch{}throw e}}',
+    'const retention=30*86400000;class Store{static async open(t={},n={}){let dbPath="test.sqlite",timeout=5000;const db=t.db;',
+    'try{let migration=await migrateAsync(db,dbPath,n??{lockWaitTimeoutMs:timeout});return new Store(db,dbPath,t,migration)}catch(e){try{db.close()}catch{}throw e}}',
+    'constructor(db,dbPath,t,migration){this.db=db;this.dbPath=dbPath}',
     'close(){this.db.close()}}',
     'async function prune(db,options={}){let cutoff=options.beforeTime??Date.now()-retention;db.exec("begin immediate");try{',
     'db.prepare("delete from model_usage where started_at < ?").run(cutoff),',
@@ -21,7 +21,7 @@ function fixture(): string {
 }
 
 describe("SQLite recovery bundle boundaries", () => {
-  test("installs after both migrations and preserves the native cleanup cutoff and transaction", async () => {
+  test("installs after the single migration open and preserves the native cleanup cutoff and transaction", async () => {
     const source = patchRuntimeSqliteBusyTimeout(fixture());
     const patched = patchRuntimeSqliteWriteRecovery(source);
     expect(hasRuntimeSqliteBusyTimeout(patched)).toBe(true);
@@ -42,14 +42,11 @@ describe("SQLite recovery bundle boundaries", () => {
         run();
       }
     };
-    const run = new Function("require", "__dirname", "migrateSync", "migrateAsync", "label", `${patched};return {Store,prune};`)(
+    const run = new Function("require", "__dirname", "migrateAsync", "label", `${patched};return {Store,prune};`)(
       (name: string) => name === "node:path" ? { join: (...parts: string[]) => parts.join("/") } : helper,
-      "/fixture", () => events.push("sync"), async () => events.push("async"), () => {}
+      "/fixture", async () => { events.push("async"); }, () => {}
     );
-    new run.Store({ db });
-    expect(events).toEqual(["sync", "pragma busy_timeout = 10000", "install"]);
-    events.length = 0;
-    await run.Store.openStartup({ db });
+    await run.Store.open({ db });
     expect(events).toEqual(["async", "pragma busy_timeout = 10000", "install"]);
     events.length = 0;
     await run.prune(db, { beforeTime: 42 });
@@ -69,7 +66,7 @@ describe("SQLite recovery bundle boundaries", () => {
     expect(() => patchRuntimeSqliteWriteRecovery(source.replace('"pruneUsage"', '"renamed"'))).toThrow("symbol");
     expect(() => patchRuntimeSqliteWriteRecovery(source.replace("delete from turn_usage", "delete from different_table"))).toThrow("SQL changed");
     const patched = patchRuntimeSqliteWriteRecovery(source);
-    const partial = patched.replace(".installSqliteWriteRecovery(this)", ".other(this)");
+    const partial = patched.replace(".installSqliteWriteRecovery($zStore)", ".other($zStore)");
     expect(hasRuntimeSqliteWriteRecovery(partial)).toBe(false);
     expect(() => patchRuntimeSqliteWriteRecovery(partial)).toThrow("partial");
   });

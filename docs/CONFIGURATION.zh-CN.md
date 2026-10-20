@@ -144,7 +144,7 @@ Runtime 每次启动都会读取此文件，修改 MCP 设置后重启 ZCode 即
 | `oauth` | HTTP / SSE | 可选，OAuth 配置，见下文 |
 | `enabled` | 全部 | 设为 `false` 可禁用服务器并保留配置 |
 | `timeoutMs` | 全部 | 可选，正数，单位为毫秒；超时应使用此字段，`timeout` 和 `startup_timeout_sec` 不生效 |
-| `protocolVersion` | 全部 | Runtime 0.16.9 支持可选值 `"auto"`、`"legacy"`、`"2026-07-28"`；通常省略，使用自动协商 |
+| `protocolVersion` | 全部 | Runtime 0.17.0 支持可选值 `"auto"`、`"legacy"`、`"2026-07-28"`；通常省略，使用自动协商 |
 
 `oauth.type` 支持 `"authorization_code"` 和 `"client_credentials"`。
 两者都支持 `clientId`、`clientSecret`、`clientName`、`scope`；client credentials 模式
@@ -173,10 +173,10 @@ MCP 服务器按名称合并。当前 runtime 中，**同名服务器的用户�
 
 下面区分本发行包与上游应用。源码引用固定在上游
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e)。
-本项目 runtime lock 选择的是独立发布的 Desktop 3.15.3 产物，不能据此认定该产物
+本项目 runtime lock 选择的是独立发布的 Desktop 3.16.2 产物，不能据此认定该产物
 由这个公开源码提交构建。
-2026-10-16 已针对
-[`aac4755` / `v3.15.1`](https://github.com/zai-org/ZCode/tree/aac4755666d09fdcd70272fcf063c077a639015f)
+2026-10-20 已针对
+[`0a1fc56` / `0.17.0`](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411)
 复核配置边界；下方固定链接保留原始审计出处。
 
 | 客户端／配置源 | 用户级 MCP 文件 | JSON 路径 |
@@ -383,7 +383,7 @@ CLI 提供四种权限模式：`build`（变更前确认）、`edit`（自动编
 `/workflows` 可查看运行中的工作流、原地调整并发或保存当前脚本；`/workflows saved`
 列出项目级和全局已保存定义，并从定义启动一个新的 run，而不是回放旧进度。
 
-runtime 3.15.1 的风险确认只允许本次授权：选择器仅提供 **Allow once** 和 **Deny**，
+风险确认只允许本次授权：选择器仅提供 **Allow once** 和 **Deny**，
 不会提供项目或会话级永久放行。自主模式是基于规则的确认策略，不是沙箱，
 也不保证识别所有潜在破坏性指令。Plan 开启时，计划模式的执行限制仍然优先。
 

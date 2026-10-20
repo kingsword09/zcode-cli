@@ -60,7 +60,7 @@ export function patchRuntimeSharedOAuth(runtime: string): string {
 
   const resolver = namedFunction(runtime, "createCodingPlanApiKeyResolver");
   const resolverSource = runtime.slice(resolver.start, resolver.end);
-  // 3.15.3 sends bare business tokens to metadata endpoints and Bearer tokens
+  // 3.16.2 sends bare business tokens to metadata endpoints and Bearer tokens
   // to project issuance. Both forms must participate in native 401 recovery.
   replace(resolver, /new Headers\(([A-Za-z_$][\w$]*)\.headers\)\.get\("Authorization"\)===`Bearer \$\{([A-Za-z_$][\w$]*)\.business\.token\}`/gu,
     match => `(new Headers(${match[1]}.headers).get("Authorization")===${match[2]}.business.token||${match[0]})`, "business credential rejection");

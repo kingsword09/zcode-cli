@@ -21,9 +21,10 @@ export const sqliteWriteRecoveryPolicy = {
 
 // Audited against ZCode 29628c9: native transactions roll back before throwing;
 // nontransactional methods upsert/delete stable IDs and preserve input/message sequences.
-// Rechecked 2026-10-16 against aac4755: the session-store facade is unchanged.
+// Rechecked 2026-10-20 against 0a1fc56 / 0.17.0: the facade adds softDeleteSession,
+// which is an idempotent soft delete by session ID.
 export const sqliteReplayableWrites = [
-  "createSession", "updateSession", "createForkedSessionWithMetadata", "commitForkBundle",
+  "createSession", "updateSession", "softDeleteSession", "createForkedSessionWithMetadata", "commitForkBundle",
   "commitSharedContextImportBundle", "transitionSharedContextImport", "saveMessage",
   "removeMessage", "savePart", "removePart", "saveSessionEntry", "saveSessionInput",
   "updateSessionInputs", "promoteSessionInput", "markSessionInputPromoted", "settleSessionInput",

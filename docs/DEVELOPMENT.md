@@ -88,8 +88,9 @@ focus, search, selection, images and overlays. `bun run verify:tui-perf` runs
 the complete quality and performance gate, including those smoke checks.
 The three runtime patches
 `http-no-content`, `bigmodel-oauth` and `cli-help-contract` also remain in the
-patch plan: Desktop 3.15.3 already supplies their behavior, while their
-verification and legacy branches still support older local Desktop artifacts.
+patch plan as required verification points: Desktop 3.16.2 already supplies
+their behavior, so they report `already_present` and never rewrite the runtime.
+Synchronization still fails if a future upstream build drops the behavior.
 
 ## TUI startup compatibility
 
@@ -285,8 +286,8 @@ value; an environment override remains authoritative.
 layers explicitly:
 
 ```text
-zcode-app-cli 3.3.6-4
-zcode-runtime 0.15.2
+zcode-app-cli 3.16.2-37
+zcode-runtime 0.17.0
 ```
 
 ## OAuth login override

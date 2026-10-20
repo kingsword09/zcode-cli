@@ -165,7 +165,7 @@ custom MCP servers.
 | `oauth` | HTTP / SSE | Optional OAuth configuration; see below |
 | `enabled` | All | Set to `false` to disable a server while keeping its configuration |
 | `timeoutMs` | All | Optional positive number in milliseconds; use this field instead of `timeout` or `startup_timeout_sec` |
-| `protocolVersion` | All | Optional `"auto"`, `"legacy"` or `"2026-07-28"` in runtime 0.16.9; normally leave unset for automatic negotiation |
+| `protocolVersion` | All | Optional `"auto"`, `"legacy"` or `"2026-07-28"` in runtime 0.17.0; normally leave unset for automatic negotiation |
 
 For OAuth, `oauth.type` accepts `"authorization_code"` or `"client_credentials"`.
 Both accept `clientId`, `clientSecret`, `clientName` and `scope`; client credentials
@@ -200,10 +200,10 @@ Plugin controls remain under `plugins`, hook declarations under
 These paths distinguish the packaged CLI from the upstream application. The
 source references below are pinned to upstream
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e).
-This package's runtime lock selects the separate Desktop 3.15.3 artifact; the
+This package's runtime lock selects the separate Desktop 3.16.2 artifact; the
 public source snapshot is not an assertion of that artifact's build commit.
-The configuration boundaries were rechecked on 2026-10-16 against
-[`aac4755` / `v3.15.1`](https://github.com/zai-org/ZCode/tree/aac4755666d09fdcd70272fcf063c077a639015f).
+The configuration boundaries were rechecked on 2026-10-20 against
+[`0a1fc56` / `0.17.0`](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411).
 The pinned links below retain the original audit references.
 
 | Client / source | User MCP file | JSON path |
@@ -452,8 +452,8 @@ inspects live runs, changes concurrency in place, and saves the current script;
 `/workflows saved` lists project and global definitions and starts a new run
 from a definition rather than replaying old progress.
 
-In runtime 3.15.1, risk confirmations are single-use: the picker offers only
-**Allow once** and **Deny**, never a project or session-wide grant. Guarded is a
+Risk confirmations are single-use: the picker offers only **Allow once** and
+**Deny**, never a project or session-wide grant. Guarded is a
 rule-based confirmation policy, not a sandbox or a guarantee that every
 potentially destructive command will be recognized. Planning restrictions still
 take precedence when Plan is enabled.
