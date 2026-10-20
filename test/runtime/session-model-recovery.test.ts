@@ -103,6 +103,48 @@ test.each(["legacy-provider", "model-casing", "missing-model"] as SessionModelCa
   }, 25_000
 );
 
+test.each(["valid", "legacy-provider", "model-casing", "missing-model", "missing-reasoning"] as SessionModelCase[])(
+  "headless cold resume uses the explicit model instead of the saved selection (%s)", async kind => {
+    await using fixture = await createSessionModelFixture(kind);
+    const providers = await readFile(fixture.providerPath, "utf8");
+    const child = Bun.spawn([...fixture.command, "--resume", fixture.sessionId, "--model", "zai/glm-5.3-flash", "--prompt", "Use the explicit override."], {
+      cwd: fixture.directory, env: fixture.env, stdin: "ignore", stdout: "pipe", stderr: "pipe"
+    });
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+    try {
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+      expect(stdout).toContain("SESSION_MODEL_REPLY");
+      expect(fixture.requests).toEqual(["glm-5.3-flash"]);
+      expect(await readFile(fixture.providerPath, "utf8")).toBe(providers);
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+      clearTimeout(timeout);
+    }
+  }, 30_000
+);
+
+test("headless cold resume rejects an unavailable explicit model without falling back", async () => {
+  await using fixture = await createSessionModelFixture("valid");
+  const before = fixture.readSelection();
+  const child = Bun.spawn([...fixture.command, "--resume", fixture.sessionId, "--model", "zai/unavailable", "--prompt", "Do not fall back."], {
+    cwd: fixture.directory, env: fixture.env, stdin: "ignore", stdout: "pipe", stderr: "pipe"
+  });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  try {
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(`${stdout}\n${stderr}`).toContain("zai/unavailable");
+    expect(fixture.requests).toEqual([]);
+    expect(fixture.readSelection()).toEqual(before);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    clearTimeout(timeout);
+  }
+}, 30_000);
+
 test.skipIf(process.platform === "win32").each([false, true])("resume preserves valid selections and handles an empty catalog (empty: %p)", async empty => {
   await using fixture = await createSessionModelFixture("valid");
   const before = fixture.readSelection();

@@ -1390,19 +1390,23 @@ export function patchRuntimeStreamEofFinishGuard(runtime: string): string {
   return patched;
 }
 
+const restoredPromptModelSwitch = /([A-Za-z_$][\w$]*)\.cliDefaultSelection&&\(([A-Za-z_$][\w$]*)\?\.cliDefault&&await \1\.prepareResume\(\),!\2\?\.transient\|\|\2\?\.cliDefault\)\?/u;
+
 export function patchRuntimePromptModel(runtime: string): string {
   const marker = "$zCliDefaultPromptModel";
-  if (runtime.includes(marker)) return runtime;
+  if (runtime.includes(marker) && restoredPromptModelSwitch.test(runtime)) return runtime;
   const anchor = /if\([A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\.traceId,[A-Za-z_$][\w$]*\.memoryBench/u.exec(runtime);
   if (!anchor) throw new Error("ZCode runtime is incompatible with the prompt model patch.");
   // cli-default prompt admission reads CliDefaultSelection, not the runtime
   // selection. A transient --model override must update that default without
   // persisting a session model change.
-  const switchAnchor = /([A-Za-z_$][\w$]*)\.cliDefaultSelection&&!([A-Za-z_$][\w$]*)\?\.transient\?/u.exec(runtime);
+  const switchAnchor = /([A-Za-z_$][\w$]*)\.cliDefaultSelection&&(?:!([A-Za-z_$][\w$]*)\?\.transient|\(!([A-Za-z_$][\w$]*)\?\.transient\|\|\3\?\.cliDefault\))\?/u.exec(runtime);
   if (!switchAnchor) throw new Error("ZCode runtime is incompatible with the prompt model patch (cli-default selection anchor missing).");
   const insertion = `let ${marker}=process.env.ZCODE_CLI_PROMPT_MODEL;if(${marker})await ${anchor[1]}.setModel(${marker},{transient:true,cliDefault:true});`;
-  let patched = runtime.slice(0, anchor.index) + insertion + runtime.slice(anchor.index);
-  patched = patched.replace(switchAnchor[0], `${switchAnchor[1]}.cliDefaultSelection&&(!${switchAnchor[2]}?.transient||${switchAnchor[2]}?.cliDefault)?`);
+  let patched = runtime.includes(marker) ? runtime : runtime.slice(0, anchor.index) + insertion + runtime.slice(anchor.index);
+  const context = switchAnchor[1];
+  const options = switchAnchor[2] ?? switchAnchor[3];
+  patched = patched.replace(switchAnchor[0], `${context}.cliDefaultSelection&&(${options}?.cliDefault&&await ${context}.prepareResume(),!${options}?.transient||${options}?.cliDefault)?`);
   return patched;
 }
 
@@ -1852,6 +1856,7 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimePromptModel,
     verify: (runtime) => runtime.includes("$zCliDefaultPromptModel") && runtime.includes("cliDefault:true")
+      && restoredPromptModelSwitch.test(runtime)
   },
   {
     id: "bigmodel-oauth",
