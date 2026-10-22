@@ -14,6 +14,8 @@ import {
 } from "../src/runtime-capabilities.ts";
 import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts";
 import { markRuntimeModified } from "./runtime-attribution.ts";
+import { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
+export { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 import { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
 import { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
 export { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
@@ -585,6 +587,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && runtime.includes(".applyFileRewind=async e=>")
     && runtime.includes(".setCustomSessionTitle=async e=>")
     && runtime.includes(".readCustomSessionTitle=async()=>")
+    && runtime.includes(".readSessionResumeTarget=async()=>")
     && runtime.includes(interruptTurnMarker)
     && runtime.includes(interruptWaitForIdleMarker)
     && runtime.includes(".promoteQueuedInput=async(")
@@ -604,6 +607,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && /applyFileRewind:[A-Za-z_$][\w$]*\.applyFileRewind/u.test(runtime)
     && /setCustomSessionTitle:[A-Za-z_$][\w$]*\.setCustomSessionTitle/u.test(runtime)
     && /readCustomSessionTitle:[A-Za-z_$][\w$]*\.readCustomSessionTitle/u.test(runtime)
+    && /readSessionResumeTarget:[A-Za-z_$][\w$]*\.readSessionResumeTarget/u.test(runtime)
     && /interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(runtime)
     && /promoteQueuedInput:[A-Za-z_$][\w$]*\.promoteQueuedInput/u.test(runtime)
     && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime)
@@ -825,6 +829,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".readCustomSessionTitle=async()=>")) {
     assignments.push(`${bridge}.readCustomSessionTitle=async()=>{let t=await ${getApp}(),o=t.sessionStore??t.runtime?.sessionStore,r=await o?.getSession?.(t.sessionId);return r?.titleSource==="custom"&&typeof r.title==="string"?r.title:void 0}`);
   }
+  if (!patched.includes(".readSessionResumeTarget=async()=>")) {
+    assignments.push(`${bridge}.readSessionResumeTarget=async()=>await(await ${getApp}()).readSessionResumeTarget?.()`);
+  }
   // The upstream CLI shim turns every switch into a permanent --mode override,
   // which prevents later resumes from loading their saved execution state.
   if (!queryHelper) patched = patched.replace(cliModeOverrideBridge, `${bridge}.setMode=async e=>{return await(await ${getApp}()).setMode(e)}`);
@@ -937,6 +944,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/readCustomSessionTitle:[A-Za-z_$][\w$]*\.readCustomSessionTitle/u.test(patched)) {
     optionFields.push(`readCustomSessionTitle:${submitBridge}.readCustomSessionTitle`);
+  }
+  if (!/readSessionResumeTarget:[A-Za-z_$][\w$]*\.readSessionResumeTarget/u.test(patched)) {
+    optionFields.push(`readSessionResumeTarget:${submitBridge}.readSessionResumeTarget`);
   }
   if (!/interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(patched)) {
     optionFields.push(`interruptTurn:${submitBridge}.interruptTurn`);
@@ -1756,6 +1766,10 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
   {
     id: "session-model-recovery", requirement: "required", apply: patchRuntimeSessionModelRecovery,
     verify: runtime => runtime.includes("$zRestoredSessionModel") && runtime.includes('"readSessionModelState"')
+  },
+  {
+    id: "session-lifecycle", requirement: "required", apply: patchRuntimeSessionLifecycle,
+    verify: hasRuntimeSessionLifecycle
   },
   {
     id: "official-mcp-availability",

@@ -95,6 +95,7 @@ export interface RuntimeAdapter {
   readTodos?: () => Promise<unknown>;
   readRuntimeProjection?: () => Promise<unknown>;
   readSessionUsage?: () => Promise<unknown>;
+  readSessionResumeTarget?: () => Promise<string | undefined>;
   cancelBackgroundTask?: (taskId: string) => Promise<unknown>;
   sendBackgroundTaskMessage?: (options: {
     taskId: string;
@@ -113,7 +114,7 @@ export interface RuntimeAdapter {
   ) => Promise<unknown>;
   submitPrompt: (input: unknown, options: PromptCallOptions) => Promise<unknown>;
   setMode?: (mode: string) => Promise<unknown>;
-  /** Persists a user-owned session title (`title_source='custom'`). */
+  /** Saves the session if needed, then persists a user-owned title (`title_source='custom'`). */
   setCustomSessionTitle?: (options: { title: string; traceContext?: unknown }) => Promise<unknown>;
   /** Returns the current session's custom title, or undefined for other title sources. */
   readCustomSessionTitle?: () => Promise<unknown>;

@@ -1575,6 +1575,8 @@ describe("runtime synchronization", () => {
 
     expect(patched).toContain("setCustomSessionTitle:g.setCustomSessionTitle");
     expect(patched).toContain("readCustomSessionTitle:g.readCustomSessionTitle");
+    expect(patched).toContain("readSessionResumeTarget:g.readSessionResumeTarget");
+    expect(patched).toContain("E.readSessionResumeTarget=async()=>await(await S()).readSessionResumeTarget?.()");
     expect(patchRuntimeTuiBridge(patched)).toBe(patched);
     const missingReader = patched
       .replace(`${patched.slice(readerStart, end)},`, "")
