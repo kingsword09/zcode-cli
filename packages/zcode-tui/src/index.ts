@@ -5993,6 +5993,22 @@ class ZCodeTui {
     if (usage !== undefined) this.applySessionUsage(usage);
   }
 
+  private async readExitResumeTarget(): Promise<string | undefined> {
+    const readSessionResumeTarget = this.options.readSessionResumeTarget;
+    if (!readSessionResumeTarget) return undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(() => readSessionResumeTarget()).catch(() => undefined),
+        new Promise<undefined>((resolve) => {
+          timeout = setTimeout(() => resolve(undefined), exitUsageQueryTimeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
   private finishTurn(unfinishedToolState = "interrupted"): void {
     const notification = this.pendingTurnNotification;
     const notificationDetail = notification === "completed"
@@ -6008,7 +6024,9 @@ class ZCodeTui {
     if (unfinishedToolState === "cancelled") {
       this.turnWork.cancel();
       this.settleTurnTiming();
-    } else if (!this.turnWork.finishForeground(Boolean(this.options.readRuntimeProjection))) {
+    } else if (!this.turnWork.finishForeground(
+      Boolean(this.options.readRuntimeProjection) && unfinishedToolState !== "failed"
+    )) {
       this.settleTurnTiming();
     }
     this.activity = undefined;
@@ -6093,11 +6111,11 @@ class ZCodeTui {
 
   private async finishStop(elapsedMilliseconds: number): Promise<void> {
     try {
-      await this.refreshExitUsage();
+      const [, resumeTarget] = await Promise.all([this.refreshExitUsage(), this.readExitResumeTarget()]);
       const summary = buildExitSummary({
         elapsedMilliseconds,
         metrics: this.sessionMetrics,
-        sessionId: this.sessionId ?? this.runtimeProjection?.sessionId,
+        sessionId: resumeTarget,
         width: this.ui.terminal.columns
       });
       const lines = [

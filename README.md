@@ -322,6 +322,12 @@ picker to return to input selection, then `Esc` again to close rewind.
 /cls                          clear the visible transcript only
 ```
 
+New sessions are saved when you submit their first input or explicitly rename them.
+Exiting an untouched session does not save it or print a resume command. Renaming
+an empty session saves it immediately, including its custom title, so it can be
+resumed before its first turn. Resume commands are shown only for saved sessions;
+an invalid resume target is rejected without replacing the current session.
+
 `/cls` clears what the TUI displays without touching the session. The
 runtime's own `/clear` is an alias of `/new` and starts a fresh session, so it
 is forwarded to the runtime unchanged.

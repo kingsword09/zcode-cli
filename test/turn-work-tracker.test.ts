@@ -75,6 +75,13 @@ describe("turn work tracker", () => {
     expect(tracker.reconcile(projection())).toBeFalse();
   });
 
+  test("settles a failed admission without waiting for an unreadable projection", () => {
+    const tracker = new TurnWorkTracker();
+    tracker.begin();
+    expect(tracker.finishForeground(false)).toBeFalse();
+    expect(tracker.isActive()).toBeFalse();
+  });
+
   test("resets task ownership when a newer foreground turn begins", () => {
     const tracker = new TurnWorkTracker();
     tracker.begin();

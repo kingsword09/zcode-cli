@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { cliSettingsPath, legacyCliConfigPath, providerConfigPath, providerMigrationMarkerPath, readDesktopSettings } from "./config-paths.ts";
 
 export { assertSessionModelReady, readSessionModelState } from "./session-model-recovery.ts";
+export { assertResumableSession, ensureSessionForTitle, readSessionResumeTarget } from "./runtime-session-lifecycle.ts";
 export { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage } from "./runtime-tui-bridge.ts";
 export { createTuiWorkflowManagement, startTuiSavedWorkflow } from "./runtime-workflow-bridge.ts";
 export { restoreTuiBackgroundTasks } from "./runtime-background-restore.ts";

@@ -159,6 +159,28 @@ describe("launcher/runtime integration", () => {
     }
   });
 
+  test("shows a missing resume target without exposing unrelated runtime diagnostics", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-launcher-missing-session-"));
+    const fakeNode = join(directory, "fake-node");
+    await writeFile(fakeNode, [
+      "#!/bin/sh",
+      "printf '%s\\n' 'ProviderBusinessError: internal diagnostics' >&2",
+      "printf '%s' 'Error: Session not ' >&2",
+      "printf '%s\\n' 'found: sess_missing_target' >&2",
+      "exit 1",
+      ""
+    ].join("\n"));
+    await chmod(fakeNode, 0o755);
+    try {
+      const result = await run(["--cwd", directory, "--resume", "sess_missing_target"], "", {
+        ZCODE_NODE: fakeNode, ZCODE_TUI_RUNTIME_LOG: join(directory, "runtime.log")
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("Session not found: sess_missing_target");
+      expect(result.stderr).not.toContain("ProviderBusinessError");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   test("keeps non-agent runtime subcommands usable", async () => {
     const doctor = await run(["doctor", "--json"]);
     expect(doctor.code).toBe(0);

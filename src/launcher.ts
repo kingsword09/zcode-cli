@@ -350,9 +350,17 @@ interface TuiRuntimeDiagnosticState {
   initialized: boolean;
   path?: string;
   writeFailed: boolean;
+  pendingLine?: string;
+  sessionError?: string;
 }
 
 function appendTuiRuntimeDiagnostic(chunk: Buffer | string, state: TuiRuntimeDiagnosticState): void {
+  const lines = `${state.pendingLine ?? ""}${chunk.toString()}`.split(/\r?\n/u);
+  state.pendingLine = lines.pop()?.slice(-1024);
+  for (const line of lines) {
+    const missing = /^Error: Session not found: ([A-Za-z0-9_-]{1,512})$/u.exec(line);
+    if (missing) state.sessionError = `Session not found: ${missing[1]}`;
+  }
   if (state.bytes >= tuiRuntimeLogLimitBytes) return;
   const text = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   try {
@@ -386,7 +394,8 @@ function tuiRuntimeFailureMessage(code: number, state: TuiRuntimeDiagnosticState
   const diagnostic = state.path && !state.writeFailed
     ? ` Diagnostics: ${state.path}`
     : " Runtime diagnostics could not be written.";
-  return `Error: ZCode runtime exited with status ${code}.${diagnostic}\n`;
+  const message = state.sessionError ?? `ZCode runtime exited with status ${code}`;
+  return `Error: ${message}.${diagnostic}\n`;
 }
 
 async function runRuntime(

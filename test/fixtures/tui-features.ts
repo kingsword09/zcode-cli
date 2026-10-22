@@ -531,6 +531,7 @@ await runTui({
     }
     return { applied: true, response: "Rewound fixture workspace files." };
   },
+  readSessionResumeTarget: async () => "feature-session",
   readSessionUsage: async () => ({
     totalTokens: 18_500,
     inputTokens: 14_000,
