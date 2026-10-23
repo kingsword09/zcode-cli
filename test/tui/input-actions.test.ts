@@ -135,3 +135,23 @@ test("fragmented terminal palette replies do not enter the draft or trigger inpu
   await session.sendAndWait(" tail\r", "unaltered draft submitted", /Sent: retained draft tail/u);
   await session.exit();
 }, 20_000);
+
+test("Ctrl+T cycles reasoning effort without clearing a typed prompt", async () => {
+  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-effort-shortcut-" });
+  await using session = TerminalSession.start({
+    command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")],
+    workspace
+  });
+  await session.waitForScreen("ready", /Original answer/u);
+  session.send("Draft question");
+  await session.waitForScreen("draft typed", /Draft question/u);
+  session.send("\x14");
+  await session.waitForScreen("effort raised", /⚡ high/u);
+  await session.waitForScreen("draft preserved after effort raised", /Draft question/u);
+  session.send("\x14");
+  await session.waitForScreen("effort lowered", /⚡ low/u);
+  await session.waitForScreen("draft preserved after effort lowered", /Draft question/u);
+  await session.assertScreenExcludes("effort shortcut does not submit the draft", /Sent: Draft question/u);
+  await session.sendAndWait("\r", "draft submitted", /Sent: Draft question/u);
+  await session.exit();
+}, 20_000);

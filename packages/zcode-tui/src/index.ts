@@ -1542,6 +1542,10 @@ class ZCodeTui {
         void this.switchModel();
         return { consume: true };
       }
+      if (matchesKey(data, "ctrl+t")) {
+        void this.switchEffort();
+        return { consume: true };
+      }
       if (matchesKey(data, "tab")
         && (this.turnAbortController || this.inputQueue.paused)
         && Boolean(this.editor.getText().trim())

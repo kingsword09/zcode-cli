@@ -140,8 +140,8 @@ multi-line editor; slash-command, unified `@` workspace/Plugin references and
 session events; `/mode`, `/model`, `/resume`, `/plugins` and other upstream
 slash commands; searchable model and reasoning-effort selectors, plus MCP and
 workflow panels; status-bar-only Shift+Tab mode cycling
-(`build` → `edit` → `guarded` → `yolo`), independent `/plan` toggling with an input-border indicator, Ctrl+N model and empty-prompt Tab effort
-cycling; structured session-goal status in the right side of the turn footer;
+(`build` → `edit` → `guarded` → `yolo`), independent `/plan` toggling with an input-border indicator, Ctrl+N model and Ctrl+T effort
+cycling (Tab also cycles effort on an empty prompt); structured session-goal status in the right side of the turn footer;
 animated active-turn timer with a static `ZCODE_TUI_REDUCED_MOTION=1`
 fallback; responsive context-remaining and session-token metrics.
 
