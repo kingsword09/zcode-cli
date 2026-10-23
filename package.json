@@ -93,12 +93,12 @@
     "provenance": true
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^1.3.0",
+    "@earendil-works/pi-tui": "^1.4.0",
     "playwright-core": "1.59.1"
   },
   "devDependencies": {
     "@xterm/headless": "6.0.0",
-    "acorn": "^8.15.0",
+    "acorn": "^8.18.0",
     "beautiful-mermaid": "^1.1.3",
     "bun-types": "1.4.1",
     "cli-highlight": "^2.1.11",
@@ -109,10 +109,11 @@
     "pkg-pr-new": "0.0.88",
     "tsdown": "^0.22.7",
     "typescript": "^7.0.2",
-    "yaml": "^2.8.1"
+    "yaml": "^2.9.0"
   },
   "overrides": {
-    "undici": "7.30.0"
+    "undici": "7.30.0",
+    "sharp": ">=0.35.5"
   },
   "patchedDependencies": {
     "sprintf-js@1.1.3": "patches/sprintf-js@1.1.3.patch"
