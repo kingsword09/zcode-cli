@@ -23,6 +23,8 @@ export const sqliteWriteRecoveryPolicy = {
 // nontransactional methods upsert/delete stable IDs and preserve input/message sequences.
 // Rechecked 2026-10-20 against 0a1fc56 / 0.17.0: the facade adds softDeleteSession,
 // which is an idempotent soft delete by session ID.
+// Rechecked 2026-10-23 against Desktop 3.16.3 / 0.17.0: bundle commits run
+// synchronously, so they never leave a transaction open across an await.
 export const sqliteReplayableWrites = [
   "createSession", "updateSession", "softDeleteSession", "createForkedSessionWithMetadata", "commitForkBundle",
   "commitSharedContextImportBundle", "transitionSharedContextImport", "saveMessage",

@@ -200,7 +200,7 @@ Plugin controls remain under `plugins`, hook declarations under
 These paths distinguish the packaged CLI from the upstream application. The
 source references below are pinned to upstream
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e).
-This package's runtime lock selects the separate Desktop 3.16.2 artifact; the
+This package's runtime lock selects the separate Desktop 3.16.3 artifact; the
 public source snapshot is not an assertion of that artifact's build commit.
 The configuration boundaries were rechecked on 2026-10-20 against
 [`0a1fc56` / `0.17.0`](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411).

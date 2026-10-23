@@ -15,7 +15,7 @@ function count(source: string, pattern: RegExp): number {
 }
 
 /**
- * Desktop 3.16.2 / runtime 0.17.0 has one async store-open path:
+ * Desktop 3.16.3 / runtime 0.17.0 has one async store-open path:
  *
  *   let migration = await runSqliteSessionMigrationsAsync(db, dbPath, options);
  *   return new SqliteSessionStore(db, dbPath, options, migration);
