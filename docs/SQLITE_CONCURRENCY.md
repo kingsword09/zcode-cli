@@ -41,7 +41,11 @@ The operation allowlist and maintenance SQL were reviewed against upstream
 `zai-org/ZCode` commit `29628c9acdb81b703bbd4080c207a0e7ce5e276e`.
 On 2026-10-20 the store implementation was rechecked against
 `0a1fc56d279fd1001f78387bd81aec1c26767411` (public 0.17.0 / Desktop 3.16.2).
-That revision replaces the synchronous constructor and the separate
+On 2026-10-23 it was rechecked again against Desktop 3.16.3, which keeps runtime
+0.17.0 but makes `commitForkBundle`, `commitSharedContextImportBundle` and
+`transitionSharedContextImport` commit synchronously, so no transaction stays
+open across an `await`.
+The 0.17.0 revision replaces the synchronous constructor and the separate
 `openStartup()` migration with one `SqliteSessionStore.open()` path, adds
 `softDeleteSession`, and runs checksum-validated migrations with a backup
 directory. These source references do not identify the separate Desktop
@@ -67,7 +71,7 @@ The CLI's shared session database uses SQLite WAL. Readers can overlap a writer,
 but different CLI processes still serialize writes to this file. The original
 #163 mitigation sets a 10-second connection timeout after initialization. This
 remains the default outside the scoped retryable calls described above.
-Desktop 3.16.2 opens the store once through `SqliteSessionStore.open()`; its
+Desktop 3.16.3 opens the store once through `SqliteSessionStore.open()`; its
 migration helper restores a 5-second `busy_timeout` in `finally`, so the patch
 re-applies 10 seconds on the same connection before the store is returned.
 Startup migration lock budgets, short busy waits, backoff, rollback, and failure
@@ -127,7 +131,7 @@ is not used as a substitute for Node's SQLite driver.
 
 ## Follow-up boundary
 
-The current lock selects Desktop 3.16.2 / runtime 0.17.0. Rebuild with
+The current lock selects Desktop 3.16.3 / runtime 0.17.0. Rebuild with
 `sync:locked` before release validation; `sync:local` records a local App source
 and does not establish the locked installer's provenance. The regressions do
 not establish that every production workload is free of contention. Keep #162

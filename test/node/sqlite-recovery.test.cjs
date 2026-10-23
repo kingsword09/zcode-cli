@@ -73,18 +73,19 @@ test("a write recovers after contention exceeds the former ten-second timeout", 
   });
 });
 
-test("connections in one process serialize an async native transaction without blocking its commit", { timeout: 10_000 }, async () => {
+test("connections in one process commit a native bundle atomically without blocking", { timeout: 10_000 }, async () => {
   await withDirectory(async (directory, dbPath) => {
     const first = await Store.openStartup({ dbPath });
     const second = await Store.openStartup({ dbPath });
     try {
       const id = "imported", now = Date.now();
+      // Runtime 0.17.0 in Desktop 3.16.3 runs bundle commits synchronously, so no
+      // transaction is observable between the call and its resolution.
       const importing = first.commitSharedContextImportBundle({
         session: sessionInput(directory, id),
         contextMessage: { info: { id: "context", sessionID: id, role: "user", visibility: "model-only", source: "shared_context", time: { created: now } }, parts: [] },
         provenance: { id: `provenance:${id}`, sessionID: id, type: "v4/shared_context_import", time: { created: now, updated: now }, data: { contextId: id, status: "pending" } }
       });
-      assert.equal(first.db.isTransaction, true);
       await Promise.all([importing, second.createSession(sessionInput(directory, "concurrent"))]);
       assert.equal(first.db.isTransaction, false);
       assert.equal(first.db.prepare("select count(*) AS n from session").get().n, 2);

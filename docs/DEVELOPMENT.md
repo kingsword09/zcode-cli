@@ -88,7 +88,7 @@ focus, search, selection, images and overlays. `bun run verify:tui-perf` runs
 the complete quality and performance gate, including those smoke checks.
 The three runtime patches
 `http-no-content`, `bigmodel-oauth` and `cli-help-contract` also remain in the
-patch plan as required verification points: Desktop 3.16.2 already supplies
+patch plan as required verification points: Desktop 3.16.3 already supplies
 their behavior, so they report `already_present` and never rewrite the runtime.
 Synchronization still fails if a future upstream build drops the behavior.
 
@@ -286,7 +286,7 @@ value; an environment override remains authoritative.
 layers explicitly:
 
 ```text
-zcode-app-cli 3.16.2-37
+zcode-app-cli 3.16.3-38
 zcode-runtime 0.17.0
 ```
 
