@@ -69,3 +69,16 @@ test("TUI propagates startup failures after restoring terminal raw mode", async 
   await expect(session.exit()).rejects.toThrow("code 1");
   expect(await workspace.readRuntimeJournal()).not.toMatch(/transcript-read|mcp-read/u);
 }, 10_000);
+
+test("TUI honors cancellation while draining input after startup options resolve", async () => {
+  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-startup-drain-cancel-" });
+  await using session = TerminalSession.start({
+    command, workspace, env: { ZCODE_TEST_STARTUP_MODE: "cancel-after-load" }
+  });
+  await session.waitForScreen("startup screen", /Starting ZCode/u);
+  await workspace.write("release-startup", "ready");
+  await session.waitForHistory("startup cancelled during input drain", /STARTUP_CANCELLED/u);
+  await session.waitForHistory("raw mode restored", /STARTUP_RAW_MODE false/u);
+  await expect(session.exit()).rejects.toThrow("code 143");
+  expect(await workspace.readRuntimeJournal()).not.toMatch(/transcript-read|mcp-read/u);
+}, 10_000);

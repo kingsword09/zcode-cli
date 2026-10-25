@@ -139,6 +139,7 @@ import {
   type TurnNotificationKind
 } from "./notifications.ts";
 import { watchStreamErrors } from "./stream-error-guard.ts";
+import { stopTui } from "./terminal-cleanup.ts";
 import {
   readTuiMode,
   resolveTuiMode,
@@ -883,9 +884,9 @@ class ZCodeTui {
     const onSigterm = () => this.handleSignal("SIGTERM");
     const onSighup = () => this.handleSignal("SIGHUP");
     this.installStreamErrorGuards();
-    process.once("SIGINT", onSigint);
-    process.once("SIGTERM", onSigterm);
-    if (process.platform !== "win32") process.once("SIGHUP", onSighup);
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
+    if (process.platform !== "win32") process.on("SIGHUP", onSighup);
     let startAttempted = false;
     try {
       if (this.stopped) {
@@ -945,11 +946,8 @@ class ZCodeTui {
       if (this.sessionModelIssue) void this.recoverSessionModel();
       await this.done;
     } finally {
-      process.off("SIGINT", onSigint);
-      process.off("SIGTERM", onSigterm);
-      if (process.platform !== "win32") process.off("SIGHUP", onSighup);
       try {
-        if (startAttempted && !this.stopped) {
+        if (startAttempted) {
           this.stop();
           await this.done;
         }
@@ -957,6 +955,9 @@ class ZCodeTui {
         // Leave the guards installed through the I/O turn containing the final
         // terminal restore writes, which can report stream errors asynchronously.
         await new Promise<void>((resolve) => setImmediate(resolve));
+        process.off("SIGINT", onSigint);
+        process.off("SIGTERM", onSigterm);
+        if (process.platform !== "win32") process.off("SIGHUP", onSighup);
         this.removeStreamErrorGuards?.();
         this.removeStreamErrorGuards = undefined;
       }
@@ -6105,16 +6106,16 @@ class ZCodeTui {
     } catch {
       // Notification cleanup must not prevent terminal restoration.
     }
-    try {
-      this.ui.stop();
-    } catch {
-      // Keep resolving the run even if a terminal implementation fails.
-    }
     void this.finishStop(elapsedMilliseconds);
   }
 
   private async finishStop(elapsedMilliseconds: number): Promise<void> {
     try {
+      try {
+        await stopTui(this.ui);
+      } catch {
+        // Keep resolving the run even if a terminal implementation fails.
+      }
       const [, resumeTarget] = await Promise.all([this.refreshExitUsage(), this.readExitResumeTarget()]);
       const summary = buildExitSummary({
         elapsedMilliseconds,
