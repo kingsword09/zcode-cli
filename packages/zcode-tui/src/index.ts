@@ -63,6 +63,7 @@ import {
   type ZCodeThemePreference
 } from "./color-scheme.ts";
 import {
+  createStreamEventRedeliveryFilter,
   historyText,
   isModelCancellationEvent,
   isToolCancellation,
@@ -648,6 +649,9 @@ class ZCodeTui {
   private readonly attachmentBar: AttachmentBar;
   private editor: PlanEditor;
   private readonly assistantStream: AssistantStream;
+  // Subscription callbacks each forward every session event; only the
+  // onEvent channel appends streamed content, so only it needs the guard.
+  private readonly deliveredStreamEvents = createStreamEventRedeliveryFilter();
   private readonly notifications: TurnNotifier;
   private readonly skillCatalog: SkillCatalog;
   private readonly done: Promise<void>;
@@ -2319,6 +2323,7 @@ class ZCodeTui {
     if (turnEpoch !== undefined && turnEpoch !== this.activeTurnEpoch) return;
     const event = normalizeEvent(value);
     if (!event || this.isForeignSessionEvent(event)) return;
+    if (this.deliveredStreamEvents.duplicate(event.raw, event)) return;
     if (runtimeContextRefreshNeeded(event)) this.runtimeContextCache.invalidate();
     if (this.handleDynamicWorkflowEvent(value, event.type)) return;
     const taskScoped = this.backgroundTaskEvents.isTaskScoped(event);
