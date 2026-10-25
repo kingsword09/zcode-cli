@@ -47,6 +47,7 @@ else options.loadStartupOptions = async () => {
     if (mode === "cancel-reject") throw new Error("LATE_STARTUP_FAILURE");
   }
   if (mode === "failure") throw new Error("STORAGE_STARTUP_FAILURE");
+  if (mode === "cancel-after-load") setTimeout(() => process.kill(process.pid, "SIGTERM"), 10);
   return startup;
 };
 

@@ -2,6 +2,7 @@ import { constants as osConstants } from "node:os";
 import { isKeyRelease, matchesKey, ProcessTerminal, Text, TuiMainScreen } from "@earendil-works/pi-tui";
 
 import { watchStreamErrors } from "./stream-error-guard.ts";
+import { stopTui } from "./terminal-cleanup.ts";
 import type { TuiOptions } from "./types.ts";
 
 export async function loadTuiStartupOptions(options: TuiOptions): Promise<TuiOptions | undefined> {
@@ -35,16 +36,17 @@ export async function loadTuiStartupOptions(options: TuiOptions): Promise<TuiOpt
     return { consume: true };
   });
   const removeStreamErrorGuards = watchStreamErrors([process.stdout, process.stderr], () => cancel(1));
-  process.once("SIGINT", onSigint);
-  process.once("SIGTERM", onSigterm);
-  if (process.platform !== "win32") process.once("SIGHUP", onSighup);
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  if (process.platform !== "win32") process.on("SIGHUP", onSighup);
 
+  let readyOptions: TuiOptions | undefined;
   try {
     ui.start();
     ui.renderNow();
     await new Promise<void>((resolve) => setImmediate(resolve));
     if (cancelled) return undefined;
-    return await Promise.race([
+    readyOptions = await Promise.race([
       Promise.resolve().then(async () => {
         if (cancelled) return undefined;
         const startup = await loadStartupOptions();
@@ -53,19 +55,20 @@ export async function loadTuiStartupOptions(options: TuiOptions): Promise<TuiOpt
       cancellation
     ]);
   } finally {
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-    if (process.platform !== "win32") process.off("SIGHUP", onSighup);
     try {
       ui.clear();
       ui.renderNow();
     } finally {
       try {
-        ui.stop();
+        await stopTui(ui);
       } finally {
         await new Promise<void>((resolve) => setImmediate(resolve));
+        process.off("SIGINT", onSigint);
+        process.off("SIGTERM", onSigterm);
+        if (process.platform !== "win32") process.off("SIGHUP", onSighup);
         removeStreamErrorGuards();
       }
     }
   }
+  return cancelled ? undefined : readyOptions;
 }
