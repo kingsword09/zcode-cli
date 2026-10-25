@@ -228,6 +228,41 @@ export function isModelCancellationEvent(event: StreamEvent): boolean {
   );
 }
 
+export interface StreamEventRedeliveryFilter {
+  duplicate(value: object, event: StreamEvent): boolean;
+}
+
+/**
+ * The runtime forwards every session event to each live subscription (the
+ * active prompt, steers, watchers kept open around background-task
+ * notification turns), so one event can reach the TUI several times.
+ * Streamed deltas are appended rather than replaced, so each redelivery
+ * would render again — exact redeliveries of an already-seen event
+ * (same eventId, or the same delivered object when no id is attached)
+ * must be dropped. Distinct events never share a key: separate deliveries
+ * are separate objects, and legitimately repeated delta content produces
+ * new event objects each time.
+ */
+export function createStreamEventRedeliveryFilter(capacity = 256): StreamEventRedeliveryFilter {
+  const recent = new Map<string | object, true>();
+  return {
+    duplicate(value: object, event: StreamEvent): boolean {
+      const key: string | object = event.eventId ?? value;
+      if (recent.has(key)) {
+        recent.delete(key);
+        recent.set(key, true);
+        return true;
+      }
+      recent.set(key, true);
+      if (recent.size > capacity) {
+        const oldest = recent.keys().next().value;
+        if (oldest !== undefined) recent.delete(oldest);
+      }
+      return false;
+    }
+  };
+}
+
 const toolCancellationValues = new Set([
   "aborterror",
   "cancelled",

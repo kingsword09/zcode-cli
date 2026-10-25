@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  createStreamEventRedeliveryFilter,
   isToolCancellation,
   historyText,
   isModelCancellationEvent,
@@ -521,5 +522,58 @@ describe("ZCode event adapter", () => {
       field: "text",
       delta: "!"
     });
+  });
+});
+
+describe("stream event redelivery filter", () => {
+  test("flags an exact redelivery of the same delivered object", () => {
+    const filter = createStreamEventRedeliveryFilter();
+    const delivered = { kind: "text_delta", delta: "방", messageId: "message_1" };
+    expect(filter.duplicate(delivered, normalizeEvent(delivered)!)).toBe(false);
+    expect(filter.duplicate(delivered, normalizeEvent(delivered)!)).toBe(true);
+  });
+
+  test("keeps legitimately repeated deltas with identical content", () => {
+    const filter = createStreamEventRedeliveryFilter();
+    const first = normalizeEvent({ kind: "text_delta", delta: "-", messageId: "message_1" })!;
+    const second = normalizeEvent({ kind: "text_delta", delta: "-", messageId: "message_1" })!;
+    expect(filter.duplicate({}, first)).toBe(false);
+    expect(filter.duplicate({}, second)).toBe(false);
+  });
+
+  test("flags redeliveries that carry the same eventId in fresh objects", () => {
+    const filter = createStreamEventRedeliveryFilter();
+    expect(filter.duplicate(
+      {},
+      normalizeEvent({ eventId: "event_1", kind: "part.delta", partId: "part_1", field: "text", delta: "!" })!
+    )).toBe(false);
+    expect(filter.duplicate(
+      {},
+      normalizeEvent({ eventId: "event_1", kind: "part.delta", partId: "part_1", field: "text", delta: "!" })!
+    )).toBe(true);
+  });
+
+  test("renders a triple-delivered notification-turn stream once per token", () => {
+    const filter = createStreamEventRedeliveryFilter();
+    const tokens = ["방", "금", "완", "료"];
+    let rendered = "";
+    for (const token of tokens) {
+      // Each subscriber forwards the same event object, back to back.
+      const delivered = { kind: "text_delta", delta: token, messageId: "message_1" };
+      for (let delivery = 0; delivery < 3; delivery += 1) {
+        const event = normalizeEvent(delivered)!;
+        if (!filter.duplicate(delivered, event)) rendered += event.delta;
+      }
+    }
+    expect(rendered).toBe("방금완료");
+  });
+
+  test("forgets the oldest keys once capacity is exceeded", () => {
+    const filter = createStreamEventRedeliveryFilter(2);
+    const first = { kind: "text_delta", delta: "a" };
+    expect(filter.duplicate(first, normalizeEvent(first)!)).toBe(false);
+    filter.duplicate({}, normalizeEvent({ kind: "text_delta", delta: "b" })!);
+    filter.duplicate({}, normalizeEvent({ kind: "text_delta", delta: "c" })!);
+    expect(filter.duplicate(first, normalizeEvent(first)!)).toBe(false);
   });
 });
