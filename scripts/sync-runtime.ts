@@ -1401,22 +1401,69 @@ export function patchRuntimeStreamEofFinishGuard(runtime: string): string {
 }
 
 const restoredPromptModelSwitch = /([A-Za-z_$][\w$]*)\.cliDefaultSelection&&\(([A-Za-z_$][\w$]*)\?\.cliDefault&&await \1\.prepareResume\(\),!\2\?\.transient\|\|\2\?\.cliDefault\)\?/u;
+const promptModelMarker = "$zCliDefaultPromptModel";
+const promptEffortMarker = "$zCliDefaultPromptEffort";
+const legacyPromptModelInsertion = /let \$zCliDefaultPromptModel=process\.env\.ZCODE_CLI_PROMPT_MODEL;if\(\$zCliDefaultPromptModel\)await ([A-Za-z_$][\w$]*)\.setModel\(\$zCliDefaultPromptModel,\{transient:true,cliDefault:true\}\);/u;
+
+function promptOverrideInsertion(app: string): string {
+  // The string selection path intentionally fills a missing reasoning level
+  // with the model default. An explicit --effort must use the object path so
+  // the requested level survives; transient avoids a separate persisted
+  // model-default change.
+  return [
+    `let ${promptModelMarker}=process.env.ZCODE_CLI_PROMPT_MODEL;`,
+    `let ${promptEffortMarker}=process.env.ZCODE_CLI_PROMPT_EFFORT;`,
+    `if(${promptEffortMarker}&&${promptEffortMarker}.toLowerCase()==="auto")${promptEffortMarker}=void 0;`,
+    `if(${promptModelMarker}&&!${promptEffortMarker}){await ${app}.setModel(${promptModelMarker},{transient:true,cliDefault:true});}`,
+    `else if(${promptEffortMarker}){`,
+    `let $zPromptSelection,$zPromptCurrent;`,
+    `if(${promptModelMarker}){`,
+    `let $zPromptSlash=${promptModelMarker}.indexOf("/");`,
+    `if($zPromptSlash<=0||$zPromptSlash===${promptModelMarker}.length-1)throw new Error("Invalid prompt model selection.");`,
+    `$zPromptSelection={providerId:${promptModelMarker}.slice(0,$zPromptSlash),modelId:${promptModelMarker}.slice($zPromptSlash+1)};`,
+    `}else{`,
+    `await ${app}.readExecutionState?.();`,
+    `$zPromptCurrent=${app}.getCurrentModelOption?.();`,
+    `if(!$zPromptCurrent?.ref)throw new Error("Cannot apply --effort without a current model. Pass --model or select a model first.");`,
+    `$zPromptSelection={...$zPromptCurrent.ref};`,
+    `}`,
+    `let $zPromptOption=${app}.getModelOption?.($zPromptSelection);`,
+    `let $zPromptLevels=($zPromptOption?.reasoning?.levels??$zPromptCurrent?.reasoning?.levels??[]).map($zLevel=>$zLevel.value);`,
+    `if($zPromptOption&&$zPromptLevels.length===0)throw new Error("Model "+$zPromptSelection.providerId+"/"+$zPromptSelection.modelId+" does not support reasoning effort.");`,
+    `let $zPromptLevel=$zPromptLevels.find($zLevel=>$zLevel===${promptEffortMarker})??$zPromptLevels.find($zLevel=>$zLevel.toLowerCase()===${promptEffortMarker}.toLowerCase());`,
+    `if($zPromptLevels.length>0&&!$zPromptLevel)throw new Error("Unsupported reasoning effort: "+${promptEffortMarker}+". Available: "+$zPromptLevels.join(", ")+".");`,
+    `await ${app}.setModel({...$zPromptSelection,options:{...$zPromptSelection.options,reasoningLevel:$zPromptLevel??${promptEffortMarker}}},{transient:true,cliDefault:true});`,
+    `}`
+  ].join("");
+}
 
 export function patchRuntimePromptModel(runtime: string): string {
-  const marker = "$zCliDefaultPromptModel";
-  if (runtime.includes(marker) && restoredPromptModelSwitch.test(runtime)) return runtime;
+  if (runtime.includes(promptEffortMarker) && restoredPromptModelSwitch.test(runtime)) return runtime;
   const anchor = /if\([A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\.traceId,[A-Za-z_$][\w$]*\.memoryBench/u.exec(runtime);
   if (!anchor) throw new Error("ZCode runtime is incompatible with the prompt model patch.");
   // cli-default prompt admission reads CliDefaultSelection, not the runtime
-  // selection. A transient --model override must update that default without
+  // selection. A transient prompt override must update that default without
   // persisting a session model change.
   const switchAnchor = /([A-Za-z_$][\w$]*)\.cliDefaultSelection&&(?:!([A-Za-z_$][\w$]*)\?\.transient|\(!([A-Za-z_$][\w$]*)\?\.transient\|\|\3\?\.cliDefault\))\?/u.exec(runtime);
-  if (!switchAnchor) throw new Error("ZCode runtime is incompatible with the prompt model patch (cli-default selection anchor missing).");
-  const insertion = `let ${marker}=process.env.ZCODE_CLI_PROMPT_MODEL;if(${marker})await ${anchor[1]}.setModel(${marker},{transient:true,cliDefault:true});`;
-  let patched = runtime.includes(marker) ? runtime : runtime.slice(0, anchor.index) + insertion + runtime.slice(anchor.index);
-  const context = switchAnchor[1];
-  const options = switchAnchor[2] ?? switchAnchor[3];
-  patched = patched.replace(switchAnchor[0], `${context}.cliDefaultSelection&&(${options}?.cliDefault&&await ${context}.prepareResume(),!${options}?.transient||${options}?.cliDefault)?`);
+  const switchAlreadyPatched = restoredPromptModelSwitch.test(runtime);
+  if (!switchAnchor && !switchAlreadyPatched) {
+    throw new Error("ZCode runtime is incompatible with the prompt model patch (cli-default selection anchor missing).");
+  }
+  const insertion = promptOverrideInsertion(anchor[1]);
+  let patched: string;
+  if (legacyPromptModelInsertion.test(runtime)) {
+    // Upgrade a runtime that only has the earlier --model insertion.
+    patched = runtime.replace(legacyPromptModelInsertion, insertion);
+  } else if (runtime.includes(promptModelMarker)) {
+    throw new Error("ZCode runtime is incompatible with the prompt model patch (partial prompt override).");
+  } else {
+    patched = runtime.slice(0, anchor.index) + insertion + runtime.slice(anchor.index);
+  }
+  if (switchAnchor) {
+    const context = switchAnchor[1];
+    const options = switchAnchor[2] ?? switchAnchor[3];
+    patched = patched.replace(switchAnchor[0], `${context}.cliDefaultSelection&&(${options}?.cliDefault&&await ${context}.prepareResume(),!${options}?.transient||${options}?.cliDefault)?`);
+  }
   return patched;
 }
 
@@ -1869,7 +1916,8 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     id: "prompt-model",
     requirement: "required",
     apply: patchRuntimePromptModel,
-    verify: (runtime) => runtime.includes("$zCliDefaultPromptModel") && runtime.includes("cliDefault:true")
+    verify: (runtime) => runtime.includes(promptModelMarker) && runtime.includes(promptEffortMarker)
+      && runtime.includes("ZCODE_CLI_PROMPT_EFFORT") && runtime.includes("cliDefault:true")
       && restoredPromptModelSwitch.test(runtime)
   },
   {

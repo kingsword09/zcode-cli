@@ -84,6 +84,7 @@ CLI 专属字段迁移到 `~/.zcode/cli/setting.json`，省略 provider、main/l
 | Provider 和模型元数据 | 共享的原生 `provider_config.json` |
 | `/settings` 中的默认模型 | 写入共享默认选择，并应用到当前会话 |
 | `/model`、模型循环切换、推理强度 | 修改并保存当前会话选择，不改共享默认值 |
+| `--prompt` 上的 `--model`／`--effort` | 仅覆盖本次运行的模型和推理强度；不改共享默认值（会话会记录本次选择） |
 | `/new` | 读取当前共享默认模型 |
 | 恢复会话／重启 | 恢复该会话保存的模型和推理选项 |
 | 语言与记忆 | 读取桌面端 `localePreference`／`memoryEnabled`，显式 CLI 设置优先 |

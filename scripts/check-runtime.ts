@@ -117,6 +117,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !runtimeSource.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
   || !runtimeSource.includes("ZCODE_CLI_CREDENTIALS_FILE")
   || !runtimeSource.includes("ZCODE_CLI_PROMPT_MODEL")
+  || !runtimeSource.includes("ZCODE_CLI_PROMPT_EFFORT")
   || !runtimeSource.includes(".loadSessionTranscript=async()=>await(await")
   || !runtimeSource.includes('"loadSessionContextMessages"')
   || !runtimeSource.includes(".readGoal=async()=>await(await")

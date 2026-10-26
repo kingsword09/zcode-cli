@@ -480,15 +480,24 @@ not available on `PATH`.
 
 ## Configuration
 
-Select a model for one headless prompt without changing the saved default:
+Select a model and reasoning effort for one headless prompt without changing the
+saved default:
 
 ```bash
-zcode --model account:zai-individual-coding-plan/GLM-5.3-Flash --prompt 'Reply with exactly: ok'
+zcode --model account:zai-individual-coding-plan/GLM-5.3-Flash --effort high --prompt 'Reply with exactly: ok'
 ```
 
 `--model` requires a full provider/model ID and `--prompt` (or `-p`). It also
 overrides a resumed session's model for that run. Unknown or unavailable models
 fail before a prompt is sent, rather than falling back to the default.
+
+`--effort` selects the model's reasoning level for that prompt. Levels are
+model-specific (for example `disabled`, `low`, `high` and `max`); run the TUI's
+`/effort list` for the current model, or inspect `optionSpecs.reasoningLevel` in
+the provider catalog. `--effort auto` keeps the current or resumed default.
+Without `--effort`, `--model` uses the model's default level. Both flags require
+`--prompt` (or `-p`) and leave the saved default for new sessions unchanged; the
+run's model and effort are recorded on that session.
 
 ZCode reads MCP servers, hooks, plugins, permissions, network, storage and display
 settings from `~/.zcode/cli/setting.json` (or

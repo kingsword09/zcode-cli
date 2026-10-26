@@ -34,7 +34,7 @@ import {
 import { requestAppServer } from "./app-server-client.ts";
 import { runPluginCommand } from "./plugin-cli.ts";
 import { missingCodingPlanKey } from "./prompt-preflight.ts";
-import { extractPromptModel } from "./prompt-model.ts";
+import { extractPromptOverrides } from "./prompt-model.ts";
 import {
   capabilitiesFromExtractionMetadata,
   type RuntimeCliOptionType
@@ -290,6 +290,7 @@ function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}, inspectConfiguration 
   delete env.ZCODE_CLI_OAUTH_CALLBACK_STDIN;
   delete env.ZCODE_CLI_MIGRATE_CONFIG;
   delete env.ZCODE_CLI_PROMPT_MODEL;
+  delete env.ZCODE_CLI_PROMPT_EFFORT;
   const distributionVersion = readDistributionVersion();
   const appVersion = readJsonVersion(extractionMetadataPath, "appVersion");
   const inherited: NodeJS.ProcessEnv = {
@@ -488,10 +489,12 @@ export async function main(args: string[]): Promise<number> {
   }
 
   let promptModel: string | undefined;
+  let promptEffort: string | undefined;
   try {
-    const parsed = extractPromptModel(args, readRuntimeCliOptionTypes());
+    const parsed = extractPromptOverrides(args, readRuntimeCliOptionTypes());
     args = parsed.args;
     promptModel = parsed.model;
+    promptEffort = parsed.effort;
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
@@ -639,10 +642,12 @@ export async function main(args: string[]): Promise<number> {
     const runtimeArgs = withDefaultBrowserUse(login.args);
     const code = await runRuntime(node, runtimeArgs, {
       ...firstRunSetupEnv(setupPending, runtimeArgs),
-      ...(promptModel ? { ZCODE_CLI_PROMPT_MODEL: promptModel } : {})
+      ...(promptModel ? { ZCODE_CLI_PROMPT_MODEL: promptModel } : {}),
+      ...(promptEffort ? { ZCODE_CLI_PROMPT_EFFORT: promptEffort } : {})
     });
     if (code === 0 && (args.includes("--help") || args.includes("-h"))) {
       console.log("\n  --model <provider/model>  Select a model for this --prompt run without changing the saved default.");
+      console.log("  --effort <level>          Select the model reasoning effort for this --prompt run; auto keeps the default.");
     }
     return code;
   } catch (error) {
