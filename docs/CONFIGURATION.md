@@ -101,6 +101,7 @@ reported rather than replaced by old settings.
 | Providers and model metadata | Shared native `provider_config.json` |
 | Default model in `/settings` | Writes the shared default and applies it to the current session |
 | `/model`, model cycling and reasoning effort | Change/persist this session's native selection; shared default stays unchanged |
+| `--model` / `--effort` on `--prompt` | Per-run model and reasoning-level override; the saved default for new sessions stays unchanged |
 | `/new` | Reads the current shared default |
 | Resume/restart | Restores the session's model and reasoning options |
 | Language and memory | Reads Desktop `localePreference` / `memoryEnabled`; explicit CLI settings override these values |
