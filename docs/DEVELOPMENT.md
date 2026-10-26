@@ -92,6 +92,22 @@ patch plan as required verification points: Desktop 3.16.3 already supplies
 their behavior, so they report `already_present` and never rewrite the runtime.
 Synchronization still fails if a future upstream build drops the behavior.
 
+## Workspace file completion
+
+The required `recursive-workspace-paths` runtime patch extends the native
+`createWorkspacePathSuggestionProvider` through `src/runtime-workspace-paths.ts`.
+An unqualified `@name` searches all workspace directory levels; empty tokens and
+explicit paths retain the native directory completion. Searches use the runtime's
+filesystem port and excluded-directory set, skip symlinks, and forward cancellation.
+Only the best requested number of matches are retained, with exact names before
+prefix and substring matches. Hidden entries require a query beginning with `.`;
+this preserves the runtime's existing rules rather than adding `.gitignore` parsing.
+
+`bun test test/runtime-workspace-paths.test.ts test/runtime-workspace-path-patches.test.ts`
+covers real file trees and patch compatibility. After syncing the built runtime,
+`bun test test/runtime/workspace-paths.test.ts` checks the actual native provider
+and filesystem adapter in Node, including the nested file case from #240.
+
 ## TUI startup compatibility
 
 Recent upstream runtimes pass session metadata and slash commands through

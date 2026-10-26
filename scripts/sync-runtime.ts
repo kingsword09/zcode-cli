@@ -27,6 +27,8 @@ export { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth 
 import { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
 import { hasRuntimeResolvedContextWindow, patchRuntimeResolvedContextWindow } from "./runtime-context-window-patches.ts";
 export { hasRuntimeResolvedContextWindow, patchRuntimeResolvedContextWindow } from "./runtime-context-window-patches.ts";
+import { hasRuntimeRecursiveWorkspacePaths, patchRuntimeRecursiveWorkspacePaths } from "./runtime-workspace-path-patches.ts";
+export { hasRuntimeRecursiveWorkspacePaths, patchRuntimeRecursiveWorkspacePaths } from "./runtime-workspace-path-patches.ts";
 import { patchRuntimeWorkflowManagement } from "./runtime-workflow-patches.ts";
 export { patchRuntimeWorkflowManagement } from "./runtime-workflow-patches.ts";
 export { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
@@ -1828,6 +1830,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeResolvedContextWindow,
     verify: hasRuntimeResolvedContextWindow
+  },
+  {
+    id: "recursive-workspace-paths",
+    requirement: "required",
+    apply: patchRuntimeRecursiveWorkspacePaths,
+    verify: hasRuntimeRecursiveWorkspacePaths
   },
   {
     id: "tui-bridge",

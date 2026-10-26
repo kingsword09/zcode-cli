@@ -132,8 +132,9 @@ bytes.
 ## Features
 
 **Editor and input.** pi-tui differential rendering with a CJK-aware
-multi-line editor; slash-command, unified `@` workspace/Plugin references and
-`$` Skill completion; persisted prompt history through ZCode's history API;
+multi-line editor; slash-command completion, unified `@` workspace/Plugin
+references with recursive file search, and `$` Skill completion;
+persisted prompt history through ZCode's history API;
 `--no-color` and `NO_COLOR` support.
 
 **Streaming and conversation.** Streamed assistant text from official ZCode
