@@ -134,8 +134,7 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
       ?? (params && asString(params.eventId))
       ?? asString(value.id)
       ?? (params && asString(params.id))
-      ?? asString(body.eventId)
-      ?? asString(body.id),
+      ?? asString(body.eventId),
     inputSource: envelopeString("inputSource"),
     taskId: envelopeString("taskId")
       ?? envelopeString("taskID")

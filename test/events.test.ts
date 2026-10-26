@@ -77,6 +77,24 @@ describe("ZCode event adapter", () => {
     });
   });
 
+  test("does not treat a payload message id as a stream event id", () => {
+    const first = normalizeEvent({
+      type: "model.streaming",
+      payload: { id: "message_1", kind: "text_delta", delta: "hello" }
+    });
+    const second = normalizeEvent({
+      type: "model.streaming",
+      payload: { id: "message_1", kind: "text_delta", delta: " world" }
+    });
+
+    expect(first?.eventId).toBeUndefined();
+    expect(second?.eventId).toBeUndefined();
+
+    const filter = createStreamEventRedeliveryFilter();
+    expect(filter.duplicate(first!.raw, first!)).toBe(false);
+    expect(filter.duplicate(second!.raw, second!)).toBe(false);
+  });
+
   test("uses the official assistant message identity and result duration", () => {
     expect(normalizeEvent({
       type: "model.streaming",
