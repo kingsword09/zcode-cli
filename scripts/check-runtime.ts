@@ -23,6 +23,7 @@ import {
   hasRuntimeHttpNoContentGuard,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeResolvedContextWindow,
+  hasRuntimeRecursiveWorkspacePaths,
   hasRuntimeSharedOAuth,
   hasRuntimeSqliteBusyTimeout,
   hasRuntimeSqliteWriteRecovery,
@@ -103,6 +104,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeBigmodelOAuth(runtimeSource)
   || !hasRuntimeBrowserUrlOpening(runtimeSource)
   || !hasRuntimeConfigurationDiagnostics(runtimeSource)
+  || !hasRuntimeRecursiveWorkspacePaths(runtimeSource)
   || !hasRuntimeResolvedContextWindow(runtimeSource)
   || !hasRuntimeSharedOAuth(runtimeSource)
   || !hasRuntimeCliSettingsFile(runtimeSource)
