@@ -45,6 +45,10 @@ On 2026-10-23 it was rechecked again against Desktop 3.16.3, which keeps runtime
 0.17.0 but makes `commitForkBundle`, `commitSharedContextImportBundle` and
 `transitionSharedContextImport` commit synchronously, so no transaction stays
 open across an `await`.
+The Desktop 3.17.1 / runtime 0.17.1 audit also covers `commitMessageBundle`:
+its synchronous message/part transaction rolls back before throwing and uses
+stable IDs. Recovery requires this method and retries the complete bundle,
+including compaction and multi-part message persistence.
 The 0.17.0 revision replaces the synchronous constructor and the separate
 `openStartup()` migration with one `SqliteSessionStore.open()` path, adds
 `softDeleteSession`, and runs checksum-validated migrations with a backup
@@ -111,6 +115,8 @@ requests. They cover:
   starving its commit, plus caller-owned transactions retaining rollback ownership;
 - a failure after message/part insertion that rolls back before input promotion
   retries, and an idempotent partial part write that cannot overtake a newer update;
+- a partial message bundle rolling back before replay, without duplicate messages
+  or parts, and rejection of stores missing the native bundle transaction;
 - non-BUSY errors and partially committed goal counters never being replayed;
 - closing a store cancelling both backoff and pending writes;
 - 100 usage facts requiring one cleanup transaction when expired rows exist,
@@ -131,7 +137,7 @@ is not used as a substitute for Node's SQLite driver.
 
 ## Follow-up boundary
 
-The current lock selects Desktop 3.16.3 / runtime 0.17.0. Rebuild with
+The current lock selects Desktop 3.17.1 / runtime 0.17.1. Rebuild with
 `sync:locked` before release validation; `sync:local` records a local App source
 and does not establish the locked installer's provenance. The regressions do
 not establish that every production workload is free of contention. Keep #162

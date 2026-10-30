@@ -558,8 +558,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const activeTranscriptPattern = /sessionStore\.messages\(\{sessionID:([A-Za-z_$][\w$]*)\.sessionId\}\),[A-Za-z_$][\w$]*=await \1\.sessionStore\.getSession\(\1\.sessionId\);return/u;
   const activeTurnSteerPattern = /(\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\2\?\.inputId,queryId:\2\?\.queryId,expectedTurnId:\2\?\.expectedTurnId,)(?:delivery:"guide",)?(?:pendingInputId:\2\?\.pendingInputId,)?input:/u;
   const activeTurnGuidePattern = /\.steerTurn\(\{commandKind:([A-Za-z_$][\w$]*)\?\.commandKind,inputId:\1\?\.inputId,queryId:\1\?\.queryId,expectedTurnId:\1\?\.expectedTurnId,delivery:"guide",pendingInputId:\1\?\.pendingInputId,input:/u;
-  // 0.17.1 forwards an automation id ahead of the command kind.
-  const nativeActiveTurnSteerPattern = /([A-Za-z_$][\w$]*)\?\.delivery==="steer_active_turn".{0,700}?\.steerTurn\(\{(?:automationId:\1\?\.automationId,)?commandKind:\1\?\.commandKind,delivery:[^,}]+,expectedTurnId:\1\?\.expectedTurnId,input:[^,}]+,(?:inputPresentation:[^,}]+,)?inputId:\1\?\.inputId,intent:.{1,160}?,queryId:\1\?\.queryId,/u;
+  const nativeActiveTurnSteerPattern = /([A-Za-z_$][\w$]*)\?\.delivery==="steer_active_turn".{0,700}?\.steerTurn\(\{automationId:\1\?\.automationId,commandKind:\1\?\.commandKind,delivery:[^,}]+,expectedTurnId:\1\?\.expectedTurnId,input:[^,}]+,(?:inputPresentation:[^,}]+,)?inputId:\1\?\.inputId,intent:.{1,160}?,queryId:\1\?\.queryId,/u;
   const nativePromptAdmissionPattern = /\.runtime\.admitPrompt\([^{}]{0,500}\{\.\.\.([A-Za-z_$][\w$]*),delivery:[A-Za-z_$][\w$]*,traceContext:\1\?\.traceContext/u;
   const legacyStartedTurnResultPattern = /return ([A-Za-z_$][\w$]*)\.kind!=="started_turn"\?\1:([A-Za-z_$][\w$]*)\(\1\.result,([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\)/u;
   const supportsActiveTurnSteer = (value: string): boolean => (
@@ -1063,9 +1062,7 @@ export function patchRuntimeSharedConfig(runtime: string): string {
   const initImporter = importer && initializer(importer.index), initRepository = repository && initializer(repository.index);
   const main = /async function [A-Za-z_$][\w$]*\(\)\{let [A-Za-z_$][\w$]*=process\.argv\.slice\(2\);/u.exec(runtime);
   const loader = /([A-Za-z_$][\w$]*)=\(0,[A-Za-z_$][\w$]*\.readFileSync\)\(([A-Za-z_$][\w$]*),"utf-8"\),([A-Za-z_$][\w$]*)=JSON\.parse\(\1\),([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(\3\);/u.exec(runtime);
-  // 0.17.1 parses project-scope files through the same loader and passes the
-  // scope after the config value; keep any trailing arguments intact.
-  const validation = loader && new RegExp(`let ([A-Za-z_$][\\w$]*)=([A-Za-z_$][\\w$]*)\\(${escapeRegExpName(loader[3]!)}(?:,[^)]*)?\\);return\\{config:\\1\\.config`, "u")
+  const validation = loader && new RegExp(`let ([A-Za-z_$][\\w$]*)=([A-Za-z_$][\\w$]*)\\(${escapeRegExpName(loader[3]!)},[A-Za-z_$][\\w$]*\\.scope\\);return\\{config:\\1\\.config`, "u")
     .exec(runtime.slice(loader.index, loader.index + 1000));
   if (!file || !importer || !repository || !initImporter || !initRepository || !main || !loader || !validation) {
     throw new Error("ZCode runtime is incompatible with shared configuration (settings/migration anchors missing).");

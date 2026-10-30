@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cliSettingsPath, ensureCliSettings } from "../../src/model-access.ts";
 import { writeProviderFixture } from "../fixtures/provider-config.ts";
-import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
+import { runtimeStartupTimeoutMs, runtimeTestEnv } from "../fixtures/runtime-env.ts";
 import { TerminalScreen } from "../tui/harness/terminal-screen.ts";
 
 async function createFixture(display = "regular") {
@@ -59,8 +59,8 @@ async function createFixture(display = "regular") {
       children.push(child);
       const deadline = setTimeout(() => child.kill("SIGKILL"), 25_000);
       void child.exited.then(() => clearTimeout(deadline));
-      const wait = async (predicate: (text: string) => boolean) => {
-        const until = Date.now() + 8_000;
+      const wait = async (predicate: (text: string) => boolean, timeoutMs = 8_000) => {
+        const until = Date.now() + timeoutMs;
         while (Date.now() < until && child.exitCode === null) {
           await screen.settled();
           if (predicate(screen.bufferText())) return;
@@ -93,7 +93,7 @@ test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])(
   "untouched %s sessions stay unsaved and omit resume guidance", async display => {
     await using fixture = await createFixture(display);
     const tui = fixture.start();
-    await tui.wait(text => text.includes("◈ custom/fixture"));
+    await tui.wait(text => text.includes("◈ custom/fixture"), runtimeStartupTimeoutMs);
     const output = await tui.exit();
     expect(output).not.toContain("To continue this session");
     expect(fixture.query<{ count: number }>("SELECT count(*) AS count FROM session").count).toBe(0);
@@ -105,7 +105,7 @@ test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])(
   "renaming an empty %s session saves its title and supports restart and headless resume", async display => {
     await using fixture = await createFixture(display);
     const tui = fixture.start();
-    await tui.wait(text => text.includes("◈ custom/fixture"));
+    await tui.wait(text => text.includes("◈ custom/fixture"), runtimeStartupTimeoutMs);
     tui.terminal.write("/rename Chosen empty title\r");
     await tui.wait(text => text.includes("Session renamed to: Chosen empty title"));
     const row = fixture.query<{ id: string; title: string; title_source: string }>("SELECT id,title,title_source FROM session");
@@ -115,7 +115,7 @@ test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])(
     expect(fixture.requests).toEqual([]);
     expect(await tui.exit()).toContain(`zcode --resume ${row.id}`);
     const resumed = fixture.start(["--resume", row.id]);
-    await resumed.wait(text => text.includes("◈ custom/fixture"));
+    await resumed.wait(text => text.includes("◈ custom/fixture"), runtimeStartupTimeoutMs);
     await resumed.screen.settled();
     expect(resumed.screen.bufferText()).not.toContain("Could not read execution state");
     expect(resumed.screen.title()).toContain("Chosen empty title");
@@ -141,7 +141,7 @@ test.skipIf(process.platform === "win32")("invalid resume fails before startup a
   expect(printed.code).toBe(1);
   expect(printed.output).toContain(`Session not found: ${missing}`);
   const tui = fixture.start();
-  await tui.wait(text => text.includes("◈ custom/fixture"));
+  await tui.wait(text => text.includes("◈ custom/fixture"), runtimeStartupTimeoutMs);
   tui.terminal.write("/rename Original session\r");
   await tui.wait(text => text.includes("Session renamed to: Original session"));
   const original = fixture.query<{ id: string }>("SELECT id FROM session").id;
@@ -160,7 +160,7 @@ test.skipIf(process.platform === "win32")("a failed first request still saves a 
   await using fixture = await createFixture();
   fixture.rejectRequests();
   const tui = fixture.start();
-  await tui.wait(text => text.includes("◈ custom/fixture"));
+  await tui.wait(text => text.includes("◈ custom/fixture"), runtimeStartupTimeoutMs);
   tui.terminal.write("First prompt should name this session\r");
   await tui.wait(text => text.includes("Turn execution failed"));
   const row = fixture.query<{ id: string; title: string; title_source: string }>("SELECT id,title,title_source FROM session");

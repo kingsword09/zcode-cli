@@ -168,11 +168,7 @@ describe("runtime synchronization", () => {
     );
     expect(patchRuntimeSharedConfig(patched)).toBe(patched);
 
-    // Runtimes without project scopes keep the single-argument call.
-    const unscoped = patchRuntimeSharedConfig(source.replace(",t.scope", ""));
-    expect(unscoped).toContain(
-      'Lso(require(require("node:path").join(__dirname,"cli-config.cjs")).mergeDesktopSettings(i,n,process.env))'
-    );
+    expect(() => patchRuntimeSharedConfig(source.replace(",t.scope", ""))).toThrow(/settings\/migration anchors/);
     expect(() => patchRuntimeSharedConfig(source.replace("let c=Lso(i,t.scope);", ""))).toThrow(/settings\/migration anchors/);
   });
 
@@ -1399,10 +1395,11 @@ describe("runtime synchronization", () => {
     const nativeSteerRuntime = `${runtimeWithApp.replace(
       "E.sendInput=async(A,$)=>{let c=t.runtime.getActiveTurnInfo();if(c)return t.runtime.steerTurn({commandKind:$?.commandKind,inputId:$?.inputId,queryId:$?.queryId,expectedTurnId:$?.expectedTurnId,input:A});return Kvt(await S(),D,O1(t))},",
       "E.sendInput=async(A,$)=>{let d=$?.delivery??\"auto\";return t.runtime.admitPrompt(A,[],{...$,delivery:d,traceContext:$?.traceContext})},"
-      + "function admit(A,$){if($?.delivery===\"steer_active_turn\")return this.steerTurn({commandKind:$?.commandKind,delivery:void 0,expectedTurnId:$?.expectedTurnId,input:A,inputId:$?.inputId,intent:I($?.intent,\"queue\"),queryId:$?.queryId,toolDisallowlist:$?.toolDisallowlist})}"
+      + "function admit(A,$){if($?.delivery===\"steer_active_turn\")return this.steerTurn({automationId:$?.automationId,commandKind:$?.commandKind,delivery:void 0,expectedTurnId:$?.expectedTurnId,input:A,inputId:$?.inputId,intent:I($?.intent,\"queue\"),queryId:$?.queryId,toolDisallowlist:$?.toolDisallowlist})}"
     )}async function send(H,Z){let Q=await A(),X=await Q.sendInput(H,Z);return X.kind!==\"started_turn\"?X:l1t(X.result,Q,R5(t))}`;
     const nativeSteerPatched = patchRuntimeTuiBridge(nativeSteerRuntime);
     expect(nativeSteerPatched).toContain('delivery==="steer_active_turn"');
+    expect(nativeSteerPatched).toContain('this.steerTurn({automationId:$?.automationId,commandKind:$?.commandKind');
     expect(nativeSteerPatched).toContain('intent:I($?.intent,"queue")');
     expect(nativeSteerPatched).not.toContain('pendingInputId:$?.pendingInputId');
     expect(nativeSteerPatched).toContain('l1t(await(X.result??X.completion),Q,R5(t))');

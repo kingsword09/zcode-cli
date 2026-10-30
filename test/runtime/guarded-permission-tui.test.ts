@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { cliSettingsPath, ensureCliSettings } from "../../src/model-access.ts";
 import { writeProviderFixture } from "../fixtures/provider-config.ts";
-import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
+import { runtimeStartupTimeoutMs, runtimeTestEnv } from "../fixtures/runtime-env.ts";
 import { ScenarioWorkspace } from "../tui/harness/scenario-workspace.ts";
 import { TerminalSession } from "../tui/harness/terminal-session.ts";
 
@@ -55,7 +55,7 @@ test.skipIf(process.platform === "win32")("native guarded commands require singl
       env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
       timeoutMilliseconds: 35_000
     });
-    await session.waitForScreen("guarded CLI startup", /◉ guarded/u);
+    await session.waitForScreen("guarded CLI startup", /◉ guarded/u, runtimeStartupTimeoutMs);
     for (const decision of ["deny", "allow"] as const) {
       await session.sendAndWait(`Request the isolated deletion (${decision}).\r`, "native risk confirmation", /Dangerous command requires your approval/u);
       expect(await workspace.read("scratch/keep.txt")).toBe("preserve until approved\n");

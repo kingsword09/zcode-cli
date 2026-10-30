@@ -166,7 +166,9 @@ MCP 服务器按名称合并。当前 runtime 中，**同名服务器的用户�
 
 已启用的插件也会提供 MCP，定义来自插件的 `.mcp.json` 或 manifest，通常显示为
 `plugin:<插件名>:<服务器名>`。独立的用户 MCP 定义放在 `setting.json`；
-此 CLI 不会自动读取 `.agents/mcp.json`。
+runtime 0.17.1 也会发现项目中的 `.agents/mcp.json`。
+项目级 MCP 服务器需要工作区信任授权才会启动；`untrusted` 状态不是连接失败。
+CLI 目前没有信任管理命令，可在 Desktop 中批准相应工作区声明，两者共用工作区信任存储。
 插件控制仍在 `setting.json` 的 `plugins` 下，hook 声明在 `hooks.events.<Event>` 下，
 工具权限在 `permission` 下。
 
@@ -174,7 +176,7 @@ MCP 服务器按名称合并。当前 runtime 中，**同名服务器的用户�
 
 下面区分本发行包与上游应用。源码引用固定在上游
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e)。
-本项目 runtime lock 选择的是独立发布的 Desktop 3.16.3 产物，不能据此认定该产物
+本项目 runtime lock 选择的是独立发布的 Desktop 3.17.1 / runtime 0.17.1 产物，不能据此认定该产物
 由这个公开源码提交构建。
 2026-10-20 已针对
 [`0a1fc56` / `0.17.0`](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411)

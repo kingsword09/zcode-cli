@@ -1,1 +1,1 @@
-export { runtimeTestEnv } from "../../scripts/runtime-test-env.ts";
+export { runtimeStartupTimeoutMs, runtimeTestEnv } from "../../scripts/runtime-test-env.ts";

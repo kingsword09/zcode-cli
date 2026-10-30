@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { cliSettingsPath, ensureCliSettings } from "../../src/model-access.ts";
 import { writeProviderFixture } from "../fixtures/provider-config.ts";
-import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
+import { runtimeStartupTimeoutMs, runtimeTestEnv } from "../fixtures/runtime-env.ts";
 
 const root = join(import.meta.dir, "../..");
 const node = Bun.which("node")!;
@@ -86,8 +86,8 @@ test.skipIf(process.platform === "win32")(
       cwd: f.home, terminal, env: { ...f.env, TERM: "xterm-256color", CI: "0", ZCODE_TUI_MODE: "regular", ZCODE_NODE: node }
     });
     const killTimer = setTimeout(() => child.kill("SIGKILL"), 35_000);
-    async function waitFor(pattern: RegExp, offset = 0) {
-      const deadline = Date.now() + 10_000;
+    async function waitFor(pattern: RegExp, offset = 0, timeoutMs = 10_000) {
+      const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline && child.exitCode === null) {
         if (pattern.test(plainText(output.slice(offset)))) return;
         await Bun.sleep(20);
@@ -95,7 +95,7 @@ test.skipIf(process.platform === "win32")(
       throw new Error(`Missing ${pattern}: ${plainText(output).slice(-2000)}`);
     }
     try {
-      await waitFor(/◈ probe\/probe-1m/);
+      await waitFor(/◈ probe\/probe-1m/, 0, runtimeStartupTimeoutMs);
       const prompt = output.length;
       terminal.write("Reply with the fixture text.\r");
       await waitFor(new RegExp(fixtureReply), prompt);

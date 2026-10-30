@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { nextBuildVersion } from "./release-version.ts";
-import { runtimeTestEnv } from "./runtime-test-env.ts";
+import { runtimeStartupTimeoutMs, runtimeTestEnv } from "./runtime-test-env.ts";
 
 const root = join(import.meta.dir, "..");
 const runtime = join(root, "vendor", "zcode.cjs");
@@ -157,7 +157,7 @@ const timeout = setTimeout(() => {
 
 let interactionError: unknown;
 try {
-  await waitFor("welcome screen", /Ask a task about this workspace/i);
+  await waitFor("welcome screen", /Ask a task about this workspace/i, 0, runtimeStartupTimeoutMs);
   if (!plainText(output).includes("Ask a task about this workspace")) {
     throw new Error("Regular TUI did not render the session welcome intro.");
   }

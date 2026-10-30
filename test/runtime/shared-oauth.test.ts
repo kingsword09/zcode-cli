@@ -183,9 +183,7 @@ test("permission failures do not trigger legacy conversion or change the shared 
     await store.save("oauth:zai:access_token","fixture-oauth-token");
     rejectedStatus=403;
     const headers=createStandaloneProviderRuntimeHeadersPort(store,env,resolver());
-    // 0.17.1 reports the HTTP status for transport-level failures instead of
-    // the generic request code.
-    await assert.rejects(headers.refreshBeforeModelRequest(input),/project_token_(?:request_failed|http_403)/);
+    await assert.rejects(headers.refreshBeforeModelRequest(input),/project_token_http_403/);
     assert.ok(!calls.includes("/api/auth/z/login"));
     assert.equal(await store.load("oauth:zai:access_token"),"fixture-oauth-token");
   `);

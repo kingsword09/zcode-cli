@@ -27,7 +27,7 @@ export const sqliteWriteRecoveryPolicy = {
 // synchronously, so they never leave a transaction open across an await.
 export const sqliteReplayableWrites = [
   "createSession", "updateSession", "softDeleteSession", "createForkedSessionWithMetadata", "commitForkBundle",
-  "commitSharedContextImportBundle", "transitionSharedContextImport", "saveMessage",
+  "commitMessageBundle", "commitSharedContextImportBundle", "transitionSharedContextImport", "saveMessage",
   "removeMessage", "savePart", "removePart", "saveSessionEntry", "saveSessionInput",
   "updateSessionInputs", "promoteSessionInput", "markSessionInputPromoted", "settleSessionInput",
   "commitPermissionFullAccess", "updateTodos", "recordInputHistory", "saveProjectPermission",
@@ -35,10 +35,6 @@ export const sqliteReplayableWrites = [
 ] as const;
 
 const usageWrites = ["recordModelUsage", "upsertTurnUsage", "upsertToolUsage"] as const;
-// 0.17.1 persists compaction and multi-part messages through
-// commitMessageBundle, whose upserts use stable IDs and are safe to replay.
-// The runtime feature-detects that method, so older stores stay supported.
-export const sqliteOptionalReplayableWrites = ["commitMessageBundle"] as const;
 // These can increment counters or create identities before a later write fails.
 // Order them with other writes, but never replay their possibly committed effects.
 const orderedWrites = [
@@ -163,20 +159,14 @@ export function installSqliteWriteRecovery(store: RuntimeSqliteStore, options: S
   if (installed.has(store)) return;
   const methods = store as unknown as Record<string, unknown>;
   const specifications = [
-    ...sqliteReplayableWrites.map(name => ({ name, retry: true, priority: "conversation" as const, optional: false })),
-    ...sqliteOptionalReplayableWrites.map(name => ({ name, retry: true, priority: "conversation" as const, optional: true })),
-    ...usageWrites.map(name => ({ name, retry: true, priority: "usage" as const, optional: false })),
-    ...orderedWrites.map(name => ({
-      name, retry: false, priority: name === "pruneUsage" ? "usage" as const : "conversation" as const, optional: false
-    }))
+    ...sqliteReplayableWrites.map(name => ({ name, retry: true, priority: "conversation" as const })),
+    ...usageWrites.map(name => ({ name, retry: true, priority: "usage" as const })),
+    ...orderedWrites.map(name => ({ name, retry: false, priority: name === "pruneUsage" ? "usage" as const : "conversation" as const }))
   ];
-  const originals = specifications.flatMap(spec => {
+  const originals = specifications.map(spec => {
     const method = methods[spec.name];
-    if (typeof method !== "function") {
-      if (spec.optional) return [];
-      throw new Error(`SQLite recovery requires native ${spec.name}.`);
-    }
-    return [{ ...spec, method: method as StoreMethod }];
+    if (typeof method !== "function") throw new Error(`SQLite recovery requires native ${spec.name}.`);
+    return { ...spec, method: method as StoreMethod };
   });
   const key = queueKey(store);
   const queue = queues.get(key) ?? { jobs: [], active: false, users: 0 };

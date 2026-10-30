@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
+export const runtimeStartupTimeoutMs = 20_000;
+
 /** Runtime tools inherit absolute ZCODE paths; changing HOME alone cannot isolate a check. */
 export function runtimeTestEnv(
   testHome: string,

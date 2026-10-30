@@ -557,6 +557,10 @@ models demonstrate explicit overrides and manual configuration.
 中文文档：[配置说明](./docs/CONFIGURATION.zh-CN.md) ·
 [Provider 配置字段参考](./docs/PROVIDER_CONFIG.zh-CN.md)。
 The project follows the current upstream runtime and configuration schema.
+Only the currently pinned runtime is supported; historical runtime versions are
+not a compatibility target. Runtime upgrades update the lock, package version,
+patches and regression tests together. CI rebuilds that exact artifact for
+reproducibility rather than selecting a new version during each build.
 
 Three model-access paths are supported: Z.AI/BigModel OAuth, Z.AI/BigModel
 Coding Plan API key, or a direct API key with a custom provider. For detailed
