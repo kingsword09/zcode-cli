@@ -35,8 +35,10 @@ to these functions. Recovery reads optional metadata asynchronously and shares
 one in-flight restoration per app, so a concurrent send waits for registration.
 The runtime continues to own task lifecycle, registry state and message routing;
 the helper merges read models and preserves the existing restore/stop/send order.
-`test/runtime-tui-bridge.test.ts` tests these operations directly, while
-`test/sync-runtime.test.ts` exercises the injected calls and patch idempotency.
+Required runtime patches are verified during synchronization and by `check`.
+The minimal behavioral test inventory is documented in
+[`test/README.md`](../test/README.md); implementation-string and patch-fixture
+matrices are not part of the default gate.
 
 Run all validation layers:
 
@@ -56,18 +58,15 @@ See [TUI scenario testing](./TUI_SCENARIO_TESTING.md) for fixture and PTY
 guidance, and [SQLite concurrency](./SQLITE_CONCURRENCY.md) for storage retry
 boundaries and real Node regression coverage.
 
-`check:tui` runs real-PTY scenarios. The official runtime scenario completes
+`check:tui` runs one real-PTY official runtime scenario. It completes
 masked Coding Plan API-key setup in a temporary home, verifies the official
 config output, executes `/help`, switches to plan mode, exits, and checks that
-the launcher forwards terminal SIGHUP shutdown. The offline
-feature scenario also covers suspended login restoration, selectors, image
-attachments, nested Agent tools, Markdown, Mermaid, diffs, transcript
-navigation, context/status details, MCP actions, task-scoped background output,
-terminal-agent recovery and the
-workflow panel. A pressure scenario verifies that steering, UTF-8 input and
-Ctrl+C cancellation remain responsive during rapid Bash progress output. The
-scenarios advance from observed terminal output instead of fixed timers and do
-not make model API calls.
+the launcher forwards terminal SIGHUP shutdown. The separate `test:tui` suite
+covers queue/image ownership, permission ordering, startup cancellation, shell
+cleanup in both terminal modes, and tool writes with Git diff inspection.
+Tests advance from observed output rather than fixed sleeps and do not make
+external model API calls. Visual matrices and output-pressure benchmarks are
+not release requirements.
 
 Dependency security fixes and their regression commands are documented in
 [`patches/README.md`](../patches/README.md). Source installs must use Bun so
@@ -83,9 +82,9 @@ the hardware cursor remains the only caret on the focused input. The
 PTY trace checks share `scripts/terminal-output.ts`, which handles both BEL
 and ST control-string terminators without consuming subsequent visible text.
 
-After changing pi-tui, `bun run check:tui` verifies regular/fullscreen input,
-focus, search, selection, images and overlays. `bun run verify:tui-perf` runs
-the complete quality and performance gate, including those smoke checks.
+After changing pi-tui, run `bun run test:tui` and `bun run check:tui` for the
+required terminal contracts. Inspect focus, selection and overlays manually
+when relevant. `bun run verify:tui-perf` adds optional performance measurements.
 The three runtime patches
 `http-no-content`, `bigmodel-oauth` and `cli-help-contract` also remain in the
 patch plan as required verification points: Desktop 3.16.3 already supplies
@@ -103,8 +102,7 @@ Only the best requested number of matches are retained, with exact names before
 prefix and substring matches. Hidden entries require a query beginning with `.`;
 this preserves the runtime's existing rules rather than adding `.gitignore` parsing.
 
-`bun test test/runtime-workspace-paths.test.ts test/runtime-workspace-path-patches.test.ts`
-covers real file trees and patch compatibility. After syncing the built runtime,
+After syncing the built runtime,
 `bun test test/runtime/workspace-paths.test.ts` checks the actual native provider
 and filesystem adapter in Node, including the nested file case from #240.
 
@@ -125,7 +123,7 @@ bun run sync:local # macOS with /Applications/ZCode.app; otherwise use bun run s
 bun scripts/smoke-tui.ts
 ```
 
-The tests cover lazy and legacy command lists, custom commands, MCP picker
+The tests cover lazy command lists, custom commands, MCP picker
 dispatch, cancellation, late rejection, and raw-mode restoration on failure. The
 runtime smoke test also checks `/mc` suggestions from the real upstream loader.
 For manual verification, launch `zcode`, type `/mc` without submitting, and check
@@ -164,13 +162,13 @@ bun test test/runtime/session-model-recovery.test.ts
 
 Headless recovery exits with the invalid provider/model and instructions to
 resume interactively; it sends no model request. The regression tests also
-cover `/resume` inside the TUI and restarting after a repair.
+cover repairing a saved model and restarting after the repair.
 
 ## Runtime refresh regression
 
-`bun test test/runtime-context-cache.test.ts test/tui/runtime-refresh.test.ts`
-verifies that text/reasoning deltas do not schedule runtime queries and that
-tool activity polling reuses a compact, session-scoped token summary. Completed
+Runtime refresh behavior is not exhaustively tested by the minimal suite.
+When changing it, verify that text/reasoning deltas do not schedule runtime
+queries and that tool activity polling reuses a compact, session-scoped token summary. Completed
 requests, history changes and changed projection usage invalidate the summary.
 In-flight reads from a previous session or revision cannot overwrite newer
 statistics. Full message bodies are read for statistics only after invalidation
@@ -178,9 +176,9 @@ or when the user opens `/context`; they are not retained in the cache.
 
 ## Context window projection (#212)
 
-`bun test test/runtime-context-window-patches.test.ts test/runtime/context-window-projection.test.ts`
-covers the patch that makes the product-state projection report the model's resolved
-context window. The runtime assigns `contextWindow` from a `session_created` event
+The required patch makes the product-state projection report the model's resolved
+context window; synchronization and `check` verify it on the locked runtime.
+The runtime assigned `contextWindow` from a `session_created` event
 that current runtimes no longer append for new sessions, so `/context`, the runtime
 state and the headless `--json` projection kept the 200000 default while compaction
 and the request budget used the configured window.
@@ -267,8 +265,7 @@ and injects registry options plus the registry's auth port. Unrelated functions,
 partial patches, mismatched registries and ambiguous anchors cannot satisfy its
 verification. Acorn is a synchronization-time development dependency.
 
-Run `bun test test/app-server-auth.test.ts test/runtime-app-server-patches.test.ts`
-for mode selection and patch regression tests. After synchronization, run
+Run `bun test test/app-server-auth.test.ts` for mode selection. After synchronization, run
 `bun test test/runtime/app-server-auth.test.ts` for real protocol turns against
 a local HTTPS model server: local login, credential rotation, host account
 updates and auth callbacks, missing credentials and invalid modes. Tests use
@@ -331,13 +328,10 @@ the reviewed npm tarball and an isolated installed-package smoke test.
 The complete runtime suite runs once in that job. Additional Node 24/26 Linux
 and Node 24 macOS jobs reuse the same tarball and run `test:runtime:compat`,
 the installed-package checks and the real Node SQLite suite. The compatibility
-subset covers launch, HTTP streaming/retry, app-server authentication and both
-TUI modes; it does not repeat the entire model/configuration/workflow matrix.
-
-`check:tui:focus` uses three representative configurations: regular with
-notifications off, fullscreen with unfocused BEL notifications, and the built
-fullscreen adapter with notifications off. Backend selection is also covered
-by the notification unit tests.
+subset covers launch, HTTP streaming/retry and app-server authentication;
+terminal modes run in the primary validation job. It does not repeat the whole
+suite. Focus-dependent cursors and notification combinations are manual checks,
+not a separate automatic matrix.
 
 A newer commit to the same pull request or branch automatically cancels its
 superseded CI run; unrelated pull requests continue independently.

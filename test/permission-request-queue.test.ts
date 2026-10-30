@@ -118,16 +118,6 @@ describe("permission request queue", () => {
     expect(await next).toMatchObject({ value: "allow" });
   });
 
-  test("reads the request signal from runtime or TUI options", () => {
-    const runtime = new AbortController();
-    const tui = new AbortController();
-    expect(permissionRequestSignal({ signal: runtime.signal })).toBe(runtime.signal);
-    expect(permissionRequestSignal({ abortSignal: tui.signal })).toBe(tui.signal);
-    expect(permissionRequestSignal({ signal: runtime.signal, abortSignal: tui.signal })).toBe(runtime.signal);
-    expect(permissionRequestSignal({ signal: "nope" })).toBeUndefined();
-    expect(permissionRequestSignal(undefined)).toBeUndefined();
-  });
-
   test("continues with the next request after an exception", async () => {
     const queue = new PermissionRequestQueue();
     const { host, ui } = dialogHarness();

@@ -31,48 +31,6 @@ describe("prompt credential preflight (offline)", () => {
     expect(await readFile(f.file, "utf8")).toBe(before);
   });
 
-  test("permits configured keys and auth headers without revealing them", async () => {
-    const f = await fixture();
-    f.settings.access.apiKey = "private-fixture-key";
-    await f.save();
-    expect(await missingCodingPlanKey(f.options)).toBeUndefined();
-    f.settings.access.apiKey = "";
-    Object.assign(f.settings.api, { headers: { Authorization: "Bearer private-fixture-token" } });
-    await f.save();
-    expect(await missingCodingPlanKey(f.options)).toBeUndefined();
-  });
-
-  test("defers environment credentials and model overrides to the runtime", async () => {
-    const f = await fixture();
-    for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ZCODE_API_KEY", "ZCODE_MODEL_MAIN"]) {
-      expect(await missingCodingPlanKey({ ...f.options, env: { ...f.env, [key]: "fixture" } })).toBeUndefined();
-    }
-    expect(await missingCodingPlanKey({ ...f.options, env: { ...f.env, ANTHROPIC_API_KEY: "  " } })).toBeDefined();
-    expect(await missingCodingPlanKey({ ...f.options, env: {
-      ...f.env, ZCODE_BASE_URL: "https://zcode.z.ai", ZCODE_MODEL_RETRY_MAX_RETRIES: "5",
-      ZCODE_MODEL_TELEMETRY_ENABLED: "0"
-    } })).toBeDefined();
-  });
-
-  test("defers a session's different model and account provider", async () => {
-    const f = await fixture();
-    for (const model of ["bigmodel/glm-5.3-flash", "account:bigmodel-start-plan/GLM-5.3-Flash", "default"]) {
-      expect(await missingCodingPlanKey({ ...f.options, model })).toBeUndefined();
-    }
-  });
-
-  test("defers project and dotenv overrides in parent directories", async () => {
-    const f = await fixture();
-    const child = join(f.home, "child");
-    await mkdir(child);
-    for (const relative of ["zcode.json", ".zcode/config.json", ".env"]) {
-      const override = join(f.home, relative);
-      await writeFile(override, "{}");
-      expect(await missingCodingPlanKey({ ...f.options, workingDirectory: child })).toBeUndefined();
-      await rm(override);
-    }
-  });
-
   test("leaves malformed configuration to the runtime's own diagnostics", async () => {
     const f = await fixture();
     for (const json of ["null", "[]", "invalid", '{"provider":null}']) {

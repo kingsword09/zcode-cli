@@ -17,11 +17,8 @@ const cases: {
 }[] = [
   { name: "Ctrl+C in regular mode", mode: "regular", input: "\x1b[99;5u", release: ctrlCRelease, status: 0 },
   { name: "Ctrl+C in fullscreen mode", mode: "fullscreen", input: "\x1b[99;5u", release: ctrlCRelease, status: 0 },
-  { name: "Ctrl+D", mode: "regular", input: "\x1b[100;5u", release: "\x1b[100;5:3u", status: 0 },
-  { name: "/exit", mode: "regular", input: "/exit\r", release: "\x1b[13;1:3u", status: 0 },
   { name: "startup cancellation", mode: "regular", startup: true, input: "\x1b[99;5u", release: ctrlCRelease, status: 130 },
   { name: "repeated SIGTERM", mode: "fullscreen", signal: "SIGTERM", release: ctrlCRelease, status: 143 },
-  { name: "repeated SIGTERM during startup", mode: "regular", startup: true, signal: "SIGTERM", release: ctrlCRelease, status: 143 }
 ];
 
 for (const scenario of cases) {

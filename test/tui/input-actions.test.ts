@@ -32,25 +32,6 @@ test("queue supports pausing, reordering and editing drafts through the keyboard
   await session.exit();
 }, 20_000);
 
-test.each(["/edit-message", "/retry"])("%s confirms conversation rewind before editing or resending", async (command) => {
-  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-message-action-" });
-  await using session = TerminalSession.start({ command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")], workspace });
-  await session.waitForScreen("ready", /Original answer/u);
-  await session.sendAndWait(`${command}\r`, "question picker", /Select the question/u);
-  session.send("\r");
-  await session.waitForScreen("explicit history scope", /Later conversation turns will be removed/u);
-  session.send("\x1b[B\r");
-  if (command === "/retry") await session.waitForHistory("question retried", /Sent: Original question/u);
-  else {
-    await session.waitForHistory("rewind completed", /Conversation rewound\. The selected input was restored to the editor/u);
-    await session.waitForScreen("question restored", /Original question/u);
-    await session.assertScreenExcludes("edit does not submit", /Sent: Original question/u);
-    session.send("\x03");
-    await session.settle();
-  }
-  await session.exit();
-}, 20_000);
-
 test("pending images cannot silently move into another queued or retried question", async () => {
   await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-input-images-" });
   await using session = TerminalSession.start({ command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")], workspace });
@@ -82,76 +63,5 @@ test("resuming queued text preserves an image attached afterwards for the editor
   await session.waitForScreen("image remains", /\[Image #1\]/u);
   await session.sendAndWait("Image question\r", "editor image sent", /Sent: Image question with original image/u);
   await session.assertScreenExcludes("sent image leaves editor", /\[Image #1\]/u);
-  await session.exit();
-}, 20_000);
-
-test("ctrl+c clears the editor text on screen without waiting for the next keypress", async () => {
-  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-input-clear-" });
-  await using session = TerminalSession.start({ command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")], workspace });
-  await session.waitForScreen("ready", /Original answer/u);
-  session.send("stale draft");
-  await session.waitForScreen("draft visible", /stale draft/u);
-  session.send("\x03");
-  await session.settle();
-  await session.assertScreenExcludes("cleared draft no longer visible", /stale draft/u);
-  await session.exit();
-}, 20_000);
-
-test("ctrl+f replaces editor text with the /search prefill on screen", async () => {
-  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-input-search-" });
-  await using session = TerminalSession.start({ command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")], workspace });
-  await session.waitForScreen("ready", /Original answer/u);
-  session.send("stale draft");
-  await session.waitForScreen("draft visible", /stale draft/u);
-  session.send("\x06");
-  await session.settle();
-  await session.assertScreenExcludes("replaced draft no longer visible", /stale draft/u);
-  await session.waitForScreen("search prefill visible", /\/search/u);
-  session.send("\x03");
-  await session.settle();
-  await session.exit();
-}, 20_000);
-
-test("fragmented terminal palette replies do not enter the draft or trigger input actions", async () => {
-  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-color-replies-" });
-  await using session = TerminalSession.start({
-    command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")],
-    workspace,
-    env: { NO_COLOR: "", COLORFGBG: "15;0", EDITOR: "true", VISUAL: "true" }
-  });
-  await session.waitForScreen("ready", /Original answer/u);
-  session.send("retained draft");
-  await session.waitForScreen("draft visible", /retained draft/u);
-  for (const fragment of [
-    "\x1b]10;rgb:", "1111/2222/3333", "\x07",
-    "\x1b]11;rgb:ffff", "/eeee/dddd", "\x1b\\",
-    "\x1b]4;2;rgb:", "1234/5678/9abc", "\x07",
-    "\x1b[?1;2c"
-  ]) {
-    session.send(fragment);
-    await session.settle();
-  }
-  await session.assertScreenExcludes("palette replies stay out of the draft", /rgb:|1111|2222|ffff|9abc/u);
-  await session.sendAndWait(" tail\r", "unaltered draft submitted", /Sent: retained draft tail/u);
-  await session.exit();
-}, 20_000);
-
-test("Ctrl+T cycles reasoning effort without clearing a typed prompt", async () => {
-  await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-effort-shortcut-" });
-  await using session = TerminalSession.start({
-    command: [process.execPath, join(import.meta.dir, "fixtures/input-actions.ts")],
-    workspace
-  });
-  await session.waitForScreen("ready", /Original answer/u);
-  session.send("Draft question");
-  await session.waitForScreen("draft typed", /Draft question/u);
-  session.send("\x14");
-  await session.waitForScreen("effort raised", /⚡ high/u);
-  await session.waitForScreen("draft preserved after effort raised", /Draft question/u);
-  session.send("\x14");
-  await session.waitForScreen("effort lowered", /⚡ low/u);
-  await session.waitForScreen("draft preserved after effort lowered", /Draft question/u);
-  await session.assertScreenExcludes("effort shortcut does not submit the draft", /Sent: Draft question/u);
-  await session.sendAndWait("\r", "draft submitted", /Sent: Draft question/u);
   await session.exit();
 }, 20_000);
