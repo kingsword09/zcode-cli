@@ -20,6 +20,7 @@ import {
   hasRuntimeSqliteBusyTimeout,
   hasRuntimeSqliteWriteRecovery,
   hasRuntimeStreamEofFinishGuard,
+  hasRuntimeTrackedDetachedAgentLifecycle,
   installRuntimeProviderConfig,
   parseArgs,
   parseRuntimePatchReports,
@@ -36,6 +37,7 @@ import {
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOAuthHttpErrors,
   patchRuntimeSessionModelRecovery,
+  patchRuntimeSharedConfig,
   patchRuntimeSqliteBusyTimeout,
   patchRuntimeSqliteWriteRecovery,
   patchRuntimeStreamEofFinishGuard,
@@ -150,6 +152,30 @@ function bridgeFunction(...args: string[]): (...values: unknown[]) => unknown {
 }
 
 describe("runtime synchronization", () => {
+  test("keeps the project config scope when merging shared Desktop settings", () => {
+    const source = [
+      'var F="config.json",B="~/.zcode/cli";',
+      'var M1=W(()=>{"use strict";r(Imp,"importLegacyCliPersonalProviderConfig")});',
+      'var M2=W(()=>{"use strict";Repo=class{static{r(this,"NodePersonalProviderConfigRepository")}}});',
+      'async function main(){let e=process.argv.slice(2);return await run(e)}',
+      'function load(n,t={}){try{let o=(0,R.readFileSync)(n,"utf-8"),i=JSON.parse(o),a=BJs(i);let c=Lso(i,t.scope);return{config:c.config,path:n}}catch(o){return{config:{},path:n}}}'
+    ].join("");
+    const patched = patchRuntimeSharedConfig(source);
+
+    expect(patched).toContain('F="setting.json"');
+    expect(patched).toContain(
+      'Lso(require(require("node:path").join(__dirname,"cli-config.cjs")).mergeDesktopSettings(i,n,process.env),t.scope)'
+    );
+    expect(patchRuntimeSharedConfig(patched)).toBe(patched);
+
+    // Runtimes without project scopes keep the single-argument call.
+    const unscoped = patchRuntimeSharedConfig(source.replace(",t.scope", ""));
+    expect(unscoped).toContain(
+      'Lso(require(require("node:path").join(__dirname,"cli-config.cjs")).mergeDesktopSettings(i,n,process.env))'
+    );
+    expect(() => patchRuntimeSharedConfig(source.replace("let c=Lso(i,t.scope);", ""))).toThrow(/settings\/migration anchors/);
+  });
+
   test("requires native subagent query and reducer anchors", () => {
     expect(runtimeSubagentQueryBridge(subagentQueryAnchors)).toContain("projectSubagents:projectSubagents");
     for (const name of ["collectSubagentChildSessionIds", "projectSessionSubagents", "EventReducer"]) {
@@ -1623,6 +1649,18 @@ describe("runtime synchronization", () => {
     ]);
     expect(patchRuntimeDetachedAgentLifecycle(patched)).toBe(patched);
     expect(() => patchRuntimeDetachedAgentLifecycle("incompatible runtime")).toThrow(/incompatible/);
+  });
+
+  test("accepts the native detached lifecycle tracker instead of patching it", () => {
+    const runtime = [
+      'let c=(p,d=!1)=>(set.add(p),p.then(()=>set.delete(p),e=>{set.delete(p),d&&failures.push(e)}),p);',
+      'async function start(){let d={promise:Promise.resolve(),reject(){}},h={dispose(){}};',
+      'c(run({onSessionStartFailed:d.reject},h.dispose),!0);try{await d.promise}catch{}}'
+    ].join("");
+
+    expect(hasRuntimeTrackedDetachedAgentLifecycle(runtime)).toBe(true);
+    expect(patchRuntimeDetachedAgentLifecycle(runtime)).toBe(runtime);
+    expect(hasRuntimeTrackedDetachedAgentLifecycle(runtime.replace(",!0)", ")"))).toBe(false);
   });
 
   test("clears stale active tools when a runtime turn settles", () => {
