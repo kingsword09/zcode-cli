@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { cliSettingsPath, ensureCliSettings } from "../../src/model-access.ts";
 import { writeProviderFixture } from "../fixtures/provider-config.ts";
-import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
+import { runtimeStartupTimeoutMs, runtimeTestEnv } from "../fixtures/runtime-env.ts";
 import { ScenarioWorkspace } from "../tui/harness/scenario-workspace.ts";
 import { TerminalSession } from "../tui/harness/terminal-session.ts";
 
@@ -51,7 +51,7 @@ test.skipIf(process.platform === "win32")("native workflow settings, live retuni
     const providerBefore = await readFile(providerPath, "utf8");
     await using session = TerminalSession.start({ command: [Bun.which("node")!, join(root, "bin/zcode.js"), "--workflow-mode", "alwaysOn"], workspace, cols: 110, rows: 40,
       env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)), timeoutMilliseconds: 60_000 });
-    await session.waitForScreen("startup", /custom\/fixture/u);
+    await session.waitForScreen("startup", /custom\/fixture/u, runtimeStartupTimeoutMs);
     await session.sendAndWait("Create the isolated workflow.\r", "workflow approval", /Approve CreateWorkflow/u);
     await session.sendAndWait("concurrency\r", "concurrency input", /Workflow concurrency/u);
     await session.sendAndWait("2\r", "adjusted approval", /Concurrency: 2/u);

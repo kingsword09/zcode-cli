@@ -27,7 +27,7 @@ export const sqliteWriteRecoveryPolicy = {
 // synchronously, so they never leave a transaction open across an await.
 export const sqliteReplayableWrites = [
   "createSession", "updateSession", "softDeleteSession", "createForkedSessionWithMetadata", "commitForkBundle",
-  "commitSharedContextImportBundle", "transitionSharedContextImport", "saveMessage",
+  "commitMessageBundle", "commitSharedContextImportBundle", "transitionSharedContextImport", "saveMessage",
   "removeMessage", "savePart", "removePart", "saveSessionEntry", "saveSessionInput",
   "updateSessionInputs", "promoteSessionInput", "markSessionInputPromoted", "settleSessionInput",
   "commitPermissionFullAccess", "updateTodos", "recordInputHistory", "saveProjectPermission",

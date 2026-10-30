@@ -23,7 +23,7 @@ their upstream originals byte for byte.
 revision. It is copied in its original language.
 
 The public source revision declares version 3.14.0. It is distinct from the
-Desktop 3.16.3 artifact pinned by this project's runtime lock. These notices
+Desktop 3.17.1 artifact pinned by this project's runtime lock. These notices
 preserve upstream attribution; they are not a claim that this CLI was built
 from that exact commit. The third-party inventory covers multiple upstream
 distributions and may list components absent from our npm package.

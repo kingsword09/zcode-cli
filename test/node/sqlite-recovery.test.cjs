@@ -36,6 +36,16 @@ function interceptRuns(db, beforeRun) {
   return () => { db.prepare = prepare; };
 }
 
+test("recovery requires the native message bundle transaction", async () => {
+  await withDirectory(async (directory, dbPath) => {
+    const commitMessageBundle = Store.prototype.commitMessageBundle;
+    Store.prototype.commitMessageBundle = undefined;
+    try {
+      await assert.rejects(Store.openStartup({ dbPath }), /SQLite recovery requires native commitMessageBundle/);
+    } finally { Store.prototype.commitMessageBundle = commitMessageBundle; }
+  });
+});
+
 test("lock recovery yields to timers and restores the native timeout", { timeout: 10_000 }, async () => {
   await withDirectory(async (directory, dbPath) => {
     const store = await Store.openStartup({ dbPath });
@@ -153,6 +163,46 @@ test("idempotent part recovery preserves sequence and cannot overwrite a newer q
       assert.equal(rows[0].sequence, 0);
       assert.equal(JSON.parse(rows[0].data).text, "newer");
       assert.equal(sqliteRecoveryStats(store).lastRecovery.operation, "savePart");
+    } finally { store.close(); }
+  });
+});
+
+test("message bundles roll back partial writes before retrying without duplicating records", async () => {
+  await withDirectory(async (directory, dbPath) => {
+    const store = await Store.openStartup({ dbPath });
+    try {
+      await store.createSession(sessionInput(directory, "session"));
+      const first = promotion("session", "first"), second = promotion("session", "second");
+      let failed = false, sawPartialWrite = false, rollbacks = 0;
+      const execute = store.db.exec.bind(store.db);
+      store.db.exec = sql => {
+        const result = execute(sql);
+        if (sql === "rollback") {
+          rollbacks++;
+          assert.equal(store.db.prepare("select count(*) AS n from message").get().n, 0);
+          assert.equal(store.db.prepare("select count(*) AS n from part").get().n, 0);
+        }
+        return result;
+      };
+      interceptRuns(store.db, sql => {
+        if (!failed && sql.startsWith("insert into message")
+          && store.db.prepare("select count(*) AS n from part").get().n === 1) {
+          failed = true;
+          sawPartialWrite = true;
+          throw Object.assign(new Error("busy during message bundle"), { errcode: 5 });
+        }
+      });
+      await store.commitMessageBundle({
+        sessionID: "session",
+        messages: [first, second].map(data => ({ info: data.message, parts: data.parts }))
+      });
+      assert.equal(sawPartialWrite, true);
+      assert.equal(rollbacks, 1);
+      assert.equal(store.db.isTransaction, false);
+      assert.equal(store.db.prepare("select count(*) AS n from message").get().n, 2);
+      assert.equal(store.db.prepare("select count(*) AS n from part").get().n, 2);
+      assert.equal(sqliteRecoveryStats(store).lastRecovery.operation, "commitMessageBundle");
+      assert.equal(sqliteRecoveryStats(store).lastRecovery.attempts, 2);
     } finally { store.close(); }
   });
 });

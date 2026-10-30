@@ -192,7 +192,11 @@ project or plugin servers. Use `enabled: false` on a named server, or
 Enabled plugins also contribute servers. Their definitions come from the
 plugin's `.mcp.json` or manifest, and normally appear as
 `plugin:<plugin-name>:<server-name>`. Keep standalone user MCP definitions in
-`setting.json`; this CLI does not automatically read `.agents/mcp.json`.
+`setting.json`. Project `.agents/mcp.json` declarations are also discovered by
+runtime 0.17.1. Project-scoped MCP servers require workspace trust before they
+launch; an `untrusted` server is not a connection failure. The CLI currently has
+no trust-management command; approve the workspace declarations in Desktop,
+which shares the workspace trust store with the CLI.
 Plugin controls remain under `plugins`, hook declarations under
 `hooks.events.<Event>`, and tool permissions under `permission` in `setting.json`.
 
@@ -201,7 +205,7 @@ Plugin controls remain under `plugins`, hook declarations under
 These paths distinguish the packaged CLI from the upstream application. The
 source references below are pinned to upstream
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e).
-This package's runtime lock selects the separate Desktop 3.16.3 artifact; the
+This package's runtime lock selects the separate Desktop 3.17.1 / runtime 0.17.1 artifact; the
 public source snapshot is not an assertion of that artifact's build commit.
 The configuration boundaries were rechecked on 2026-10-20 against
 [`0a1fc56` / `0.17.0`](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411).

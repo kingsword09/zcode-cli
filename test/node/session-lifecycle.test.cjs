@@ -13,6 +13,8 @@ const helper = require("../../vendor/cli-config.cjs");
 function runtime(store, directory) {
   return {
     sessionId: "sess_native_lifecycle", sessionPersisted: false, sessionStore: store,
+    // 0.17.1 writes recorded session features after the first persist.
+    sessionFeatures: new Set(), sessionFeaturesWrite: Promise.resolve(),
     workingDirectory: directory, appVersion: "test", config: { taskType: "interactive", mode: "build" },
     rootTraceContext: { traceId: "trace_native_lifecycle" },
     getSessionModelSelection: () => undefined,

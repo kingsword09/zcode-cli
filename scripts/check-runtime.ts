@@ -28,6 +28,7 @@ import {
   hasRuntimeSqliteBusyTimeout,
   hasRuntimeSqliteWriteRecovery,
   hasRuntimeStreamEofFinishGuard,
+  hasRuntimeTrackedDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
   patchRuntimeLoginModelDefaults,
@@ -146,6 +147,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || (patchEnabled("agent-auto-background")
     && !runtimeSource.includes("autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:"))
   || (patchEnabled("detached-agent-lifecycle")
+    && !hasRuntimeTrackedDetachedAgentLifecycle(runtimeSource)
     && runtimeSource.split("Detached background agent lifecycle failed").length < 3)
   || !runtimeSource.includes('e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId')
   || (patchEnabled("terminal-tool-projection")
