@@ -55,12 +55,12 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 
 | File | Failure this must prevent |
 | --- | --- |
-| `launcher.test.ts` | Keyless prompts run, missing sessions leak diagnostics, or a local plugin cannot be installed and discovered. |
+| `launcher.test.ts` | Keyless prompts run, missing sessions leak diagnostics, repeated cancellation leaves the runtime alive, or a local plugin cannot be installed and discovered. |
 | `app-server-auth.test.ts` | Real protocol turns use the wrong credential owner, fail to rotate keys, or fall back from missing credentials to host authentication. |
 | `settings-file.test.ts` | Runtime writes and trust changes escape a host-selected settings store or change native MCP precedence. |
 | `config-migration.test.ts` | Migration loses providers, overwrites conflicting/invalid configuration, or runs twice concurrently. |
 | `shared-oauth.test.ts` | Native login stores plaintext/wrong tokens, ignores Desktop account changes, or damages shared login state on an HTTP failure. |
-| `network-retry.test.ts` | A reset/unfinished stream silently truncates output, duplicates partial output on retry, or reports success after exhaustion. |
+| `network-retry.test.ts` | Retry/slow pipes lose a headless result, partial output is duplicated, or exhaustion/cancellation reports success. |
 | `session-lifecycle.test.ts` | An untouched session is saved, rename/resume loses data, or failed work becomes unresumable. |
 | `session-model-recovery.test.ts` | An invalid saved model sends a request, cannot be repaired and persisted, or falls back from an unavailable explicit model. |
 | `guarded-permission-tui.test.ts` | A destructive command executes before single-use approval. |
@@ -70,6 +70,7 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 
 | File | Failure this must prevent |
 | --- | --- |
+| `headless-lifecycle.test.cjs` | Unreferenced work exits early, output errors disappear, or lifecycle handles keep a finished process alive. |
 | `session-lifecycle.test.cjs` | Concurrent first writes create duplicate sessions or failed title writes claim success. |
 | `sqlite-session-store.test.cjs` | Migration races corrupt the database, lock exhaustion commits data, killed writes survive rollback, or native timeout policy disappears. |
 | `sqlite-recovery.test.cjs` | Retrying duplicates records/counters, enters a caller's transaction, blocks the event loop, loses update order, or persists work after close. |

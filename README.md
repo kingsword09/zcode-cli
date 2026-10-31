@@ -500,6 +500,9 @@ Without `--effort`, `--model` uses the model's default level. Both flags require
 `--prompt` (or `-p`) and leave the saved default for new sessions unchanged; the
 run's model and effort are recorded on that session.
 
+For automation and long-running `-p` jobs, see [headless execution](./docs/HEADLESS.md)
+for output completion, cancellation, background execution and validation limits.
+
 ZCode reads MCP servers, hooks, plugins, permissions, network, storage and display
 settings from `~/.zcode/cli/setting.json` (or
 `%USERPROFILE%\.zcode\cli\setting.json` on Windows). Project settings use

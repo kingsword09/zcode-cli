@@ -82,6 +82,7 @@ export async function validatePackageTree(base = root): Promise<void> {
     "docs/CONFIGURATION.zh-CN.md",
     "docs/PROVIDER_CONFIG.md",
     "docs/PROVIDER_CONFIG.zh-CN.md",
+    "docs/HEADLESS.md",
     "package.json",
     "src/app-server-client.ts",
     "src/command.ts",

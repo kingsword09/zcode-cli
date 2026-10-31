@@ -44,6 +44,7 @@ const requiredFiles = [
   "docs/PROVIDER_CONFIG.md",
   "docs/PROVIDER_CONFIG.zh-CN.md",
   "docs/HOST_INTEGRATION.md",
+  "docs/HEADLESS.md",
   "package.json",
   "vendor/extraction.json",
   "vendor/node_modules/@zcode/tui/dist/index.js",
@@ -65,6 +66,7 @@ const allowedRoots = new Set([
   "docs/PROVIDER_CONFIG.md",
   "docs/PROVIDER_CONFIG.zh-CN.md",
   "docs/HOST_INTEGRATION.md",
+  "docs/HEADLESS.md",
   "package.json",
   "zcode-runtime.lock.json"
 ]);
