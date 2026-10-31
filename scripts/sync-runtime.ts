@@ -19,6 +19,8 @@ export { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runt
 import { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
 import { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
 export { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
+import { hasRuntimeStartPlan, patchRuntimeStartPlan } from "./runtime-start-plan-patches.ts";
+export { hasRuntimeStartPlan, patchRuntimeStartPlan } from "./runtime-start-plan-patches.ts";
 export { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
 import { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
 export { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
@@ -1966,6 +1968,10 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
   {
     id: "shared-oauth", requirement: "required", apply: patchRuntimeSharedOAuth,
     verify: hasRuntimeSharedOAuth
+  },
+  {
+    id: "start-plan-standalone", requirement: "optional", apply: patchRuntimeStartPlan,
+    verify: hasRuntimeStartPlan
   },
   {
     id: "login-model-defaults",
