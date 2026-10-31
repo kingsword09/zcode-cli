@@ -102,28 +102,26 @@ and independent Node processes. They do not use account credentials or send mode
 requests. They cover:
 
 - the effective `PRAGMA busy_timeout` after sync open, async startup, and reopen;
-- a native session write blocked by another process for 6.5 seconds, longer than
-  the previous 5-second timeout, then succeeding exactly once;
-- recovery after a 10.5-second lock, with timers progressing during backoff;
+- a native session write recovering from a process-held lock while timers
+  progress during backoff;
 - a deliberately shortened recovery budget that reports `SQLITE_BUSY`, writes
   no session, and permits a later write after the lock is released;
 - four independent processes migrating the same fresh database and persisting
   distinct sessions without duplicate migrations or integrity errors;
 - killing a writer with uncommitted changes, then reopening without those changes
   and successfully writing another session;
-- same-process connections completing an asynchronous native transaction without
-  starving its commit, plus caller-owned transactions retaining rollback ownership;
+- caller-owned transactions retaining rollback ownership and never being replayed;
 - a failure after message/part insertion that rolls back before input promotion
   retries, and an idempotent partial part write that cannot overtake a newer update;
 - a partial message bundle rolling back before replay, without duplicate messages
   or parts, and rejection of stores missing the native bundle transaction;
 - non-BUSY errors and partially committed goal counters never being replayed;
 - closing a store cancelling both backoff and pending writes;
-- 100 usage facts requiring one cleanup transaction when expired rows exist,
-  with recent records retained and explicit cleanup still honored;
-- retrying usage writes yielding priority to conversation writes;
-- twelve independent processes persisting 300 input promotions and matching
-  messages, parts and usage records, followed by integrity and foreign-key checks.
+- integrity and foreign-key checks after migration and killed-writer recovery.
+
+The minimal suite does not retain long held-lock delays, maintenance-priority
+matrices or large multi-process stress runs. Its boundary inventory is in
+[`test/README.md`](../test/README.md).
 
 Lock holders use independent processes. One test schedules their release from
 the writer's event loop to verify that the new recovery yields instead of

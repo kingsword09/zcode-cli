@@ -12,16 +12,7 @@ Tests are grouped by execution cost and environment:
 # In-process application and pure unit tests.
 bun run test:unit
 
-# In-process scenario harness components (no PTY or child TUI).
-bun run test:tui:component
-
 # Hermetic PTY scenarios with a fixture runtime.
-bun run test:tui:e2e
-
-# Tests requiring a host kernel transport and mount privileges.
-ZCODE_TEST_MOUNTX=1 bun run test:tui:host
-
-# Run component and PTY TUI layers (the default portable TUI suite).
 bun run test:tui
 
 # Tests that require vendor/zcode.cjs, Node, sockets, or local networking.
@@ -37,7 +28,7 @@ bun run test:node
 bun run test:all
 ```
 
-`bun run test` intentionally aliases the unit group for normal development.
+`bun run test` runs the complete required suite; `test:unit` is the fast subset.
 The built-in `bun test` command also discovers the Node-only `.test.cjs` files
 and runs them with the wrong SQLite implementation. Use `bun run test:all`
 for the complete suite; runtime and Node tests require a synchronized runtime.
@@ -53,15 +44,6 @@ bun run test:tui-scenario --list
 
 # Run all portable TUI scenarios automatically.
 bun run test:tui
-
-# Run only the in-process scenario harness tests.
-bun run test:tui:component
-
-# Run only the real PTY TUI scenarios.
-bun run test:tui:e2e
-
-# Run Mountx only on a runner with a configured transport.
-ZCODE_TEST_MOUNTX=1 bun run test:tui:host
 
 # Run one scenario automatically.
 bun run test:tui-scenario permission-request-queue
@@ -205,10 +187,11 @@ host's selected transport. `MountxWorkspaceBackend` also accepts a custom
 Mountx driver for operation journaling or deterministic fault injection. The
 backend is opt-in because Mountx is alpha, requires OS mount support, and
 exposes the mount to other host processes. It is not a sandbox.
-The gated integration check can be run explicitly:
+There is no automatic Mountx gate in the minimal suite. Inspect a mounted
+workspace explicitly on a host with the required transport:
 
 ```bash
-ZCODE_TEST_MOUNTX=1 bun test test/tui/scenario-mountx.test.ts
+bun run test:tui:manual allowlisted-shell --workspace-backend=mountx
 ```
 
 The completed backend boundary is:
@@ -233,6 +216,6 @@ container/VM runtime test instead of weakening the hermetic TUI suite.
 2. Add a declaration under `test/tui/scenarios/` with optional baseline files
    and the automatic interaction.
 3. Register it in `test/tui/scenarios/index.ts`.
-4. Add a `bun:test` entry and register it in the matching `test:tui` package script
-   when the scenario should run in the automated suite.
+4. Add a `bun:test` entry only when it prevents a distinct product failure not
+   already covered by the inventory in [`test/README.md`](../test/README.md).
 5. Verify both automatic and `--manual` modes before enabling it in CI.

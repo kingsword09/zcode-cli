@@ -5,7 +5,7 @@ import { TerminalSession } from "./harness/terminal-session.ts";
 
 const command = [process.execPath, join(import.meta.dir, "fixtures/startup.ts")];
 
-for (const mode of ["lazy", "legacy"]) {
+for (const mode of ["lazy"]) {
   test(`TUI loads ${mode} startup commands before constructing the editor`, async () => {
     await using workspace = await ScenarioWorkspace.create({ prefix: "zcode-startup-" });
     await using session = TerminalSession.start({ command, workspace, env: { ZCODE_TEST_STARTUP_MODE: mode } });

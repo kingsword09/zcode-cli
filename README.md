@@ -586,10 +586,13 @@ Run all validation layers:
 
 ```bash
 bun run typecheck
-bun test
+bun run test
 bun run check
 bun run check:tui
 ```
+
+The required contracts and the reason for every retained test file are listed in
+[`test/README.md`](./test/README.md). `bun run test:unit` runs only the fast subset.
 
 For the OAuth path, release workflow details, CI, and the full development
 guide, see [Development](./docs/DEVELOPMENT.md). For maintainer-only release

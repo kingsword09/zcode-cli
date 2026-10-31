@@ -17,12 +17,12 @@ use this parser. It does not patch the unused browser/minified entry points.
 The installed `just-bash` Node bundle imports this entry for fallback formats.
 Its ordinary floating-point `printf` implementation uses its own formatter
 and already converts precision errors into stderr and exit code 1. Its `awk`
-formatter rejects precision above 100 with exit code 126. Regression coverage
-checks these command boundaries and subsequent successful shell use, as well
-as the patched formatter directly:
+formatter rejects precision above 100 with exit code 126. The minimal regression
+directly checks that the patched formatter bounds hostile precision and preserves
+normal formatting; it does not repeat the shell implementation's own tests:
 
 ```sh
-bun test test/sprintf-precision.test.ts test/tui/scenario-shell.test.ts
+bun test test/shell-security.test.ts
 ```
 
 `bun audit` still reports this one moderate advisory because the installed

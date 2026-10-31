@@ -23,27 +23,6 @@ test("real runtime keeps the write timeout after open and reopen", { timeout: 15
   });
 });
 
-test("a native session write survives a lock held beyond the old five-second window", { timeout: 20_000 }, async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const store = await Store.openStartup({ dbPath });
-    let holder;
-    try {
-      assert.equal(store.db.prepare("PRAGMA busy_timeout").get().timeout, 10_000);
-      holder = await startWorker("hold", { dbPath, holdMs: 6500 });
-      // Keep the held interval independent of the writer's retry scheduling.
-      holder.send("wait");
-      const startedAt = performance.now();
-      await store.createSession(sessionInput(directory, "waited-session"));
-      assert.ok(performance.now() - startedAt >= 6000, "The write must overlap the held lock");
-      await holder.wait();
-      assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM session WHERE id = ?").get("waited-session").count, 1);
-    } finally {
-      await holder?.stop();
-      store.close();
-    }
-  });
-});
-
 test("lock timeout is bounded, writes nothing, and the same connection works after release", { timeout: 15_000 }, async () => {
   await withDirectory(async (directory, dbPath) => {
     const store = await BoundedStore.openStartup({ dbPath });

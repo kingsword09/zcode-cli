@@ -201,17 +201,16 @@ both credential owners against a local HTTPS model fixture.
 
 `bigmodel-oauth` is required. It replaces the runtime's direct exchange requiring
 an app secret with Desktop's official ZCode token service, and persists the
-ZCode JWT alongside the BigModel tokens. Runtime tests use the native localhost
-callback, stub token/API-key endpoints and the native encrypted credential store
-to cover browser login, failure cleanup and manual Coding Plan setup.
+ZCode JWT alongside the BigModel tokens. The minimal OAuth tests exercise native
+token storage, account changes and HTTP failure handling through local fixtures.
+They are not an exhaustive BigModel login matrix; inspect platform-specific
+callbacks and manual Coding Plan setup when changing those paths.
 
 `browser-url-opening` is required. Windows browser launches use an encoded
 PowerShell command that decodes the URL as data, preserving OAuth query separators,
-percent encoding and state. On Windows, run `bun test test/browser-open.test.ts`
-locally to exercise PowerShell itself with the browser-launch action stubbed.
-The cross-platform tests remain in the unit suite. Runtime login tests also
-verify that the native browser opener invokes this command before completing
-the callback.
+percent encoding and state. Inspect PowerShell/browser opening on Windows when
+changing this path; it is not a separate test in the minimal baseline.
+The real-runtime smoke still exercises masked key setup and normal launcher exit.
 
 If a required compatibility check fails, synchronization writes JSON and
 Markdown reports under `.release/`. The scheduled workflow uploads both files

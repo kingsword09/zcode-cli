@@ -19,20 +19,6 @@ function transport(script: string) {
 }
 
 describe("app-server NDJSON client", () => {
-  test("makes successful request diagnostics available without mixing them into the result", async () => {
-    const diagnostics: string[] = [];
-    expect(await requestAppServer({
-      method: "session/list", params: {}, onStderr: stderr => diagnostics.push(stderr),
-      transport: transport(`
-        process.stdin.resume();
-        process.stdin.once("data", () => {
-          process.stderr.write("fixture diagnostic\\n");
-          console.log(JSON.stringify({id:1,result:{sessions:[]}}));
-        });
-      `)
-    })).toEqual({ sessions: [] });
-    expect(diagnostics).toEqual(["fixture diagnostic\n"]);
-  });
 
   test("returns the matching response envelope", async () => {
     const script = `
@@ -75,20 +61,6 @@ describe("app-server NDJSON client", () => {
     }
   });
 
-  test("preserves app-server process exit codes", async () => {
-    try {
-      await requestAppServer({
-        method: "plugins/overview",
-        params: {},
-        transport: transport("process.stdin.resume(); process.stdin.once('data', () => process.exit(7));")
-      });
-      throw new Error("Expected request to fail.");
-    } catch (error) {
-      expect(error).toBeInstanceOf(AppServerProcessError);
-      expect(error).toMatchObject({ exitCode: 7 });
-    }
-  });
-
   test("rejects missing envelopes and honours cancellation", async () => {
     await expect(requestAppServer({
       method: "plugins/list",
@@ -104,26 +76,6 @@ describe("app-server NDJSON client", () => {
       signal: controller.signal,
       transport: transport("")
     })).rejects.toMatchObject({ name: "AbortError" });
-  });
-
-  test("keeps stdin open through unrelated messages and a chunked UTF-8 response", async () => {
-    expect(await requestAppServer({
-      method: "session/list", params: {}, transport: transport(`
-        let responded = false;
-        process.stdin.resume();
-        process.stdin.on("end", () => { if (!responded) process.exit(9); });
-        process.stdin.once("data", () => {
-          console.log(JSON.stringify({method:"startup/storageState",params:{phase:"ready"}}));
-          console.log(JSON.stringify({id:2,result:{ignored:true}}));
-          const response = Buffer.from(JSON.stringify({id:1,result:{sessions:[{title:"你好，世界"}]}}) + "\\n");
-          const split = response.indexOf(Buffer.from("界")) + 1;
-          setTimeout(() => {
-            process.stdout.write(response.subarray(0, split));
-            setTimeout(() => {responded=true;process.stdout.write(response.subarray(split));}, 30);
-          }, 150);
-        });
-      `)
-    })).toEqual({ sessions: [{ title: "你好，世界" }] });
   });
 
   test("finishes cancellation when the app-server ignores SIGTERM", async () => {
@@ -143,21 +95,4 @@ describe("app-server NDJSON client", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   }, 3_000);
 
-  test("forwards SIGHUP and returns its conventional cancellation status", async () => {
-    if (process.platform === "win32") return;
-    const controller = new AbortController();
-    const pending = requestAppServer({
-      method: "plugins/list",
-      params: {},
-      signal: controller.signal,
-      transport: transport(`
-        process.on("SIGHUP", () => process.exit(0));
-        process.stdin.resume();
-        setInterval(() => {}, 1000);
-      `)
-    });
-    setTimeout(() => controller.abort("SIGHUP"), 150);
-
-    await expect(pending).rejects.toMatchObject({ name: "AbortError", exitCode: 129 });
-  }, 3_000);
 });

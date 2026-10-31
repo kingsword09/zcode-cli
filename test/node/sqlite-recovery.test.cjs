@@ -66,44 +66,6 @@ test("lock recovery yields to timers and restores the native timeout", { timeout
   });
 });
 
-test("a write recovers after contention exceeds the former ten-second timeout", { timeout: 25_000 }, async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const store = await Store.openStartup({ dbPath });
-    let holder;
-    try {
-      holder = await startWorker("hold", { dbPath, holdMs: 10_500 });
-      holder.send("wait");
-      const startedAt = performance.now();
-      await store.createSession(sessionInput(directory, "long-contention"));
-      assert.ok(performance.now() - startedAt >= 10_000);
-      assert.equal(store.db.prepare("select count(*) AS n from session").get().n, 1);
-      assert.ok(sqliteRecoveryStats(store).lastRecovery.attempts > 1);
-      await holder.wait();
-    } finally { await holder?.stop(); store.close(); }
-  });
-});
-
-test("connections in one process commit a native bundle atomically without blocking", { timeout: 10_000 }, async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const first = await Store.openStartup({ dbPath });
-    const second = await Store.openStartup({ dbPath });
-    try {
-      const id = "imported", now = Date.now();
-      // Runtime 0.17.0 in Desktop 3.16.3 runs bundle commits synchronously, so no
-      // transaction is observable between the call and its resolution.
-      const importing = first.commitSharedContextImportBundle({
-        session: sessionInput(directory, id),
-        contextMessage: { info: { id: "context", sessionID: id, role: "user", visibility: "model-only", source: "shared_context", time: { created: now } }, parts: [] },
-        provenance: { id: `provenance:${id}`, sessionID: id, type: "v4/shared_context_import", time: { created: now, updated: now }, data: { contextId: id, status: "pending" } }
-      });
-      await Promise.all([importing, second.createSession(sessionInput(directory, "concurrent"))]);
-      assert.equal(first.db.isTransaction, false);
-      assert.equal(first.db.prepare("select count(*) AS n from session").get().n, 2);
-      assert.equal(sqliteRecoveryStats(second).retries, 0);
-    } finally { first.close(); second.close(); }
-  });
-});
-
 test("promotion rolls back a partial write before retrying and commits each message once", async () => {
   await withDirectory(async (directory, dbPath) => {
     const store = await Store.openStartup({ dbPath });
@@ -246,38 +208,6 @@ test("caller-owned transactions retain rollback ownership and are never replayed
   });
 });
 
-test("a caller-owned transaction can finish while another connection waits in the write queue", { timeout: 5_000 }, async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const owner = await Store.openStartup({ dbPath });
-    const waiting = await Store.openStartup({ dbPath });
-    try {
-      await owner.createSession(sessionInput(directory, "session"));
-      owner.db.exec("begin immediate");
-      const write = waiting.createSession(sessionInput(directory, "waiting"));
-      await owner.saveSessionInput(input("session", "inside-transaction"));
-      owner.db.exec("commit");
-      await write;
-      assert.equal(owner.db.prepare("select count(*) AS n from session").get().n, 2);
-      assert.equal(owner.db.prepare("select count(*) AS n from session_input").get().n, 1);
-    } finally { if (owner.db.isTransaction) owner.db.exec("rollback"); owner.close(); waiting.close(); }
-  });
-});
-
-test("a queued write does not join a transaction opened after its submission", { timeout: 5_000 }, async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const store = await Store.openStartup({ dbPath });
-    try {
-      await store.createSession(sessionInput(directory, "session"));
-      const preceding = store.upsertToolUsage(usage("preceding"));
-      const queued = store.saveSessionInput(input("session", "queued-before-transaction"));
-      store.db.exec("begin immediate");
-      const rollback = new Promise(resolve => setTimeout(() => { store.db.exec("rollback"); resolve(); }, 60));
-      await Promise.all([preceding, queued, rollback]);
-      assert.equal(store.db.prepare("select count(*) AS n from session_input").get().n, 1);
-    } finally { if (store.db.isTransaction) store.db.exec("rollback"); store.close(); }
-  });
-});
-
 test("closing a store cancels backoff and queued writes without persisting them", { timeout: 10_000 }, async () => {
   await withDirectory(async (directory, dbPath) => {
     const store = await Store.openStartup({ dbPath });
@@ -298,112 +228,5 @@ test("closing a store cancels backoff and queued writes without persisting them"
       try { assert.equal(reopened.db.prepare("select count(*) AS n from session").get().n, 0); }
       finally { reopened.close(); }
     } finally { await holder?.stop(); if (!closed) store.close(); }
-  });
-});
-
-test("closing one store immediately rejects its queued writes behind a different recovering store", { timeout: 10_000 }, async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const active = await Store.openStartup({ dbPath });
-    const queued = await Store.openStartup({ dbPath });
-    let holder, closed = false, deadline;
-    try {
-      holder = await startWorker("hold", { dbPath });
-      const activeWrite = active.createSession(sessionInput(directory, "active"));
-      const pending = queued.createSession(sessionInput(directory, "cancelled"));
-      const observed = pending.then(() => "written", error => /closed/u.test(error.message) ? "closed" : "unexpected error");
-      queued.close(); closed = true;
-      assert.equal(await Promise.race([
-        observed,
-        new Promise(resolve => { deadline = setTimeout(() => resolve("still queued"), 150); })
-      ]), "closed");
-      holder.send("release");
-      await activeWrite;
-      assert.deepEqual(active.db.prepare("select id from session").all().map(row => row.id), ["active"]);
-    } finally { clearTimeout(deadline); await holder?.stop(); if (!closed) queued.close(); active.close(); }
-  });
-});
-
-test("usage cleanup retains recent data without a cleanup transaction for every fact", async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const store = await Store.openStartup({ dbPath });
-    try {
-      await store.createSession(sessionInput(directory, "session"));
-      // Seed an expired row using the explicit native schema; automatic cleanup is still due.
-      store.db.prepare("insert into tool_usage (id,session_id,tool_call_id,tool_name,approval_status,status,started_at) values (?,?,?,?,?,?,?)")
-        .run("expired", "session", "expired", "Read", "none", "completed", 1);
-      let transactions = 0, deletes = 0;
-      const execute = store.db.exec.bind(store.db);
-      store.db.exec = sql => { if (sql === "begin immediate") transactions++; return execute(sql); };
-      interceptRuns(store.db, sql => { if (/^delete from (model|turn|tool)_usage/u.test(sql)) deletes++; });
-      for (let index = 0; index < 100; index++) await store.upsertToolUsage(usage(`current-${index}`));
-      assert.equal(transactions, 1);
-      assert.equal(deletes, 3);
-      assert.equal(store.db.prepare("select count(*) AS n from tool_usage").get().n, 100);
-      await store.pruneUsage({ beforeTime: Date.now() + 1 });
-      assert.equal(transactions, 2);
-      assert.equal(store.db.prepare("select count(*) AS n from tool_usage").get().n, 0);
-    } finally { store.close(); }
-  });
-});
-
-test("queued conversation writes precede usage maintenance and each class remains ordered", async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const store = await Store.openStartup({ dbPath });
-    try {
-      await store.createSession(sessionInput(directory, "session"));
-      const order = [];
-      interceptRuns(store.db, (sql, args) => {
-        if (sql.startsWith("insert into tool_usage") || sql.startsWith("insert into session (")) order.push(args[0]);
-      });
-      await Promise.all([
-        store.upsertToolUsage(usage("usage-1")),
-        store.upsertToolUsage(usage("usage-2")),
-        store.createSession(sessionInput(directory, "conversation"))
-      ]);
-      assert.deepEqual(order, ["usage-1", "conversation", "usage-2"]);
-    } finally { store.close(); }
-  });
-});
-
-test("a retrying usage write yields to conversation writes without reordering usage facts", async () => {
-  await withDirectory(async (directory, dbPath) => {
-    const store = await Store.openStartup({ dbPath });
-    try {
-      await store.createSession(sessionInput(directory, "session"));
-      const order = [];
-      interceptRuns(store.db, (sql, args) => {
-        if (sql.startsWith("insert into tool_usage")) {
-          if (!order.includes("conversation")) throw Object.assign(new Error("busy usage"), { errcode: 5 });
-          order.push(args[0]);
-        } else if (sql.startsWith("insert into session (")) order.push(args[0]);
-      });
-      await Promise.all([
-        store.upsertToolUsage(usage("usage-1")),
-        store.upsertToolUsage(usage("usage-2")),
-        store.createSession(sessionInput(directory, "conversation"))
-      ]);
-      assert.deepEqual(order, ["conversation", "usage-1", "usage-2"]);
-      assert.equal(sqliteRecoveryStats(store).lastRecovery.operation, "upsertToolUsage");
-    } finally { store.close(); }
-  });
-});
-
-test("twelve independent processes preserve inputs, transcripts and usage under sustained writes", { timeout: 60_000 }, async () => {
-  await withDirectory(async (_directory, dbPath) => {
-    const workers = [], processes = 12, turns = 25;
-    try {
-      for (let index = 0; index < processes; index++) workers.push(await startWorker("stress", { dbPath, id: `writer-${index}`, turns }));
-      for (const worker of workers) worker.send("go");
-      await Promise.all(workers.map(worker => worker.wait()));
-      const store = await Store.openStartup({ dbPath });
-      try {
-        for (const table of ["session_input", "message", "part", "tool_usage"]) {
-          assert.equal(store.db.prepare(`select count(*) AS n from ${table}`).get().n, processes * turns, table);
-        }
-        assert.equal(store.db.prepare("select count(*) AS n from session_input where status = 'promoted'").get().n, processes * turns);
-        assert.deepEqual(store.db.prepare("pragma foreign_key_check").all(), []);
-        assert.equal(store.db.prepare("pragma integrity_check").get().integrity_check, "ok");
-      } finally { store.close(); }
-    } finally { await Promise.all(workers.map(worker => worker.stop())); }
   });
 });

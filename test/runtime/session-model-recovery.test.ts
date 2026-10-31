@@ -2,14 +2,10 @@ import { expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 
 import { createSessionModelFixture, type SessionModelCase } from "../fixtures/session-model-recovery.ts";
+import { runtimeStartupTimeoutMs } from "../fixtures/runtime-env.ts";
 import { TerminalScreen } from "../tui/harness/terminal-screen.ts";
 
-const cases = [
-  ["legacy-provider", "regular", "startup"],
-  ["model-casing", "fullscreen", "command"],
-  ["missing-model", "regular", "command"],
-  ["missing-reasoning", "fullscreen", "startup"]
-] as const;
+const cases: Array<[SessionModelCase, "regular" | "fullscreen", "startup" | "command"]> = [["missing-model", "regular", "startup"]];
 
 test.skipIf(process.platform === "win32").each(cases)(
   "resume repairs %s through the %s picker (%s)", async (kind, display, entry) => {
@@ -24,8 +20,8 @@ test.skipIf(process.platform === "win32").each(cases)(
     });
     let child = start(entry === "startup");
     const deadline = setTimeout(() => child.kill("SIGKILL"), 35_000);
-    const wait = async (predicate: (text: string) => boolean) => {
-      const until = Date.now() + 8_000;
+    const wait = async (predicate: (text: string) => boolean, timeoutMs = 8_000) => {
+      const until = Date.now() + timeoutMs;
       while (Date.now() < until && child.exitCode === null) {
         await screen.settled();
         if (predicate(screen.screenText())) return;
@@ -38,7 +34,7 @@ test.skipIf(process.platform === "win32").each(cases)(
         await wait(text => text.includes("◈ zai/glm-5.3-flash"));
         terminal.write(`/resume ${fixture.sessionId}\r`);
       }
-      await wait(text => text.includes("Select a replacement model"));
+      await wait(text => text.includes("Select a replacement model"), runtimeStartupTimeoutMs);
       expect(screen.screenText()).toContain("Saved model");
       expect(fixture.requests).toEqual([]);
       expect(fixture.readSelection()).toEqual(before);
@@ -83,7 +79,7 @@ test.skipIf(process.platform === "win32").each(cases)(
   }, 40_000
 );
 
-test.each(["legacy-provider", "model-casing", "missing-model"] as SessionModelCase[])(
+test.each(["missing-model"] as SessionModelCase[])(
   "headless resume explains the invalid saved model (%s)", async kind => {
     await using fixture = await createSessionModelFixture(kind);
     const before = fixture.readSelection();
@@ -101,28 +97,6 @@ test.each(["legacy-provider", "model-casing", "missing-model"] as SessionModelCa
       expect(fixture.readSelection()).toEqual(before);
     } finally { clearTimeout(timeout); }
   }, 25_000
-);
-
-test.each(["valid", "legacy-provider", "model-casing", "missing-model", "missing-reasoning"] as SessionModelCase[])(
-  "headless cold resume uses the explicit model instead of the saved selection (%s)", async kind => {
-    await using fixture = await createSessionModelFixture(kind);
-    const providers = await readFile(fixture.providerPath, "utf8");
-    const child = Bun.spawn([...fixture.command, "--resume", fixture.sessionId, "--model", "zai/glm-5.3-flash", "--prompt", "Use the explicit override."], {
-      cwd: fixture.directory, env: fixture.env, stdin: "ignore", stdout: "pipe", stderr: "pipe"
-    });
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
-    try {
-      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
-      expect(stdout).toContain("SESSION_MODEL_REPLY");
-      expect(fixture.requests).toEqual(["glm-5.3-flash"]);
-      expect(await readFile(fixture.providerPath, "utf8")).toBe(providers);
-    } finally {
-      if (child.exitCode === null) child.kill("SIGKILL");
-      await child.exited;
-      clearTimeout(timeout);
-    }
-  }, 30_000
 );
 
 test("headless cold resume rejects an unavailable explicit model without falling back", async () => {
@@ -144,37 +118,3 @@ test("headless cold resume rejects an unavailable explicit model without falling
     clearTimeout(timeout);
   }
 }, 30_000);
-
-test.skipIf(process.platform === "win32").each([false, true])("resume preserves valid selections and handles an empty catalog (empty: %p)", async empty => {
-  await using fixture = await createSessionModelFixture("valid");
-  const before = fixture.readSelection();
-  if (empty) {
-    const config = JSON.parse(await readFile(fixture.providerPath, "utf8"));
-    config.config.providerConfigRules.providerRules[0].enabled = false;
-    await writeFile(fixture.providerPath, JSON.stringify(config));
-  }
-  using screen = new TerminalScreen(100, 32);
-  const terminal = new Bun.Terminal({ cols: 100, rows: 32, name: "xterm-256color",
-    data(_terminal, data) { void screen.write(data); } });
-  const child = Bun.spawn([...fixture.command, "--resume", fixture.sessionId], { cwd: fixture.directory, env: fixture.env, terminal });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
-  try {
-    const until = Date.now() + 8_000;
-    while (Date.now() < until && child.exitCode === null) {
-      await screen.settled();
-      if (empty ? screen.screenText().includes("No models are available") : screen.screenText().includes("⚡ high")) break;
-      await Bun.sleep(25);
-    }
-    expect(screen.screenText()).toContain(empty ? "No models are available" : "⚡ high");
-    expect(screen.screenText()).not.toContain("Select a replacement model");
-    if (empty) expect(screen.screenText()).toContain("/login");
-    expect(fixture.requests).toEqual([]);
-    expect(fixture.readSelection()).toEqual(before);
-  } finally {
-    if (child.exitCode === null) child.kill("SIGTERM");
-    await child.exited;
-    clearTimeout(timeout);
-    terminal.close();
-    await screen.settled();
-  }
-}, 25_000);

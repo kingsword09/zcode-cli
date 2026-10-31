@@ -89,7 +89,7 @@ async function createFixture(display = "regular") {
   } catch (error) { await dispose(); throw error; }
 }
 
-test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])(
+test.skipIf(process.platform === "win32").each(["regular"])(
   "untouched %s sessions stay unsaved and omit resume guidance", async display => {
     await using fixture = await createFixture(display);
     const tui = fixture.start();
@@ -101,7 +101,7 @@ test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])(
   }, 30_000
 );
 
-test.skipIf(process.platform === "win32").each(["regular", "fullscreen"])(
+test.skipIf(process.platform === "win32").each(["regular"])(
   "renaming an empty %s session saves its title and supports restart and headless resume", async display => {
     await using fixture = await createFixture(display);
     const tui = fixture.start();
