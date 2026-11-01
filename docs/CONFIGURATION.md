@@ -334,6 +334,21 @@ Z.AI credentials use Desktop's business-token format. Older CLI OAuth credential
 are converted after successful validation on their first request; failed
 validation or a concurrent login never overwrites the newer shared session.
 
+Start Plan uses the same ZCode OAuth login as Coding Plan; there is no second
+Start Plan sign-in. An existing Desktop session works without another login.
+Choose `account:zai-start-plan/<model>` or `account:bigmodel-start-plan/<model>`
+in `/model`, or pass it with `--model`. Start Plan requests use the shared ZCode
+JWT directly, without exchanging a Coding Plan project token. The runtime still
+builds and signs the requests. Switching models does not change the saved login.
+
+Start Plan providers are available locally when the active account has a valid
+ZCode JWT and profile; the server determines the account's actual grants, model
+availability and remaining quota. A manual Coding Plan API key alone is not a
+ZCode session. Missing, expired or rejected session tokens require the shared
+ZCode login to be renewed, not an additional plan-specific login. Start Plan
+requests never fall back to paid Coding Plan credentials. New requests follow
+the current Desktop account; retries cannot switch accounts or tokens mid-turn.
+
 For macOS OAuth, the CLI temporarily registers a callback receiver, checks
 `state`, restores the previous `zcode://` handler and sends the callback through
 stdin. The runtime resolves business and project access before publishing
