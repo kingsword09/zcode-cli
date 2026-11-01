@@ -420,14 +420,14 @@ async function runRuntime(
   let forwardedSignal = false;
   const forwardSignal = (signal: NodeJS.Signals) => {
     forwardedSignal = true;
-    if (!child.killed) child.kill(signal);
+    if (child.exitCode === null && child.signalCode === null) child.kill(signal);
   };
   const onSigint = () => forwardSignal("SIGINT");
   const onSigterm = () => forwardSignal("SIGTERM");
   const onSighup = () => forwardSignal("SIGHUP");
-  process.once("SIGINT", onSigint);
-  process.once("SIGTERM", onSigterm);
-  if (process.platform !== "win32") process.once("SIGHUP", onSighup);
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  if (process.platform !== "win32") process.on("SIGHUP", onSighup);
   try {
     const code = await waitForChild(
       child,

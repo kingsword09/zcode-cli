@@ -35,6 +35,10 @@ to replace the CLI package without changing its own process model.
 - For non-interactive commands, preserve the inherited standard-stream
   contract; the command's documented output is the only supported machine
   interface.
+- Consume both stdout and stderr throughout a headless run. A successful run
+  waits for pending output writes before exiting; a blocked consumer can delay
+  completion. With `--output-format stream-json`, check both exit status and the
+  terminal `result` record. See [headless execution](./HEADLESS.md).
 - Set the child's working directory to the workspace the user selected. The
   launcher passes it to the runtime.
 

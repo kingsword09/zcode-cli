@@ -14,6 +14,8 @@ import {
 } from "../src/runtime-capabilities.ts";
 import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts";
 import { markRuntimeModified } from "./runtime-attribution.ts";
+import { hasRuntimeHeadlessLifecycle, patchRuntimeHeadlessLifecycle } from "./runtime-headless-patches.ts";
+export { hasRuntimeHeadlessLifecycle, patchRuntimeHeadlessLifecycle } from "./runtime-headless-patches.ts";
 import { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 export { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 import { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
@@ -1906,6 +1908,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeStreamEofFinishGuard,
     verify: hasRuntimeStreamEofFinishGuard
+  },
+  {
+    id: "headless-lifecycle",
+    requirement: "required",
+    apply: patchRuntimeHeadlessLifecycle,
+    verify: hasRuntimeHeadlessLifecycle
   },
   {
     id: "sqlite-busy-timeout",

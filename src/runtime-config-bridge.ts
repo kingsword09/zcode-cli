@@ -15,6 +15,7 @@ export { exchangeBigmodelOAuthCode } from "./bigmodel-oauth.ts";
 export { browserOpenCommand } from "./browser-open.ts";
 export { sharedOAuthCredentialReader, zaiBusinessAccessToken } from "./shared-oauth.ts";
 export { inspectRuntimeConfiguration, writeConfigurationDoctor } from "./config-diagnostics.ts";
+export { withHeadlessPromptLifecycle } from "./runtime-headless-lifecycle.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;

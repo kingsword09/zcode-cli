@@ -42,6 +42,11 @@ const server = createServer(async (request, response) => {
 
   streamingRequests += 1;
   process.stdout.write(`REQUEST ${streamingRequests}\n`);
+  if (streamingRequests === 1 && process.env.ZCODE_TEST_HTTP_RETRY === "1") {
+    response.writeHead(503, { "content-type": "application/json", connection: "close" });
+    response.end(JSON.stringify({ error: { message: "Temporary fixture overload" } }));
+    return;
+  }
   response.writeHead(200, { "content-type": "text/event-stream" });
   if (streamingRequests === 1) {
     response.write(streamChunk("chatcmpl-reset", "PARTIAL_SHOULD_BE_DISCARDED"));
@@ -49,7 +54,9 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  response.write(streamChunk("chatcmpl-recovered", "RECOVERED_FINAL"));
+  response.write(streamChunk("chatcmpl-recovered", process.env.ZCODE_TEST_RESPONSE_BYTES
+    ? "R".repeat(Number(process.env.ZCODE_TEST_RESPONSE_BYTES))
+    : "RECOVERED_FINAL"));
   response.write(streamChunk("chatcmpl-recovered", "", "stop"));
   response.end("data: [DONE]\n\n");
 });

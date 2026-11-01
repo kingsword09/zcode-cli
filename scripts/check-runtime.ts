@@ -21,6 +21,7 @@ import {
   hasRuntimeCliSettingsFile,
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
+  hasRuntimeHeadlessLifecycle,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeResolvedContextWindow,
   hasRuntimeRecursiveWorkspacePaths,
@@ -31,6 +32,7 @@ import {
   hasRuntimeTrackedDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
   patchRuntimeHttpNoContent,
+  patchRuntimeHeadlessLifecycle,
   patchRuntimeLoginModelDefaults,
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOfficialMcpAvailability,
@@ -92,6 +94,8 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || (patchEnabled("goal-failure-pause") && patchRuntimeGoalFailurePause(runtimeSource) !== runtimeSource)
   || patchRuntimeHttpNoContent(runtimeSource) !== runtimeSource
   || !hasRuntimeHttpNoContentGuard(runtimeSource)
+  || patchRuntimeHeadlessLifecycle(runtimeSource) !== runtimeSource
+  || !hasRuntimeHeadlessLifecycle(runtimeSource)
   || patchRuntimeNetworkRetryClassification(runtimeSource) !== runtimeSource
   || !hasRuntimeNetworkRetryGuard(runtimeSource)
   || patchRuntimeSqliteBusyTimeout(runtimeSource) !== runtimeSource

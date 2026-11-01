@@ -92,8 +92,12 @@ interface RuntimeOutputEntry {
 
 async function runNetworkFixture(options: {
   fixture?: string;
-  keepAlive?: boolean;
+  launcher?: boolean;
+  cancelOnRetry?: NodeJS.Signals;
   modelRetries?: number;
+  retryDelayMs?: number;
+  slowReadMs?: number;
+  outputFormat?: "text" | "json" | "stream-json";
   providerName: string;
   serverEnv?: Record<string, string>;
   temporaryPrefix: string;
@@ -156,47 +160,76 @@ async function runNetworkFixture(options: {
   await mkdir(configDirectory, { recursive: true });
   await writeFile(join(configDirectory, "setting.json"), `${JSON.stringify(config, null, 2)}\n`);
   const runtimeArgs = [
-    ...(options.keepAlive === false
-      ? []
-      : ["--import", join(root, "test", "fixtures", "runtime-keepalive.mjs")]),
-    "vendor/zcode.cjs",
-    "--prompt",
+    options.launcher ? "bin/zcode.js" : "vendor/zcode.cjs",
+    options.launcher ? "-p" : "--prompt",
     "Return the fixture response.",
     "--cwd",
     workspace,
     "--no-color",
     "--output-format",
-    "stream-json",
+    options.outputFormat ?? "stream-json",
     "--surface",
     "terminal",
     "--mode",
     "build"
   ];
-  const child = Bun.spawn([node, ...runtimeArgs], {
+  const child = spawn(node, runtimeArgs, {
     cwd: root,
     env: {
       ...env,
       NO_UPDATE_NOTIFIER: "1",
       ZCODE_DISABLE_UPDATE_CHECK: "1",
-      ZCODE_MODEL_RETRY_BASE_DELAY_MS: "0",
+      ZCODE_MODEL_RETRY_BASE_DELAY_MS: String(options.retryDelayMs ?? 0),
       ZCODE_MODEL_RETRY_MAX_RETRIES: String(options.modelRetries ?? 1),
       ZCODE_NODE: node
     },
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe"
+    stdio: ["ignore", "pipe", "pipe"]
   });
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text()
-  ]);
-  const output = stdout.trim().split("\n").filter(Boolean).map(
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 25_000);
+  const read = async (stream: NodeJS.ReadableStream, delay = 0, observe = false): Promise<string> => {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    const chunks: Buffer[] = [];
+    let pending = "";
+    let cancelled = false;
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+      if (!observe || !options.cancelOnRetry || cancelled) continue;
+      pending += chunk.toString();
+      let newline: number;
+      while ((newline = pending.indexOf("\n")) >= 0) {
+        const entry = JSON.parse(pending.slice(0, newline)) as RuntimeOutputEntry;
+        pending = pending.slice(newline + 1);
+        if (entry.payload?.type === "model_retry_scheduled") {
+          cancelled = true;
+          child.kill(options.cancelOnRetry);
+          break;
+        }
+      }
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  };
+  let code: number | null;
+  let stdout: string;
+  let stderr: string;
+  try {
+    [code, stdout, stderr] = await Promise.all([
+      new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (exitCode, signal) => resolve(exitCode ?? (signal === "SIGTERM" ? 143 : null)));
+      }),
+      read(child.stdout!, options.slowReadMs, true),
+      read(child.stderr!)
+    ]);
+  } finally {
+    clearTimeout(timeout);
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
+  const output = options.outputFormat && options.outputFormat !== "stream-json" ? [] : stdout.trim().split("\n").filter(Boolean).map(
     (line) => JSON.parse(line) as RuntimeOutputEntry
   );
   const serverOutput = server.output();
   return {
-    code,
+    code: code ?? 1,
     diagnostics: `${stderr}\nserver:\n${serverOutput}${server.stderr()}`,
     output,
     requestCount: serverOutput.split("\n").filter((line) => line.startsWith("REQUEST ")).length,
@@ -241,10 +274,71 @@ test("recovers a graceful mid-stream EOF that never reports a finish reason", as
   expect(result?.response).not.toContain("PARTIAL_SHOULD_BE_DISCARDED");
 }, 30_000);
 
+test("keeps a headless run alive during a long network retry backoff", async () => {
+  const run = await runNetworkFixture({
+    modelRetries: 1,
+    retryDelayMs: 10_000,
+    serverEnv: { ZCODE_TEST_HTTP_RETRY: "1" },
+    providerName: "Headless backoff fixture",
+    temporaryPrefix: "zcode-headless-backoff-"
+  });
+
+  expect(run.code, run.diagnostics).toBe(0);
+  expect(run.requestCount, run.stdout).toBe(2);
+  expect(run.output.some((entry) => entry.payload?.type === "model_retry_scheduled"), run.stdout).toBe(true);
+  expect(run.output.findLast((entry) => entry.type === "result")?.response).toBe("RECOVERED_FINAL");
+}, 30_000);
+
+test.each([0, 10_000])("flushes a large headless result with a %ims pipe read delay", async (slowReadMs) => {
+  const run = await runNetworkFixture({
+    providerName: "Headless slow output fixture",
+    launcher: slowReadMs > 0,
+    serverEnv: { ZCODE_TEST_RESPONSE_BYTES: String(512 * 1024) },
+    slowReadMs,
+    temporaryPrefix: "zcode-headless-output-"
+  });
+
+  expect(run.code, run.diagnostics).toBe(0);
+  const response = run.output.findLast((entry) => entry.type === "result")?.response;
+  expect(response?.length, run.output.map((entry) => entry.type).join(", ")).toBe(512 * 1024);
+  expect(response?.replaceAll("R", "")).toBe("");
+}, 30_000);
+
+test.each(["text", "json"] as const)("flushes launcher -p %s output to a slow pipe", async (outputFormat) => {
+  const run = await runNetworkFixture({
+    launcher: true,
+    outputFormat,
+    providerName: "Headless output format fixture",
+    serverEnv: { ZCODE_TEST_RESPONSE_BYTES: String(512 * 1024) },
+    slowReadMs: 10_000,
+    temporaryPrefix: "zcode-headless-format-"
+  });
+  const response = outputFormat === "json" ? JSON.parse(run.stdout).response as string : run.stdout.trimEnd();
+
+  expect(run.code, run.diagnostics).toBe(0);
+  expect(response.length).toBe(512 * 1024);
+  expect(response.replaceAll("R", "")).toBe("");
+}, 30_000);
+
+test.skipIf(process.platform === "win32")("cancels a launcher -p run during backoff without reporting success", async () => {
+  const run = await runNetworkFixture({
+    launcher: true,
+    cancelOnRetry: "SIGTERM",
+    modelRetries: 1,
+    retryDelayMs: 10_000,
+    providerName: "Headless cancellation fixture",
+    serverEnv: { ZCODE_TEST_HTTP_RETRY: "1" },
+    temporaryPrefix: "zcode-headless-cancel-"
+  });
+
+  expect(run.code, run.diagnostics).toBe(143);
+  expect(run.requestCount).toBe(1);
+  expect(run.output.some((entry) => entry.type === "result")).toBe(false);
+}, 30_000);
+
 test("exits unsuccessfully when graceful EOF recovery is exhausted", async () => {
   const run = await runNetworkFixture({
     fixture: "network-eof-server.mjs",
-    keepAlive: false,
     modelRetries: 0,
     providerName: "EOF exhaustion fixture",
     serverEnv: { ZCODE_TEST_ALWAYS_EOF: "1" },

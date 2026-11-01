@@ -62,6 +62,62 @@ async function run(args: string[], input = "", environment: Record<string, strin
 }
 
 describe("launcher/runtime integration", () => {
+  test.skipIf(process.platform === "win32")("forwards repeated termination signals until the runtime exits", async () => {
+    if (!node) throw new Error("Node.js is required for launcher signal tests.");
+    const directory = await mkdtemp(join(tmpdir(), "zcode-launcher-signals-"));
+    const fakeNode = join(directory, "fake-node");
+    await writeFile(fakeNode, [
+      `#!${node}`,
+      "let signals = 0;",
+      "process.on('SIGTERM', () => {",
+      "  process.stdout.write(++signals === 1 ? 'FIRST_SIGNAL\\n' : 'SECOND_SIGNAL\\n');",
+      "  if (signals === 2) process.exitCode = 143, clearInterval(keepAlive);",
+      "});",
+      "const keepAlive = setInterval(() => {}, 1000);",
+      "process.stdout.write('READY ' + process.pid + '\\n');",
+      ""
+    ].join("\n"));
+    await chmod(fakeNode, 0o755);
+    const child = Bun.spawn([process.execPath, "bin/zcode.ts", "-p", "offline signal test"], {
+      cwd: root,
+      env: { ...runtimeTestEnv(directory), ZCODE_NODE: fakeNode },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe"
+    });
+    let runtimePid: number | undefined;
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      if (runtimePid) try { process.kill(runtimePid, "SIGKILL"); } catch {}
+    }, 8_000);
+    try {
+      const output = (async () => {
+        let stdout = "", pending = "";
+        for await (const chunk of child.stdout) {
+          const text = new TextDecoder().decode(chunk);
+          stdout += text;
+          pending += text;
+          let newline: number;
+          while ((newline = pending.indexOf("\n")) >= 0) {
+            const line = pending.slice(0, newline);
+            pending = pending.slice(newline + 1);
+            if (line.startsWith("READY ")) {
+              runtimePid = Number(line.slice(6));
+              child.kill("SIGTERM");
+            } else if (line === "FIRST_SIGNAL") child.kill("SIGTERM");
+          }
+        }
+        return stdout;
+      })();
+      const [code, stdout, stderr] = await Promise.all([child.exited, output, new Response(child.stderr).text()]);
+      expect(stdout, stderr).toContain("SECOND_SIGNAL");
+      expect(code).toBe(143);
+    } finally {
+      clearTimeout(timeout);
+      child.kill("SIGKILL");
+      if (runtimePid) try { process.kill(runtimePid, "SIGKILL"); } catch {}
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("rejects a keyless prompt before starting the runtime or creating a session", async () => {
     const directory = await mkdtemp(join(tmpdir(), "zcode-keyless-prompt-"));
     const fakeNode = join(directory, "fake-node");
