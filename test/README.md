@@ -48,6 +48,7 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 | `permission-request-queue.test.ts` | Permissions overlap, survive cancellation, or stop processing after one failure. |
 | `attachments.test.ts` | Malformed image data reaches the runtime. |
 | `rewind.test.ts` | Rewind selects the wrong message or admits an invalid workspace operation. |
+| `skill-completion.test.ts` | Discovered skills disappear from slash completion, duplicate entries surface, or skill shortcuts shadow commands. |
 | `release-contract.test.ts` | Package and runtime versions diverge, installer verification is weakened, or a lagging manifest downgrades the lock. |
 | `shell-security.test.ts` | The shell formatter's known unbounded-precision denial of service returns. |
 
@@ -84,6 +85,7 @@ large process-count stress runs are not part of this baseline.
 | File | Failure this must prevent |
 | --- | --- |
 | `input-actions.test.ts` | Keyboard queue operations lose drafts or attach an image to a different question. |
+| `skills.test.ts` | Slash skill selection fails to complete or dispatch through the native skill route. |
 | `permission-request-queue.test.ts` | The actual TUI cannot answer concurrent permissions in order. |
 | `startup.test.ts` | Input submits before initialization, cancelled startup reopens the UI, or a failure leaves raw mode enabled. |
 | `terminal-exit.test.ts` | Regular/fullscreen exit or cancellation leaks input into the parent shell or returns the wrong status. |

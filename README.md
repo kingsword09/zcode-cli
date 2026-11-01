@@ -228,6 +228,14 @@ into a request that loads each selected Skill through the runtime's `Skill`
 tool before carrying out the visible user request. Unknown `$` tokens remain
 ordinary prompt text.
 
+Skills also appear in `/` command completion, marked `Skill` with their
+descriptions. Type `/` and filter by name, or enter `/<skill-name> <task>`
+directly (for example, `/audit review the current changes`). These shortcuts
+use the runtime's `/skill <name> <task>` route. Duplicate identifiers use the
+first discovered entry; plugin Skills retain their qualified names. Built-in
+commands, their aliases and custom commands take precedence over skill
+shortcuts with the same name; use `$name` or `/skill name` for those Skills.
+
 Use `@plugin` when the whole Plugin is relevant, including its MCP servers or
 Subagents. Use `$plugin:skill` when one exact Skill must be loaded before the
 task starts.
