@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { sanitizeTerminalText } from "./terminal-text.ts";
-import type { ZCodeTheme } from "./theme.ts";
+import type { ZCodeThemeStyles as ZCodeTheme } from "./theme-styles.ts";
 
 export type FullscreenHeaderPhase = "welcome" | "transition" | "rail";
 

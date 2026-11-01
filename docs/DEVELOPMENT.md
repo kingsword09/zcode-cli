@@ -72,6 +72,52 @@ Dependency security fixes and their regression commands are documented in
 [`patches/README.md`](../patches/README.md). Source installs must use Bun so
 the recorded `sprintf-js` patch is applied.
 
+## Startup profiling
+
+After `bun run sync:local`, run `bun run bench:startup 5` to measure the built
+launcher and official runtime in a real PTY. The report separates first visible
+output, the loading state, and the ready model/mode status. It uses a temporary
+home with isolated credentials and disables catalog refresh and update checks;
+it does not submit prompts or consume inference quota. The first sample also
+includes runtime data initialization; later samples reuse that temporary home.
+These are process-start measurements, not OS disk-cache cold-start measurements.
+
+Interactive launches use a foreground TUI process and one runtime child process.
+The lightweight `foreground.js` entry renders the real welcome frame, theme, and
+composer before config bootstrap or runtime loading, so synchronous runtime
+initialization cannot block typing or terminal rendering. A read-only appearance
+lookup honors the saved regular/fullscreen mode and palette from the first frame;
+it does not run settings bootstrap or migration. Syntax highlighting stays outside
+this lightweight dependency graph. The ready UI adopts the existing terminal
+instance rather than clearing, stopping, and restarting it. Startup input is a
+draft: Enter never submits it until initialization completes, and the latest draft
+is transferred at terminal handoff, including edits made while UI settings load.
+Model access, slash commands, and resumed-session validation remain authoritative
+in the runtime. Headless and app-server invocations keep their existing paths.
+
+The child loads the same local TUI adapter, but its IPC entry exposes the existing
+`TuiOptions` callbacks rather than owning the terminal. This requires no additional
+patch to the official runtime and does not assume the public app-server API covers
+all interactive features. Versioned, inherited Node IPC carries requests, streaming
+events, permission callbacks, abort signals, and collections. It opens no network
+listener, passes no account credentials over IPC, and starts no daemon.
+Workflow reductions are serialized asynchronously; session IDs are refreshed with
+runtime messages. The frontend owns terminal modes, local shells, login suspension,
+and clipboard escape output; ordinary backend stdout/stderr goes to diagnostics.
+
+Runtime death cancels pending calls and restores the terminal. Frontend shutdown
+asks the child to finish and allows seven seconds for native cleanup before forced
+termination (500 ms if the IPC host never became ready). A disconnected
+child exits through the native TUI cleanup path. Source launches under Bun hand off
+the foreground process to Node, avoiding incompatible Node/Bun IPC framing.
+
+The build produces multiple chunks, all of which must be copied with the TUI `dist`
+folder. Both `index.js` and `foreground.js` are required release entry points.
+`test/tui/foreground.test.ts` verifies independent typing during a blocked runtime,
+draft preservation without accidental submission, saved appearance, uninterrupted
+regular/fullscreen terminal handoff, cancellation, and backend death;
+`test/runtime-rpc.test.ts` covers callback, permission-abort, and transport behavior.
+
 ## pi-tui compatibility
 
 The root package and TUI adapter use pi-tui 1.3.0. Theme detection uses

@@ -53,6 +53,7 @@
     "build": "tsdown",
     "build:launcher": "tsdown --filter launcher",
     "build:tui": "tsdown --filter tui",
+    "bench:startup": "bun scripts/bench-startup.ts",
     "bench:tui-memory": "bun --expose-gc scripts/bench-tui-memory.ts",
     "bench:tui-stream": "bun scripts/bench-tui-stream.ts",
     "bench:tui-thinking": "bun scripts/bench-tui-thinking.ts",

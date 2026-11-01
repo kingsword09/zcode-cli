@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { runTui } from "../../../packages/zcode-tui/src/index.ts";
+import { runTui } from "../../../packages/zcode-tui/src/entry.ts";
 import type { TuiOptions, TuiStartupOptions } from "../../../packages/zcode-tui/src/types.ts";
 
 const mode = process.env.ZCODE_TEST_STARTUP_MODE ?? "lazy";

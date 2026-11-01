@@ -130,6 +130,10 @@ export interface RuntimeAdapter {
 
 export interface TuiOptions extends RuntimeAdapter {
   loadStartupOptions?: () => Promise<TuiStartupOptions>;
+  startupEditor?: boolean;
+  startupScreen?: import("./startup.ts").TuiStartupScreen;
+  initialInputDraft?: string;
+  runtimeSignal?: AbortSignal;
   initialMode?: string;
   initialPlanEnabled?: boolean;
   initialModel?: unknown;

@@ -4,6 +4,7 @@ import { constants as osConstants } from "node:os";
 import { basename } from "node:path";
 
 import { missingCodingPlanKey } from "../../../src/prompt-preflight.ts";
+import { suppressTuiAiSdkWarnings } from "./ai-sdk-warnings.ts";
 import { loadTuiStartupOptions } from "./startup.ts";
 import { preflightSubmission } from "./prompt-preflight.ts";
 import {
@@ -27,21 +28,15 @@ import {
   isViewportTUI,
   Markdown,
   matchesKey,
-  ProcessTerminal,
   ScrollView,
   Spacer,
   Text,
-  TuiAltScreen,
-  TuiMainScreen,
   VStack,
   type TUI,
   type TuiMode,
   type Component,
-  type OverlayHandle,
-  type OverlayOptions,
   type SlashCommand
 } from "@earendil-works/pi-tui";
-import { AltScreenSearchComponent } from "@earendil-works/pi-tui/dist/alt-screen-search.js";
 
 import {
   attachmentSummary,
@@ -239,7 +234,8 @@ import {
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
 import { SystemEventView, type SystemEventData } from "./system-event-view.ts";
-import { sanitizeTerminalText, stripCaretHighlight } from "./terminal-text.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
+import { createTuiScreen, NotifyingProcessTerminal, ZCodeAltScreen } from "./tui-screen.ts";
 import { ThinkingView } from "./thinking-view.ts";
 import { ToolGroupView } from "./tool-group-view.ts";
 import { ToolTreeView } from "./tool-tree-view.ts";
@@ -320,7 +316,6 @@ const runtimeCommandSummaries = new Map([
 const terminalThemeQueryTimeoutMs = 100;
 const exitUsageQueryTimeoutMs = 250;
 const fullscreenWelcomeTransitionMs = 180;
-const terminalFocusIn = "\x1b[I";
 const updateAvailableBlockId = "update_available";
 const modelStatusBlockIdPrefix = "model_status";
 const questionBackValue = "__back__";
@@ -329,24 +324,6 @@ const questionDoneValue = "__done__";
 const backgroundTaskAttentionStatuses = new Set(["failed", "timed_out", "spawn_error", "lost"]);
 const defaultBackgroundResumeMessage =
   "Continue the assigned task from the last completed step. Re-check the current workspace state and finish the remaining work.";
-
-function isMouseMultiplexer(): boolean {
-  const term = process.env.TERM?.toLowerCase() ?? "";
-  return process.env.TMUX !== undefined
-    || process.env.ZELLIJ !== undefined
-    || process.env.STY !== undefined
-    || term.startsWith("tmux")
-    || term.startsWith("screen");
-}
-
-function scrollbarHoverProbe(data: string): string | undefined {
-  if (!isMouseMultiplexer()) return undefined;
-  const match = /^\x1b\[<(\d+);(\d+);(\d+)M$/u.exec(data);
-  if (!match) return undefined;
-  const button = Number(match[1]);
-  if ((button & 32) !== 0 || (button & 3) !== 0) return undefined;
-  return `\x1b[<35;${match[2]};${match[3]}M`;
-}
 
 function backgroundTaskKindLabel(job: RuntimeBackgroundJob): string {
   switch (job.taskKind) {
@@ -516,106 +493,10 @@ class ConditionalContainer extends Container {
   }
 }
 
-/**
- * AI SDK emits its warning banner through console.info when no handler is
- * installed. In the interactive TUI that stdout write is terminal content,
- * so suppress only the default banner while preserving a runtime-provided
- * structured warning handler.
- */
-export function suppressTuiAiSdkWarnings(): void {
-  const global = globalThis as typeof globalThis & {
-    AI_SDK_LOG_WARNINGS?: unknown;
-  };
-  if (typeof global.AI_SDK_LOG_WARNINGS === "function") return;
-  try {
-    global.AI_SDK_LOG_WARNINGS = false;
-  } catch {
-    // A host may expose a read-only global; warning suppression is optional.
-  }
-}
+export { suppressTuiAiSdkWarnings } from "./ai-sdk-warnings.ts";
 
-// The runtime loads this module before it initializes the interactive app.
-// Install the TUI-safe default early enough to cover startup model discovery.
 suppressTuiAiSdkWarnings();
 
-/**
- * Give the composer priority for page navigation and modified Home/End keys
- * while editing. Bare Home/End are already editor keys in pi-tui 1.x.
- */
-class ZCodeAltScreen extends TuiAltScreen {
-  private viewportInputDeferral?: (data: string) => boolean;
-  private currentInput?: string;
-
-  setViewportInputDeferral(deferral: (data: string) => boolean): void {
-    this.viewportInputDeferral = deferral;
-  }
-
-  setCurrentInput(data: string | undefined): void {
-    this.currentInput = data;
-  }
-
-  override showOverlay(component: Component, options?: OverlayOptions): OverlayHandle {
-    // pi-tui constructs its search Input internally. Decorate only that
-    // overlay, before compositing, so transcript matches and selections retain
-    // their inverse styles. The caret is also drawn when the search has lost
-    // keyboard focus to the editor and no longer emits a cursor marker.
-    if (component instanceof AltScreenSearchComponent) {
-      const render = component.render.bind(component);
-      component.render = (width) => {
-        const lines = render(width);
-        return this.getShowHardwareCursor() ? lines : lines.map(stripCaretHighlight);
-      };
-    }
-    return super.showOverlay(component, options);
-  }
-
-  /**
-   * The terminal can lose visible rows while this process is unfocused even
-   * though pi-tui's logical frame remains unchanged. Invalidate its
-   * differential cache so the next frame repaints every row.
-   */
-  forceFullRedraw(): void {
-    // Resetting also clears the layout used by mouse events in this input batch.
-    process.nextTick(() => this.requestRender(true));
-  }
-
-  protected override isOverlayFocused(): boolean {
-    if (super.isOverlayFocused()) return true;
-    return this.viewportInputDeferral?.(this.currentInput ?? "") === true;
-  }
-}
-
-/** Feed focus reports to the notifier before the TUI's own input listeners. */
-class NotifyingProcessTerminal extends ProcessTerminal {
-  constructor(
-    private readonly beforeInput: (data: string) => void,
-    private readonly afterInput?: () => void,
-    private readonly onFocusIn?: () => void,
-    private readonly onTerminalResize?: () => void
-  ) {
-    super();
-  }
-
-  override start(onInput: (data: string) => void, onResize: () => void): void {
-    super.start((data) => {
-      this.beforeInput(data);
-      try {
-        // Multiplexers use button-motion tracking and do not report passive
-        // pointer movement. Probe hover immediately before a press so a
-        // hidden auto scrollbar can still claim a direct drag gesture.
-        const hoverProbe = scrollbarHoverProbe(data);
-        if (hoverProbe) onInput(hoverProbe);
-        onInput(data);
-      } finally {
-        this.afterInput?.();
-        if (data === terminalFocusIn) this.onFocusIn?.();
-      }
-    }, () => {
-      onResize();
-      this.onTerminalResize?.();
-    });
-  }
-}
 
 function signalExitCode(signal: NodeJS.Signals): number {
   const number = (osConstants.signals as Record<string, number>)[signal];
@@ -768,7 +649,9 @@ class ZCodeTui {
       process.env.ZCODE_APP_CLI_VERSION?.trim() ?? "",
       { preserveSgr: false }
     ) || undefined;
-    this.theme = createTheme(this.colorsEnabled, initialColorScheme(this.themePreference));
+    this.theme = createTheme(this.colorsEnabled,
+      (this.themePreference === "auto" ? options.startupScreen?.colorScheme : undefined)
+        ?? initialColorScheme(this.themePreference));
     this.transcript = new Transcript(this.theme.searchMatch);
     const workspace = options.workspaceDirectory ?? process.cwd();
     const runtimeVersion = sanitizeTerminalText(options.version ?? "unknown", { preserveSgr: false });
@@ -792,8 +675,10 @@ class ZCodeTui {
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.loginRequired = options.loginRequired === true;
     this.skillCatalog = new SkillCatalog(options.listSkills);
-    this.tuiMode = resolveTuiMode(process.env, { ui: { tuiMode: options.initialTuiMode } });
-    this.ui = this.createTui(this.tuiMode);
+    this.tuiMode = options.startupScreen?.mode
+      ?? resolveTuiMode(process.env, { ui: { tuiMode: options.initialTuiMode } });
+    this.ui = options.startupScreen?.ui ?? createTuiScreen(this.tuiMode);
+    this.configureTui(this.ui);
     this.notifications = new TurnNotifier({
       writeTerminal: (data) => this.ui.terminal.write(data),
       onFocusChange: (state) => {
@@ -887,24 +772,49 @@ class ZCodeTui {
     const onSigint = () => this.handleSignal("SIGINT");
     const onSigterm = () => this.handleSignal("SIGTERM");
     const onSighup = () => this.handleSignal("SIGHUP");
+    const onRuntimeAbort = () => this.stop();
     this.installStreamErrorGuards();
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
     if (process.platform !== "win32") process.on("SIGHUP", onSighup);
+    this.options.runtimeSignal?.addEventListener("abort", onRuntimeAbort, { once: true });
     let startAttempted = false;
+    let removeStartupInput: (() => void) | undefined;
     try {
+      const startupScreen = this.options.startupScreen;
+      if (this.options.runtimeSignal?.aborted || startupScreen?.cancelled) this.stop();
       if (this.stopped) {
         await this.done;
         return;
       }
       startAttempted = true;
-      this.ui.start();
+      const reuseScreen = startupScreen?.ui === this.ui;
+      if (reuseScreen) {
+        this.editor.setText(startupScreen.editor?.getText() ?? "");
+        this.editor.disableSubmit = true;
+        removeStartupInput = this.ui.addInputListener(data => {
+          if (!isKeyRelease(data) && matchesKey(data, "ctrl+c")) {
+            this.handleSignal("SIGINT");
+            return { consume: true };
+          }
+          return undefined;
+        });
+        startupScreen.claim();
+      } else {
+        const draft = startupScreen?.editor?.getText() ?? this.options.initialInputDraft;
+        await startupScreen?.dispose();
+        if (draft) this.editor.setText(draft);
+        this.ui.start();
+      }
       if (this.stopped) {
         await this.done;
         return;
       }
-      await this.resolveTerminalColorScheme();
+      this.editor.disableSubmit = true;
       this.buildLayout();
+      if (!startupScreen && this.options.initialInputDraft) this.editor.setText(this.options.initialInputDraft);
+      this.focusEditor();
+      await this.resolveTerminalColorScheme();
       if (notificationConfigError) {
         this.addNotice(`Unable to load notification settings: ${notificationConfigError}`, "warning");
       }
@@ -915,11 +825,14 @@ class ZCodeTui {
         this.addUpdateAvailable(this.distributionVersion, updateCheck.availableVersion);
       }
       this.bindInput();
+      this.editor.disableSubmit = false;
+      removeStartupInput?.();
+      removeStartupInput = undefined;
       this.notifications.start();
       this.focusEditor();
       this.updateMetadata();
       this.updateTurnStatus();
-      this.ui.requestRender(true);
+      this.ui.requestRender(!reuseScreen);
       this.startUpdateRefresh(updateCheck);
       if (!this.loginRequired) void this.refreshGoal();
       if (!this.loginRequired) void this.refreshSessionUsage();
@@ -962,8 +875,10 @@ class ZCodeTui {
         process.off("SIGINT", onSigint);
         process.off("SIGTERM", onSigterm);
         if (process.platform !== "win32") process.off("SIGHUP", onSighup);
+        this.options.runtimeSignal?.removeEventListener("abort", onRuntimeAbort);
         this.removeStreamErrorGuards?.();
         this.removeStreamErrorGuards = undefined;
+        removeStartupInput?.();
       }
     }
   }
@@ -1026,16 +941,22 @@ class ZCodeTui {
   }
 
   private createTui(mode: TuiMode): TUI {
-    let fullscreenTui: ZCodeAltScreen | undefined;
-    const terminal = new NotifyingProcessTerminal((data) => {
-      fullscreenTui?.setCurrentInput(data);
-      this.notifications?.handleInput(data);
-    }, () => fullscreenTui?.setCurrentInput(undefined),
-    () => fullscreenTui?.forceFullRedraw(),
-    () => fullscreenTui?.forceFullRedraw());
-    if (mode !== "fullscreen") return new TuiMainScreen(terminal, true);
+    const ui = createTuiScreen(mode);
+    this.configureTui(ui);
+    return ui;
+  }
 
-    const tui = new ZCodeAltScreen(terminal, true, undefined, {
+  private configureTui(ui: TUI): void {
+    const fullscreenTui = ui instanceof ZCodeAltScreen ? ui : undefined;
+    const terminal = ui.terminal as NotifyingProcessTerminal;
+    terminal.handlers = {
+      beforeInput: (data) => {
+        fullscreenTui?.setCurrentInput(data);
+        this.notifications?.handleInput(data);
+      },
+      afterInput: () => fullscreenTui?.setCurrentInput(undefined),
+      onFocusIn: () => fullscreenTui?.forceFullRedraw(),
+      onResize: () => fullscreenTui?.forceFullRedraw(),
       copySelection: async (text) => {
         const writeClipboardText = this.options.writeClipboardText;
         if (!writeClipboardText) return false;
@@ -1045,17 +966,12 @@ class ZCodeTui {
         } catch {
           return false;
         }
-      },
-      // pi-tui copies the selection on mouse release by default; ui.copyOnSelect
-      // opts out so a drag only highlights and copying stays manual (/copy,
-      // native terminal selection).
-      copyOnSelect: this.copyOnSelect,
-      mouse: true,
-      wheelScrollLines: 3
-    });
-    fullscreenTui = tui;
-    tui.setViewportInputDeferral((data) => {
-      const focused = tui.getFocusedComponent();
+      }
+    };
+    if (!fullscreenTui) return;
+    fullscreenTui.setCopyOnSelect(this.copyOnSelect);
+    fullscreenTui.setViewportInputDeferral((data) => {
+      const focused = fullscreenTui.getFocusedComponent();
       if (focused === this.attachmentBar) {
         return matchesKey(data, "home") || matchesKey(data, "end");
       }
@@ -1065,7 +981,6 @@ class ZCodeTui {
       return matchesKey(data, "pageUp") || matchesKey(data, "pageDown")
         || matchesKey(data, "ctrl+pageUp") || matchesKey(data, "ctrl+pageDown");
     });
-    return tui;
   }
 
   private buildLayout(): void {
@@ -2529,7 +2444,9 @@ class ZCodeTui {
 
   private handleDynamicWorkflowEvent(value: unknown, type: string | undefined): boolean {
     if (type !== "dynamic_workflow_run_progress" || !isRecord(value)) return false;
-    if (this.dynamicWorkflows.accept(value.payload)) this.renderDynamicWorkflow();
+    void this.dynamicWorkflows.accept(value.payload).then(changed => {
+      if (changed) this.renderDynamicWorkflow();
+    });
     return true;
   }
 
@@ -6160,5 +6077,9 @@ class ZCodeTui {
 export async function runTui(options: TuiOptions): Promise<void> {
   suppressTuiAiSdkWarnings();
   const readyOptions = await loadTuiStartupOptions(options);
-  if (readyOptions) await new ZCodeTui(readyOptions).run();
+  try {
+    if (readyOptions) await new ZCodeTui(readyOptions).run();
+  } finally {
+    await readyOptions?.startupScreen?.dispose();
+  }
 }

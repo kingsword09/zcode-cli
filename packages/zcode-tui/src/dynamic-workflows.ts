@@ -9,6 +9,7 @@ export class DynamicWorkflows {
   private summaries: UnknownRecord[] = [];
   private epoch = 0;
   private loading?: Promise<void>;
+  private pending: Promise<unknown> = Promise.resolve();
   private buffered: UnknownRecord[] = [];
   private watermarks = new Map<string, number>();
   private lastEvents = new Map<string, string>();
@@ -22,6 +23,7 @@ export class DynamicWorkflows {
     this.state = undefined;
     this.summaries = [];
     this.loading = undefined;
+    this.pending = Promise.resolve();
     this.buffered = [];
     this.watermarks.clear();
     this.lastEvents.clear();
@@ -41,20 +43,23 @@ export class DynamicWorkflows {
       .map((run) => this.incomplete ? { ...run, progressIncomplete: true } : run);
   }
 
-  accept(event: unknown): boolean {
-    if (!isRecord(event) || typeof event.runId !== "string" || typeof event.eventType !== "string") return false;
+  accept(event: unknown): Promise<boolean> {
+    if (!isRecord(event) || typeof event.runId !== "string" || typeof event.eventType !== "string") return Promise.resolve(false);
     if (this.loading) {
       if (this.buffered.length < maximumBufferedEvents) this.buffered.push(event);
       else {
         this.incomplete = true;
         this.error = "Some workflow progress was omitted. Live runs cannot be fully replayed in this process; use /dwf list for runtime status.";
       }
-      return false;
+      return Promise.resolve(false);
     }
-    return this.apply(event);
+    const epoch = this.epoch;
+    const operation = this.pending.then(() => epoch === this.epoch ? this.apply(event, epoch) : false);
+    this.pending = operation;
+    return operation;
   }
 
-  private apply(event: UnknownRecord): boolean {
+  private async apply(event: UnknownRecord, epoch: number): Promise<boolean> {
     if (!this.adapter.reduceWorkflowRuns) return false;
     const id = String(event.runId);
     const sequence = typeof event.sequence === "number" ? event.sequence : undefined;
@@ -63,7 +68,8 @@ export class DynamicWorkflows {
     if (sequence !== undefined && (sequence < watermark
       || sequence === watermark && this.lastEvents.get(id) === fingerprint)) return false;
     try {
-      const state = this.adapter.reduceWorkflowRuns(this.state, event);
+      const state = await this.adapter.reduceWorkflowRuns(this.state, event);
+      if (epoch !== this.epoch) return false;
       if (sequence !== undefined) this.watermarks.set(id, sequence);
       this.lastEvents.set(id, fingerprint);
       if (!state) return false;
@@ -78,6 +84,7 @@ export class DynamicWorkflows {
       }
       return true;
     } catch (error) {
+      if (epoch !== this.epoch) return false;
       this.error = `Workflow progress could not be read: ${error instanceof Error ? error.message : String(error)}`;
       return false;
     }
@@ -87,7 +94,7 @@ export class DynamicWorkflows {
     if (this.loading) return this.loading;
     const epoch = this.epoch;
     if (!this.incomplete) this.error = undefined;
-    const operation = Promise.resolve().then(async () => {
+    const operation = this.pending.then(async () => {
       // Read replay before summaries. Live events are buffered until replay is
       // applied, then sequence watermarks discard duplicate deliveries.
       const results = await Promise.allSettled([
@@ -97,21 +104,29 @@ export class DynamicWorkflows {
       if (epoch !== this.epoch) return;
       const [replay, summaries] = results;
       if (replay.status === "fulfilled" && Array.isArray(replay.value)) {
-        for (const event of replay.value) if (isRecord(event)) this.apply(event);
+        for (const event of replay.value) {
+          if (epoch !== this.epoch) return;
+          if (isRecord(event)) await this.apply(event, epoch);
+        }
       }
+      if (epoch !== this.epoch) return;
       if (summaries.status === "fulfilled" && Array.isArray(summaries.value)) {
         this.summaries = summaries.value.filter((value) => isRecord(value) && typeof value.runId === "string").slice(0, maximumRuns);
       }
       for (const result of results) if (result.status === "rejected") {
         this.error = `Workflow history could not be loaded: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}. Run /workflows to retry.`;
       }
-    }).finally(() => {
+    }).finally(async () => {
+      if (epoch !== this.epoch) return;
+      while (this.buffered.length && epoch === this.epoch) {
+        const event = this.buffered.shift()!;
+        await this.apply(event, epoch);
+      }
       if (epoch !== this.epoch) return;
       this.loading = undefined;
-      for (const event of this.buffered) this.apply(event);
-      this.buffered = [];
     });
     this.loading = operation;
+    this.pending = operation;
     return operation;
   }
 }
