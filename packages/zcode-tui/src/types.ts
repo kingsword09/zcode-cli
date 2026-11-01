@@ -2,6 +2,7 @@ export type UnknownRecord = Record<string, unknown>;
 
 export interface SlashCommandOption {
   name?: string;
+  aliases?: string[];
   description?: string;
   summary?: string;
   inputHint?: string;

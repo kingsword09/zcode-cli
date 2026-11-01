@@ -48,11 +48,12 @@ export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
   public readonly triggerCharacters: string[] = ["$"];
 
   constructor(
-    commands: (AutocompleteItem | SlashCommand)[] | undefined,
-    basePath: string,
+    private readonly commands: (AutocompleteItem | SlashCommand)[] = [],
+    private readonly basePath: string,
     private readonly listWorkspacePathSuggestions?: ListWorkspacePathSuggestions,
     skillSource?: ListSkills | SkillCatalog,
-    pluginSource?: ListPluginReferences | PluginReferenceCatalog
+    pluginSource?: ListPluginReferences | PluginReferenceCatalog,
+    private readonly reservedCommandNames: readonly string[] = []
   ) {
     this.fallback = new CombinedAutocompleteProvider(commands, basePath, null);
     this.skills = skillSource instanceof SkillCatalog ? skillSource : new SkillCatalog(skillSource);
@@ -68,6 +69,23 @@ export class WorkspaceAutocompleteProvider implements AutocompleteProvider {
     options: { signal: AbortSignal; force?: boolean }
   ): Promise<AutocompleteSuggestions | null> {
     const currentLine = lines[cursorLine] ?? "";
+
+    const commandText = currentLine.slice(0, cursorCol).trimStart();
+    if (!options.force && /^\/[^\s/]*$/u.test(commandText)) {
+      const skills = await this.skills.listSlashCommands([
+        ...this.reservedCommandNames,
+        ...this.commands.map((command) => "name" in command ? command.name : command.value)
+      ]);
+      if (options.signal.aborted) return null;
+      const provider = new CombinedAutocompleteProvider([
+        ...this.commands,
+        ...skills.map((skill) => ({
+          name: skill.identifier,
+          description: skill.description ? `Skill: ${skill.description}` : "Skill"
+        }))
+      ], this.basePath, null);
+      return await provider.getSuggestions(lines, cursorLine, cursorCol, options);
+    }
 
     const skillPrefix = extractSkillDollarPrefix(currentLine.slice(0, cursorCol));
     if (skillPrefix) {

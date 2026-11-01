@@ -6,6 +6,7 @@ const skillDescriptionLimit = 140;
 const skillIdentifierLimit = 256;
 const skillIdentifierPattern = /^[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)*$/u;
 const skillMentionPattern = /(^|\s)\$([A-Za-z0-9._:-]+)/gu;
+const reservedSlashCommandNames = ["skill", "quit", "workflow"];
 
 export interface SkillEntry {
   description?: string;
@@ -59,6 +60,24 @@ export class SkillCatalog {
     return identifiers.length > 0
       ? { identifiers, text: buildSkillInvocationPrompt(identifiers, input) }
       : undefined;
+  }
+
+  async listSlashCommands(reservedNames: readonly string[]): Promise<SkillEntry[]> {
+    const reserved = new Set([...reservedSlashCommandNames, ...reservedNames].map((name) => name.toLowerCase()));
+    return (await this.list()).filter((skill) => !reserved.has(skill.identifier.toLowerCase()));
+  }
+
+  async prepareSlashCommand(input: string, reservedNames: readonly string[]): Promise<string | undefined> {
+    const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/u.exec(input);
+    if (!match) return undefined;
+    if ([...reservedSlashCommandNames, ...reservedNames].some((name) => name.toLowerCase() === match[1]!.toLowerCase())) {
+      return undefined;
+    }
+    const skill = (await this.listSlashCommands(reservedNames))
+      .find((entry) => entry.identifier === match[1]);
+    if (!skill) return undefined;
+    const task = match[2]?.trim();
+    return `/skill ${skill.identifier}${task ? ` ${task}` : ""}`;
   }
 }
 

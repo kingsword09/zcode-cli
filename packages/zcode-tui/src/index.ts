@@ -1210,7 +1210,8 @@ class ZCodeTui {
         workspaceDirectory,
         this.options.listWorkspacePathSuggestions,
         this.skillCatalog,
-        this.options.listPluginReferences ?? createRuntimePluginReferenceLister(workspaceDirectory)
+        this.options.listPluginReferences ?? createRuntimePluginReferenceLister(workspaceDirectory),
+        (this.options.slashCommands ?? []).flatMap((command) => command.aliases ?? [])
       )
     );
     editor.onSubmit = (text) => void this.submit(text);
@@ -1823,7 +1824,13 @@ class ZCodeTui {
     const skillPrompt = input.startsWith("/")
       ? undefined
       : await this.skillCatalog.preparePrompt(input);
-    const runtimeInput = skillPrompt?.text ?? input;
+    const skillCommand = input.startsWith("/")
+      ? await this.skillCatalog.prepareSlashCommand(input, [
+          ...this.autocompleteCommands().map((command) => command.name),
+          ...(this.options.slashCommands ?? []).flatMap((command) => command.aliases ?? [])
+        ])
+      : undefined;
+    const runtimeInput = skillCommand ?? skillPrompt?.text ?? input;
 
     this.transcript.clearSearch();
     this.transcript.clearCursor();
@@ -1921,7 +1928,7 @@ class ZCodeTui {
     try {
       if (input.startsWith("/") || !this.options.sendInput) {
         const result = await this.options.submitPrompt(
-          input.startsWith("/") ? input : promptInput(runtimeInput, attachments),
+          input.startsWith("/") ? runtimeInput : promptInput(runtimeInput, attachments),
           callOptions
         );
         await this.handleResult(result, true, settingTargetForCommand(input));
