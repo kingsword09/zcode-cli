@@ -284,6 +284,17 @@ Provider 文件中的 `config.defaultModelSelection` 决定新会话使用的模
 显式配置的手动 API Key 仍使用其独立的账号选择。Z.AI 凭证统一采用桌面端的业务令牌格式；
 旧版 CLI 保存的 OAuth 令牌会在首次请求验证成功后转换，验证失败或并发登录不会覆盖更新的共享会话。
 
+Start Plan 与 Coding Plan 共用同一次 ZCode OAuth 登录，不需要第二次套餐授权；已有桌面端
+会话也无需再次登录。在 `/model` 中选择 `account:zai-start-plan/<model>` 或
+`account:bigmodel-start-plan/<model>`，也可以通过 `--model` 指定。Start Plan 请求直接使用
+共享的 ZCode JWT，不兑换 Coding Plan 项目令牌；请求仍由官方 runtime 构建和签名。
+切换模型不会改变已保存的登录状态。
+
+本地仅在当前账号的 ZCode JWT 和资料有效时提供 Start Plan provider；具体活动授权、可用模型
+和剩余额度由服务端判定。仅有手动 Coding Plan API Key 不等于已经登录 ZCode。会话缺失、
+过期或被拒绝时，需要更新共享的 ZCode 登录，而不是新增套餐专属登录。Start Plan 请求不会
+回退使用付费 Coding Plan 凭证。新请求跟随桌面端当前账号，同一请求重试时禁止切换账号或令牌。
+
 macOS OAuth 会临时注册回调接收器、校验 `state`，恢复原来的 `zcode://` 处理程序，并通过
 stdin 把回调交给 runtime。Runtime 先取得业务和项目访问令牌，再保存加密登录凭证与
 原生默认模型；TUI 随后重新读取 provider 配置。BigModel 使用 runtime 的 localhost

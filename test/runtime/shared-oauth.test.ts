@@ -48,6 +48,7 @@ async function probe(body: string, options: { callback?: boolean } = {}) {
 const httpFixture = `
   const assert=require("node:assert/strict"),fs=require("node:fs/promises");
   const env={...process.env},providerId="account:zai-individual-coding-plan";
+  const zcodeJwt="e30."+Buffer.from(JSON.stringify({sub:"fixture-user"})).toString("base64url")+".fixture-signature";
   const store=createSharedZCodeCredentialStore({env});
   const calls=[];
   let businessToken="fixture-business-token",projectToken="fixture-project-token",rejectExchange=false,rejectedStatus=401,beforeIssue;
@@ -55,8 +56,8 @@ const httpFixture = `
   const httpClient={request:async(request)=>{try{
     const url=new URL(request.url);calls.push(url.pathname);
     if(url.pathname==="/api/v1/oauth/cli/init")return response({authorize_url:"https://example.test/login",flow_id:"flow",expires_at:Math.ceil(Date.now()/1000)+60,poll_interval_sec:1});
-    if(url.pathname==="/api/v1/oauth/cli/poll/flow")return response({status:"ready",token:"fixture-zcode-jwt",user:{user_id:"fixture-user"},zai:{access_token:"fixture-oauth-token"}});
-    if(url.pathname==="/api/v1/oauth/token")return response({token:"fixture-zcode-jwt",user:{user_id:"fixture-user"},zai:{access_token:"fixture-oauth-token"}});
+    if(url.pathname==="/api/v1/oauth/cli/poll/flow")return response({status:"ready",token:zcodeJwt,user:{user_id:"fixture-user"},zai:{access_token:"fixture-oauth-token"}});
+    if(url.pathname==="/api/v1/oauth/token")return response({token:zcodeJwt,user:{user_id:"fixture-user"},zai:{access_token:"fixture-oauth-token"}});
     if(url.pathname==="/api/auth/z/login"){
       const input=JSON.parse(new TextDecoder().decode(request.body));
       if(rejectExchange||input.token!=="fixture-oauth-token")return response({},401);
@@ -73,15 +74,15 @@ const httpFixture = `
     throw new Error("Unexpected fixture request: "+url.pathname);
   }catch(error){console.error("Fixture HTTP error:",error);throw error}}};
   const resolver=()=>createCodingPlanApiKeyResolver({httpClient});
-  const seed=async(user="desktop-user")=>store.saveMany({"oauth:active_provider":"zai","oauth:zai:access_token":businessToken,"oauth:zai:user_info":JSON.stringify({user_id:user}),zcodejwttoken:"desktop-jwt"});
+  const seed=async(user="desktop-user")=>store.saveMany({"oauth:active_provider":"zai","oauth:zai:access_token":businessToken,"oauth:zai:user_info":JSON.stringify({user_id:user}),zcodejwttoken:zcodeJwt});
   const input={providerId,accountAccess:{mode:"individual-coding-plan",accountType:"zai"}};
 `;
 
-for (const callback of [false, true]) test(`Z.AI ${callback ? "macOS callback" : "polling"} login publishes a token Desktop and CLI can both use`, async () => {
+for (const callback of [false, true]) test(`one Z.AI ${callback ? "macOS callback" : "polling"} login authorizes Coding Plan and Start Plan`, async () => {
   await probe(`
     await loginZCodeCli({env,noBrowser:true,httpClient});
     assert.equal(await store.load("oauth:zai:access_token"),businessToken);
-    assert.equal(await store.load("zcodejwttoken"),"fixture-zcode-jwt");
+    assert.equal(await store.load("zcodejwttoken"),zcodeJwt);
     assert.deepEqual(JSON.parse(await store.load("oauth:zai:user_info")),{user_id:"fixture-user"});
     const saved=await fs.readFile(store.filePath,"utf8");
     assert.ok(saved.includes("enc:v1:"));
@@ -91,6 +92,13 @@ for (const callback of [false, true]) test(`Z.AI ${callback ? "macOS callback" :
     calls.length=0;
     const headers=createStandaloneProviderRuntimeHeadersPort(store,env,resolver());
     assert.equal((await headers.refreshBeforeModelRequest(input)).requestAuth.apiKey,projectToken);
+    const callsBeforeStart=calls.length;
+    assert.equal((await headers.refreshBeforeModelRequest({providerId:"account:zai-start-plan",accountAccess:{mode:"start-plan",accountType:"zai"}})).requestAuth.apiKey,zcodeJwt);
+    assert.equal(calls.length,callsBeforeStart);
+    const snapshot=await readStandaloneAccountProviderConfigSnapshot(store,env);
+    for(const id of [providerId,"account:zai-start-plan"]){
+      assert.equal(snapshot.providers.entries().find(([key])=>key===id)[1].access.entitled,true);
+    }
     assert.ok(!calls.includes("/api/auth/z/login"));
   `, { callback });
 }, 15_000);

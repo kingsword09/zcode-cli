@@ -26,6 +26,7 @@ import {
   hasRuntimeResolvedContextWindow,
   hasRuntimeRecursiveWorkspacePaths,
   hasRuntimeSharedOAuth,
+  hasRuntimeStartPlan,
   hasRuntimeSqliteBusyTimeout,
   hasRuntimeSqliteWriteRecovery,
   hasRuntimeStreamEofFinishGuard,
@@ -112,6 +113,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeRecursiveWorkspacePaths(runtimeSource)
   || !hasRuntimeResolvedContextWindow(runtimeSource)
   || !hasRuntimeSharedOAuth(runtimeSource)
+  || (patchEnabled("start-plan-standalone") && !hasRuntimeStartPlan(runtimeSource))
   || !hasRuntimeCliSettingsFile(runtimeSource)
   || !runtimeSource.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
   || !runtimeSource.includes('"plugin://"')

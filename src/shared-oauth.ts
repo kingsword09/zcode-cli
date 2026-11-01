@@ -11,7 +11,7 @@ const activeProviderKey = "oauth:active_provider";
 const identityKey = (provider: string) => `account-provider:${provider}:identity`;
 const sourceKey = (provider: string) => `account-provider:${provider}:auth-source`;
 
-function profileIdentity(value: string | null | undefined): string | null {
+export function profileIdentity(value: string | null | undefined): string | null {
   if (!value) return null;
   try {
     const profile = JSON.parse(value);
