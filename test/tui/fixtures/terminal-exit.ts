@@ -1,4 +1,4 @@
-import { runTui } from "../../../packages/zcode-tui/src/index.ts";
+import { runTui } from "../../../packages/zcode-tui/src/entry.ts";
 
 if (process.argv[2] === "parent") {
   // A fresh process reads the same PTY after the TUI exits, like the parent shell.

@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { constants as osConstants, homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   clearSetupPending,
@@ -291,6 +291,7 @@ function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}, inspectConfiguration 
   delete env.ZCODE_CLI_MIGRATE_CONFIG;
   delete env.ZCODE_CLI_PROMPT_MODEL;
   delete env.ZCODE_CLI_PROMPT_EFFORT;
+  delete env.ZCODE_CLI_TUI_IPC;
   const distributionVersion = readDistributionVersion();
   const appVersion = readJsonVersion(extractionMetadataPath, "appVersion");
   const inherited: NodeJS.ProcessEnv = {
@@ -469,6 +470,44 @@ async function completeOfficialZaiLogin(
   }
 }
 
+async function prepareCliSettings(): Promise<boolean> {
+  const bootstrap = await ensureCliSettings();
+  await readCliSettings();
+  sharedDataBaseDir();
+  if (bootstrap.created && !bootstrap.migrated) {
+    await markSetupPending();
+    return true;
+  }
+  return await readSetupPending();
+}
+
+async function migrateProviderConfiguration(node: string, signal?: AbortSignal): Promise<void> {
+  if (!providerMigrationNeeded()) return;
+  signal?.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const child = spawnChild(node, [runtimePath, "--version"], {
+      env: runtimeEnvironment({ ZCODE_CLI_MIGRATE_CONFIG: "1" }),
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+    let error = "";
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      child.kill("SIGTERM");
+      timeout = setTimeout(() => child.kill("SIGKILL"), 500);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stderr?.on("data", chunk => { error = `${error}${chunk}`.slice(-4096); });
+    child.once("error", reject);
+    child.once("close", code => {
+      if (timeout) clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      if (signal?.aborted) reject(signal.reason);
+      else if (code === 0) resolve();
+      else reject(new Error(error.trim() || "Provider migration failed."));
+    });
+  });
+}
+
 export async function main(args: string[]): Promise<number> {
   if (!existsSync(runtimePath)) {
     console.error(
@@ -500,19 +539,57 @@ export async function main(args: string[]): Promise<number> {
     return 1;
   }
 
+  if (isTuiRuntimeInvocation(args) && process.stdin.isTTY && process.stdout.isTTY) {
+    if (process.versions.bun) {
+      const node = process.env.ZCODE_NODE?.trim() || "node";
+      const child = spawnChild(node, [launcherPath, ...args], { stdio: "inherit", env: process.env });
+      const onSigint = () => { child.kill("SIGINT"); };
+      const onSigterm = () => { child.kill("SIGTERM"); };
+      const onSighup = () => { child.kill("SIGHUP"); };
+      process.on("SIGINT", onSigint);
+      process.on("SIGTERM", onSigterm);
+      if (process.platform !== "win32") process.on("SIGHUP", onSighup);
+      try { return await waitForChild(child); }
+      finally {
+        process.off("SIGINT", onSigint);
+        process.off("SIGTERM", onSigterm);
+        if (process.platform !== "win32") process.off("SIGHUP", onSighup);
+      }
+    }
+    const diagnosticState: TuiRuntimeDiagnosticState = { bytes: 0, initialized: false, writeFailed: false };
+    try {
+      const entry = join(packageRoot, "vendor", "node_modules", "@zcode", "tui", "dist", "foreground.js");
+      const foreground = await import(pathToFileURL(entry).href) as typeof import("../packages/zcode-tui/src/foreground.ts");
+      return await foreground.runForegroundTui({
+        version: readDistributionVersion(),
+        workspaceDirectory: inspectRuntimeInvocation(args, readRuntimeCliOptionTypes()).workingDirectory ?? process.cwd(),
+        onDiagnostic: chunk => appendTuiRuntimeDiagnostic(chunk, diagnosticState),
+        prepare: async signal => {
+          const setupPending = await prepareCliSettings();
+          signal.throwIfAborted();
+          const node = resolveNodeExecutable();
+          await migrateProviderConfiguration(node, signal);
+          signal.throwIfAborted();
+          const runtimeArgs = withDefaultBrowserUse(args);
+          return {
+            command: node,
+            args: [runtimePath, ...runtimeArgs],
+            env: runtimeEnvironment(firstRunSetupEnv(setupPending, runtimeArgs))
+          };
+        }
+      });
+    } catch (error) {
+      const message = diagnosticState.sessionError ?? (error instanceof Error ? error.message : String(error));
+      console.error(`Error: ${message}`);
+      return 1;
+    }
+  }
+
   let setupPending = false;
   try {
     // doctor 必须能检查损坏的配置，不能先被普通启动校验或 provider 迁移拦住。
     if (isDoctorRuntimeInvocation(args)) return await runRuntime(resolveNodeExecutable(), args);
-    const bootstrap = await ensureCliSettings();
-    await readCliSettings();
-    sharedDataBaseDir();
-    if (bootstrap.created && !bootstrap.migrated) {
-      await markSetupPending();
-      setupPending = true;
-    } else {
-      setupPending = await readSetupPending();
-    }
+    setupPending = await prepareCliSettings();
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     console.error("Run `zcode doctor --json` for configuration diagnostics.");
@@ -520,22 +597,11 @@ export async function main(args: string[]): Promise<number> {
   }
 
   const node = resolveNodeExecutable();
-  if (providerMigrationNeeded()) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const child = spawnChild(node, [runtimePath, "--version"], {
-          env: runtimeEnvironment({ ZCODE_CLI_MIGRATE_CONFIG: "1" }),
-          stdio: ["ignore", "ignore", "pipe"]
-        });
-        let error = "";
-        child.stderr?.on("data", chunk => { error = `${error}${chunk}`.slice(-4096); });
-        child.once("error", reject);
-        child.once("close", code => code === 0 ? resolve() : reject(new Error(error.trim() || "Provider migration failed.")));
-      });
-    } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-      return 1;
-    }
+  try {
+    await migrateProviderConfiguration(node);
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
   }
   const pluginAbortController = new AbortController();
   const cancelPluginCommand = (signal: NodeJS.Signals) => () => pluginAbortController.abort(signal);

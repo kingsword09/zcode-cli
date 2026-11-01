@@ -32,6 +32,7 @@ test("the tarball contract accepts published documentation and rejects missing o
     "package.json",
     "vendor/extraction.json",
     "vendor/node_modules/@zcode/tui/dist/index.js",
+    "vendor/node_modules/@zcode/tui/dist/foreground.js",
     "vendor/node_modules/@zcode/tui/package.json",
     "vendor/zcode.cjs",
     "vendor/cli-config.cjs",

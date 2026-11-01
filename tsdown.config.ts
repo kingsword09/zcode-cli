@@ -28,7 +28,10 @@ export default defineConfig([
   },
   {
     name: "tui",
-    entry: { index: "packages/zcode-tui/src/index.ts" },
+    entry: {
+      index: "packages/zcode-tui/src/entry.ts",
+      foreground: "packages/zcode-tui/src/foreground.ts"
+    },
     outDir: "packages/zcode-tui/dist",
     outExtensions: () => ({ js: ".js" }),
     format: "esm",

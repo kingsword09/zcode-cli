@@ -53,6 +53,7 @@ const require = createRequire(import.meta.url);
 
 if (!existsSync(runtime)) throw new Error("vendor/zcode.cjs is missing; run `bun run sync` first.");
 if (!existsSync(tui)) throw new Error("The local @zcode/tui adapter is missing; run `bun run sync` first.");
+if (!existsSync(join(dirname(tui), "foreground.js"))) throw new Error("The foreground TUI entry is missing; run `bun run sync` first.");
 if (!node) throw new Error("Node.js >=22.19 is required by the official ZCode runtime.");
 
 const packageManifest = await Bun.file(join(root, "package.json")).json() as {

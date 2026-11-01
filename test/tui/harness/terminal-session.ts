@@ -65,7 +65,7 @@ export class TerminalSession implements AsyncDisposable {
         CI: "1",
         TERM: "xterm-256color",
         ZCODE_DISABLE_UPDATE_CHECK: "1",
-        ZCODE_TUI_MODE: "regular"
+        ZCODE_TUI_MODE: options.env?.ZCODE_TUI_MODE ?? "regular"
       },
       terminal
     });
@@ -98,6 +98,10 @@ export class TerminalSession implements AsyncDisposable {
 
   historyText(start = 0): string {
     return terminalPlainText(this.#historyOutput.slice(start));
+  }
+
+  rawHistory(start = 0): string {
+    return this.#historyOutput.slice(start);
   }
 
   screenText(): string {

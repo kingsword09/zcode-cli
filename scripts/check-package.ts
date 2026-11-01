@@ -95,6 +95,7 @@ export async function validatePackageTree(base = root): Promise<void> {
     "tsdown.config.ts",
     "vendor/extraction.json",
     "vendor/node_modules/@zcode/tui/dist/index.js",
+    "vendor/node_modules/@zcode/tui/dist/foreground.js",
     "vendor/node_modules/@zcode/tui/package.json",
     "vendor/zcode.cjs",
     "vendor/cli-config.cjs",

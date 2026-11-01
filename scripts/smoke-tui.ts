@@ -164,8 +164,9 @@ try {
   if (!plainText(output).includes("╭─ ◆ ZCODE")) {
     throw new Error("Regular TUI did not render the framed session header.");
   }
+  await waitFor("ready runtime status", /◈ .*◉ /u, 0, runtimeStartupTimeoutMs);
   if (!await Bun.file(configPath).exists()) {
-    throw new Error("The launcher did not create setting.json before starting the TUI.");
+    throw new Error("The launcher did not create setting.json before the runtime became ready.");
   }
   const initialConfig = await Bun.file(configPath).json() as {
     model?: { main?: string };
