@@ -8,6 +8,17 @@ CLI 跟随当前 ZCode runtime 的 provider registry schema。Provider 和模型
 
 ## 配置文件
 
+CI 等无人值守场景可在 `--prompt` / `-p` 运行时设置 `ZCODE_MODEL_BASE_URL`、
+`ZCODE_API_KEY`、`ZCODE_MODEL`、`ZCODE_API_TYPE` 和 `ZCODE_EFFORT`，无需预先登录
+或手写 provider 文件。自定义端点模式使用临时 provider，不覆盖个人配置；此时模型值是
+服务端原始 ID（可包含 `/`），`--model` / `--effort` 优先于对应环境变量。
+不配置自定义端点时，`ZCODE_MODEL` 与 `--model` 一样使用 `provider/model` 格式。
+`ZCODE_BASE_URL` 仍为账号服务地址，模型地址必须使用 `ZCODE_MODEL_BASE_URL`。
+协议默认 `openai-chat-completions`，也支持 `openai-responses` 和
+`anthropic-messages`。这些变量仅作用于 headless prompt，不改变 TUI 或 app-server。
+具体协议映射、GitHub Actions 示例和密钥隔离限制见
+[CI 环境变量配置](HEADLESS.md#environment-configuration-for-ci)。
+
 | 文件 | 用途 |
 | --- | --- |
 | `~/.zcode/cli/setting.json` | MCP、hooks、插件、权限、网络、存储和 CLI 显示设置 |

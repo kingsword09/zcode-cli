@@ -3,6 +3,119 @@
 `zcode -p 'task'` runs without a TUI. It is a foreground command, not a daemon,
 and headless mode is separate from the browser's `--browser-use=headless` setting.
 
+## Environment configuration for CI
+
+Headless `--prompt` / `-p` invocations accept the following environment variables.
+They do not configure the TUI, login, doctor, plugin commands or app-server.
+
+| Variable | Meaning |
+| --- | --- |
+| `ZCODE_MODEL_BASE_URL` | Custom inference API root, including its API prefix, e.g. `https://gateway.example.com/v1` |
+| `ZCODE_API_KEY` | API key for that custom endpoint |
+| `ZCODE_API_TYPE` | `openai-chat-completions` (default), `openai-responses`, or `anthropic-messages` |
+| `ZCODE_MODEL` | Raw server model ID with a custom endpoint; otherwise a saved `provider/model` selection |
+| `ZCODE_EFFORT` | Reasoning effort for this run; explicit `--effort` takes precedence |
+
+Blank variables are treated as unset. Specifying an endpoint, key or API type
+activates custom-provider mode and requires an endpoint, key and model. `--model`
+may supply the model instead of `ZCODE_MODEL`. In custom-provider mode it is a
+raw server ID, not a saved provider selection, and `/` is preserved verbatim.
+Without custom-provider mode, `--model` and `ZCODE_MODEL` require `provider/model`.
+Explicit CLI model/effort flags take precedence over environment variables, which
+take precedence over saved or resumed selections. Reapply the custom endpoint
+environment when resuming a session created with it.
+
+`ZCODE_BASE_URL` retains its existing ZCode account/control-service meaning. It is
+not an alias for `ZCODE_MODEL_BASE_URL`. A custom model endpoint must be HTTP(S)
+without embedded credentials, query parameters or fragments. Use HTTPS for remote
+services. The endpoint must implement the selected protocol, including streaming
+and tool calling for agent tasks; a compatible-looking URL alone is insufficient.
+
+Custom-provider mode creates a private temporary provider file (directory mode
+0700 and file mode 0600 on POSIX), containing only the supplied provider. It uses
+the internal provider ID `cli-env` and does not overwrite the personal provider
+file, saved default model or account credentials. The launcher removes its
+temporary directory after success, failure or handled cancellation. `SIGKILL`,
+runner failure or power loss cannot guarantee cleanup; prefer disposable runners
+and do not archive temporary/runtime directories containing secrets. Normal
+runtime session data may still be persisted; this is not an ephemeral-session or
+secret-isolation feature.
+
+With a custom endpoint, omitted effort or `auto` sends no explicit reasoning
+parameters. Explicit effort uses the selected protocol's mapping:
+
+- Chat Completions: `reasoning_effort`.
+- Responses: `reasoning.effort`.
+- Anthropic Messages: adaptive `thinking` with `output_config.effort`;
+  `none` / `disabled` disables thinking instead.
+
+The custom endpoint validates whether the model accepts that effort and mapping.
+These are protocol presets, not automatic model capability discovery. Older
+Anthropic models requiring token-budget thinking, gateway-specific mappings,
+custom headers and model capability overrides should use the full
+[provider configuration](PROVIDER_CONFIG.md) instead. Without custom-provider
+mode, effort continues to use the saved provider's catalog and validation.
+Invalid local configuration fails before starting the runtime. Provider errors
+fail the job rather than falling back to an account or saved provider.
+
+### GitHub Actions example
+
+Create repository variables `AI_BASE_URL`, `AI_MODEL`, and optionally `AI_EFFORT`,
+plus the secret `AI_API_KEY`. Add a trusted prompt at `.github/prompts/review.md`.
+This minimal example runs only on manual dispatch, not arbitrary external PRs:
+
+```yaml
+name: ZCode task
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  task:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install CLI
+        run: npm install -g zcode-app-cli
+      - name: Run trusted task
+        env:
+          ZCODE_MODEL_BASE_URL: ${{ vars.AI_BASE_URL }}
+          ZCODE_API_KEY: ${{ secrets.AI_API_KEY }}
+          ZCODE_MODEL: ${{ vars.AI_MODEL }}
+          ZCODE_EFFORT: ${{ vars.AI_EFFORT }}
+          ZCODE_API_TYPE: openai-chat-completions
+        shell: bash
+        run: |
+          set -euo pipefail
+          zcode -p "$(cat .github/prompts/review.md)" \
+            --mode build --disallowed-tools 'Bash Edit Write' \
+            --output-format stream-json > "$RUNNER_TEMP/zcode-result.jsonl"
+          jq -s -e 'any(.[]; .type == "result")' "$RUNNER_TEMP/zcode-result.jsonl" > /dev/null
+```
+
+Pin CLI versions and action commit SHAs according to your deployment policy.
+This example restricts common shell/edit tools for an inspection task; it is not
+an OS sandbox or a comprehensive allowlist. Approval-requiring operations cannot
+rely on the TUI in CI. Use `yolo` only for trusted workloads on isolated runners.
+Successful execution is not a quality gate by itself; parse the task's outcome
+separately if findings should fail CI.
+
+Pass keys only to the invocation/step that needs them, not a whole job containing
+untrusted install/build scripts. Even step-scoped keys and private files can be
+read by tools or repository-controlled code executed by the agent. Environment
+configuration does not isolate credentials. Do not expose secrets to untrusted
+forks or use `pull_request_target` to execute untrusted PR code. Review prompt
+injection risks, project hooks, plugins and MCP configuration. Run GitHub writes
+(comments/PR creation) separately with narrowly scoped GitHub credentials; those
+credentials are distinct from the model API key. A GitHub App is not required
+for this CLI-based integration.
+
 ## Long-running jobs
 
 - The prompt lifecycle keeps the Node event loop alive until prompt work and
