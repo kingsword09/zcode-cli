@@ -256,11 +256,27 @@ try {
      VALUES ('msg_smoke_previous_1', 'sess_smoke_previous', 1700000000000, 1700000000000,
              '{"role":"user","time":{"created":1700000000000}}')`
   );
+  // A directory-scoped row so the runtime's native `/resume` picker (wired to
+  // the app facade's listSessions) has something to list for the cwd as well.
+  smokeDb.exec(
+    `INSERT INTO session (id, project_id, slug, directory, path, title, version, permission, time_created, time_updated, task_type, title_source, trace_id)
+     VALUES ('sess_smoke_native', 'proj_smoke', 'sess_smoke_native', '${root}', '${root}',
+             'Smoke native resume', '0.0.0-test', '{"mode":"build"}', 1700000001000, 1700000001000,
+             'interactive', 'first_input', '00000000-0000-0000-0000-000000000001')`
+  );
   smokeDb.close();
+  // Bare `/resume` now surfaces the runtime's own directory-scoped picker.
+  await sendAndWait(
+    "/resume\r",
+    "native resume picker",
+    /(?=[\s\S]*Resume Session)(?=[\s\S]*Choose a session to resume\.)(?=[\s\S]*Smoke native resume)/i
+  );
+  terminal.write("\x1b");
+  await Bun.sleep(500);
   await sendAndWait(
     "/sessions\r",
     "sessions picker",
-    /(?=[\s\S]*Smoke previous session)(?=[\s\S]*1 recent sessions? · Enter resumes in place)/i
+    /(?=[\s\S]*Smoke previous session)(?=[\s\S]*\d+ recent sessions? · Enter resumes in place)/i
   );
   // A lone Esc byte needs time to flush as a standalone key before more text
   // arrives, or the next input is parsed as part of an escape sequence.
