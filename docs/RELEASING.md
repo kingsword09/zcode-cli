@@ -46,6 +46,9 @@ The synchronization command:
 9. aligns the npm version prefix with the ZCode App version while preserving
    the independently incremented CLI build revision.
 
+The [Desktop 3.17.2 compatibility audit](./RUNTIME_3.17.2_AUDIT.zh-CN.md)
+records the reviewed source delta, runtime checks and Desktop-only feature boundaries.
+
 ## npm package contents
 
 The published package is controlled by the `files` allowlist in `package.json`.

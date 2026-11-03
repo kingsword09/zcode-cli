@@ -176,7 +176,7 @@ CLI 目前没有信任管理命令，可在 Desktop 中批准相应工作区声�
 
 下面区分本发行包与上游应用。源码引用固定在上游
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e)。
-本项目 runtime lock 选择的是独立发布的 Desktop 3.17.1 / runtime 0.17.1 产物，不能据此认定该产物
+本项目 runtime lock 选择的是独立发布的 Desktop 3.17.2 / runtime 0.17.1 产物，不能据此认定该产物
 由这个公开源码提交构建。
 2026-10-20 已针对
 [`0a1fc56` / `0.17.0`](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411)
