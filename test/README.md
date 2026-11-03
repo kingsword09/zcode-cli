@@ -65,6 +65,7 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 | `session-lifecycle.test.ts` | An untouched session is saved, rename/resume loses data, or failed work becomes unresumable. |
 | `session-model-recovery.test.ts` | An invalid saved model sends a request, cannot be repaired and persisted, or falls back from an unavailable explicit model. |
 | `guarded-permission-tui.test.ts` | A destructive command executes before single-use approval. |
+| `custom-command-shell.test.ts` | Custom command shell blocks execute during expansion instead of reaching the model's permission-controlled Bash path. |
 | `workspace-paths.test.ts` | The actual runtime cannot find nested workspace files. |
 
 ### Real Node persistence: `test:node`

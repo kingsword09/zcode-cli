@@ -135,7 +135,7 @@ is not used as a substitute for Node's SQLite driver.
 
 ## Follow-up boundary
 
-The current lock selects Desktop 3.17.1 / runtime 0.17.1. Rebuild with
+The current lock selects Desktop 3.17.2 / runtime 0.17.1. Rebuild with
 `sync:locked` before release validation; `sync:local` records a local App source
 and does not establish the locked installer's provenance. The regressions do
 not establish that every production workload is free of contention. Keep #162
