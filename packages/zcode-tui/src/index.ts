@@ -53,6 +53,7 @@ import { AttachmentBar } from "./attachment-bar.ts";
 import { AssistantStream } from "./assistant-stream.ts";
 import { BackgroundTaskEventStore } from "./background-task-events.ts";
 import { deliveredBackgroundTaskIds } from "./background-task-notifications.ts";
+import { formatSessionTimestamp, listRecentSessions, sessionPreview } from "./session-picker.ts";
 import { readBackgroundTaskOutput } from "./background-task-output.ts";
 import { BoundedToolText, toolTextValue } from "./bounded-tool-text.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
@@ -1438,6 +1439,7 @@ class ZCodeTui {
         argumentHint: "[message|resume|stop <task-id>]"
       },
       { name: "diff", description: "Browse current and per-turn file changes" },
+      { name: "sessions", description: "Browse and resume past sessions (desktop and CLI)" },
       { name: "context", description: "Inspect context usage and prompt composition" },
       { name: "status", description: "Inspect detailed runtime and session status" },
       { name: "rename", description: "Rename the current session", argumentHint: "<title>" },
@@ -1739,6 +1741,10 @@ class ZCodeTui {
     }
     if (input === "/diff") {
       await this.showDiffBrowser();
+      return;
+    }
+    if (input === "/sessions") {
+      await this.showSessionPicker();
       return;
     }
     if (input.startsWith("/") && this.activeSubmissions > 0) {
@@ -5121,6 +5127,45 @@ class ZCodeTui {
     } catch {
       return "unavailable";
     }
+  }
+
+  private async showSessionPicker(): Promise<void> {
+    if (this.activeSubmissions > 0 || this.turnAbortController) {
+      this.addNotice("Wait for the active turn or press Ctrl+C before switching sessions.", "warning");
+      return;
+    }
+    const currentSessionId = this.options.getMainSessionId?.();
+    const sessions = listRecentSessions({
+      excludeIds: currentSessionId ? new Set([currentSessionId]) : undefined
+    });
+    if (sessions.length === 0) {
+      this.addNotice("No past sessions found in the shared session store.", "muted");
+      return;
+    }
+    const currentDirectory = this.options.workspaceDirectory ?? process.cwd();
+    const selected = await this.showChoice({
+      title: "Sessions",
+      prompt: `${sessions.length} recent session${sessions.length === 1 ? "" : "s"} · Enter resumes in place`,
+      help: "Type to filter by title, directory or id · Up/Down choose · Ctrl+O details · Enter resume · Esc cancel",
+      items: sessions.map((session) => ({
+        value: session.id,
+        label: `${session.pinned ? "★ " : ""}${session.title}`,
+        description: [
+          formatSessionTimestamp(session.timeUpdated),
+          `${session.messageCount} msg${session.messageCount === 1 ? "" : "s"}`,
+          session.source,
+          session.directory
+        ].join(" · "),
+        preview: sessionPreview(session, currentDirectory),
+        payload: session
+      }))
+    });
+    if (!selected) return;
+    if (selected.value === currentSessionId) {
+      this.addNotice("This session is already active.", "muted");
+      return;
+    }
+    await this.submit(`/resume ${selected.value}`);
   }
 
   private async showBackgroundTasks(): Promise<void> {
