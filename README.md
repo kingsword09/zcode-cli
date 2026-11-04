@@ -496,7 +496,7 @@ saved default:
 zcode --model account:zai-individual-coding-plan/GLM-5.3-Flash --effort high --prompt 'Reply with exactly: ok'
 ```
 
-`--model` requires a full provider/model ID and `--prompt` (or `-p`). It also
+`--model` normally requires a full provider/model ID and `--prompt` (or `-p`). It also
 overrides a resumed session's model for that run. Unknown or unavailable models
 fail before a prompt is sent, rather than falling back to the default.
 
@@ -510,6 +510,26 @@ run's model and effort are recorded on that session.
 
 For automation and long-running `-p` jobs, see [headless execution](./docs/HEADLESS.md)
 for output completion, cancellation, background execution and validation limits.
+
+For CI with a custom model endpoint, configure the invocation through environment
+variables; no Desktop installation, browser login or GitHub App is required:
+
+```bash
+ZCODE_MODEL_BASE_URL=https://gateway.example.com/v1 \
+ZCODE_API_KEY="$CI_MODEL_API_KEY" \
+ZCODE_MODEL=organization/model-name \
+ZCODE_API_TYPE=openai-chat-completions \
+ZCODE_EFFORT=high \
+zcode -p "$(cat .github/prompts/review.md)" --output-format stream-json
+```
+
+In this mode `ZCODE_MODEL` and `--model` are raw server model IDs, including IDs
+containing `/`. Explicit `--model` and `--effort` override their environment
+counterparts. The provider is temporary and does not replace saved settings.
+`ZCODE_MODEL_BASE_URL` is the inference endpoint; the existing `ZCODE_BASE_URL`
+still controls the ZCode account service. See the [CI setup and security
+guidance](./docs/HEADLESS.md#environment-configuration-for-ci) before running this
+against repository-controlled code.
 
 ZCode reads MCP servers, hooks, plugins, permissions, network, storage and display
 settings from `~/.zcode/cli/setting.json` (or
