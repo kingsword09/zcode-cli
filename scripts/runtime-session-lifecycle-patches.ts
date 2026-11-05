@@ -17,7 +17,9 @@ export function hasRuntimeSessionLifecycle(runtime: string): boolean {
     && runtime.includes("$zResumeCandidateError")
     && runtime.includes("$zTuiResumeReady=")
     && runtime.includes("$zTuiResumeOptions=")
-    && runtime.includes('"readSessionResumeTarget"');
+    && runtime.includes('"readSessionResumeTarget"')
+    && runtime.includes('"readSessionDatabasePath"')
+    && runtime.includes('"listSessionsForPicker"');
 }
 
 export function patchRuntimeSessionLifecycle(runtime: string): string {
@@ -35,6 +37,18 @@ export function patchRuntimeSessionLifecycle(runtime: string): string {
   if (!patched.includes('"readSessionResumeTarget"')) {
     const facade = unique(patched, new RegExp(`setCustomSessionTitle:(${identifier})\\(async (${identifier})=>(${identifier})\\.runtime\\.setCustomSessionTitle\\(\\{title:\\2\\.title,traceContext:\\2\\.traceContext\\?\\?\\3\\.traceContext\\}\\),"setCustomSessionTitle"\\)`, "u"), "app title facade");
     patched = patched.replace(facade[0], `${facade[0]},readSessionResumeTarget:${facade[1]}(async()=>await ${helper}.readSessionResumeTarget(${facade[3]}),"readSessionResumeTarget")`);
+  }
+  // The runtime's `/resume` command renders its native session picker only
+  // when the app facade exposes `listSessions`; the official TUI provides it
+  // but this CLI never did, so bare `/resume` silently fell back to
+  // latest-for-directory. Wire it to the cli-config helper.
+  if (!patched.includes('"listSessionsForPicker"')) {
+    const picker = unique(patched, new RegExp(`readSessionResumeTarget:(${identifier})\\(async\\(\\)=>await ${escape(helper)}\\.readSessionResumeTarget\\((${identifier})\\),"readSessionResumeTarget"\\)`, "u"), "resume picker facade");
+    patched = patched.replace(picker[0], `${picker[0]},listSessions:${picker[1]}(async()=>await ${helper}.listSessionsForPicker(${picker[2]}),"listSessionsForPicker")`);
+  }
+  if (!patched.includes('"readSessionDatabasePath"')) {
+    const database = unique(patched, new RegExp(`readSessionResumeTarget:(${identifier})\\(async\\(\\)=>await ${escape(helper)}\\.readSessionResumeTarget\\((${identifier})\\),"readSessionResumeTarget"\\)`, "u"), "session database facade");
+    patched = patched.replace(database[0], `${database[0]},readSessionDatabasePath:${database[1]}(()=>${helper}.readSessionDatabasePath(${database[2]}),"readSessionDatabasePath")`);
   }
   if (!patched.includes("$zResumeCandidateError")) {
     const switchApp = unique(patched, new RegExp(`(${identifier})\\(async (${identifier})=>\\{let (${identifier})=(${identifier}),(${identifier})=await \\2\\(\\);return \\4=\\5,\\3&&\\3!==\\5&&await (${identifier})\\(\\3\\),`, "u"), "app replacement");

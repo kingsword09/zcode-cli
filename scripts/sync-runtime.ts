@@ -572,6 +572,8 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   const listSkillsBridgePattern = /\.listSkills=async\(\)=>await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)/u;
   const listSkillsOptionPattern = /listSkills:[A-Za-z_$][\w$]*\.listSkills/u;
   const listModelOptionsOptionPattern = /listModelOptions:[A-Za-z_$][\w$]*\.listModelOptions/u;
+  const workspacePathsBridgeMarker = ".listWorkspacePathSuggestions=async $zWorkspaceRequest=>";
+  const workspacePathsOptionPattern = /listWorkspacePathSuggestions:[A-Za-z_$][\w$]*\.listWorkspacePathSuggestions/u;
   const sessionEventsBridgePattern = /\.subscribeSessionEvents=[A-Za-z_$][\w$]*=>/u;
   const sessionEventsOptionPattern = /subscribeSessionEvents:[A-Za-z_$][\w$]*\.subscribeSessionEvents/u;
   const taskMessageBridgePattern = /\.sendBackgroundTaskMessage=async [A-Za-z_$][\w$]*=>/u;
@@ -604,6 +606,7 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && runtime.includes(".setCustomSessionTitle=async e=>")
     && runtime.includes(".readCustomSessionTitle=async()=>")
     && runtime.includes(".readSessionResumeTarget=async()=>")
+    && runtime.includes(".readSessionDatabasePath=async()=>")
     && runtime.includes(interruptTurnMarker)
     && runtime.includes(interruptWaitForIdleMarker)
     && runtime.includes(".promoteQueuedInput=async(")
@@ -624,12 +627,15 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && /setCustomSessionTitle:[A-Za-z_$][\w$]*\.setCustomSessionTitle/u.test(runtime)
     && /readCustomSessionTitle:[A-Za-z_$][\w$]*\.readCustomSessionTitle/u.test(runtime)
     && /readSessionResumeTarget:[A-Za-z_$][\w$]*\.readSessionResumeTarget/u.test(runtime)
+    && /readSessionDatabasePath:[A-Za-z_$][\w$]*\.readSessionDatabasePath/u.test(runtime)
     && /interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(runtime)
     && /promoteQueuedInput:[A-Za-z_$][\w$]*\.promoteQueuedInput/u.test(runtime)
     && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime)
     && listSkillsBridgePattern.test(runtime)
     && listSkillsOptionPattern.test(runtime)
     && listModelOptionsOptionPattern.test(runtime)
+    && runtime.includes(workspacePathsBridgeMarker)
+    && workspacePathsOptionPattern.test(runtime)
     && modeBridgePattern.test(runtime)
     && modeOptionPattern.test(runtime)
     && (!cliModeOverrideBridge.test(runtime) || runtime.includes("$zTuiBridge.setMode=async"))
@@ -848,6 +854,14 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!patched.includes(".readSessionResumeTarget=async()=>")) {
     assignments.push(`${bridge}.readSessionResumeTarget=async()=>await(await ${getApp}()).readSessionResumeTarget?.()`);
   }
+  if (!patched.includes(".readSessionDatabasePath=async()=>")) {
+    assignments.push(`${bridge}.readSessionDatabasePath=async()=>await(await ${getApp}()).readSessionDatabasePath?.()`);
+  }
+  if (!patched.includes(workspacePathsBridgeMarker)) {
+    const provider = /[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),"createWorkspacePathSuggestionProvider"\)/u.exec(patched)?.[1];
+    if (!provider) throw new Error("ZCode runtime is incompatible with active workspace paths (provider missing).");
+    assignments.push(`${bridge}${workspacePathsBridgeMarker}{let $zWorkspaceApp=await ${getApp}();await $zWorkspaceApp.readExecutionState();let $zWorkspaceDirectory=$zWorkspaceApp.runtime?.workingDirectory;return $zWorkspaceDirectory?await ${provider}({workspaceDirectory:$zWorkspaceDirectory})($zWorkspaceRequest):{items:[],truncated:!1}}`);
+  }
   // The upstream CLI shim turns every switch into a permanent --mode override,
   // which prevents later resumes from loading their saved execution state.
   if (!queryHelper) patched = patched.replace(cliModeOverrideBridge, `${bridge}.setMode=async e=>{return await(await ${getApp}()).setMode(e)}`);
@@ -943,6 +957,11 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!/readRuntimeProjection:[A-Za-z_$][\w$]*\.readRuntimeProjection/u.test(patched)) {
     optionFields.push(`readRuntimeProjection:${submitBridge}.readRuntimeProjection`);
   }
+  if (!workspacePathsOptionPattern.test(patched)) {
+    const workspacePathsOption = /listWorkspacePathSuggestions:[A-Za-z_$][\w$]*\(\{workspaceDirectory:[A-Za-z_$][\w$]*\}\)/u;
+    if (!workspacePathsOption.test(patched)) throw new Error("ZCode runtime is incompatible with active workspace paths (TUI option missing).");
+    patched = patched.replace(workspacePathsOption, `listWorkspacePathSuggestions:${submitBridge}.listWorkspacePathSuggestions`);
+  }
   if (!/readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(patched)) {
     optionFields.push(`readSessionUsage:${submitBridge}.readSessionUsage`);
   }
@@ -963,6 +982,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/readSessionResumeTarget:[A-Za-z_$][\w$]*\.readSessionResumeTarget/u.test(patched)) {
     optionFields.push(`readSessionResumeTarget:${submitBridge}.readSessionResumeTarget`);
+  }
+  if (!/readSessionDatabasePath:[A-Za-z_$][\w$]*\.readSessionDatabasePath/u.test(patched)) {
+    optionFields.push(`readSessionDatabasePath:${submitBridge}.readSessionDatabasePath`);
   }
   if (!/interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(patched)) {
     optionFields.push(`interruptTurn:${submitBridge}.interruptTurn`);

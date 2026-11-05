@@ -3,6 +3,7 @@
 import { terminalOutputText as plainText } from "./terminal-output.ts";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -240,6 +241,47 @@ try {
   await sendAndWait("/plan on\r", "plan enabled", /Plan enabled · permission mode: build/i);
   await sendAndWait("/mode edit\r", "edit permission mode", /mode switched to edit/i);
   await sendAndWait("/plan off\r", "plan disabled with permissions preserved", /Plan disabled · permission mode: edit/i);
+  // /sessions: seed a previous session into the shared store (the runtime has
+  // migrated it by now), then verify the picker lists it and dismiss cleanly.
+  const smokeDbPath = join(temporaryHome, ".zcode", "cli", "db", "db.sqlite");
+  const smokeDb = new DatabaseSync(smokeDbPath);
+  smokeDb.exec(
+    `INSERT INTO session (id, project_id, slug, directory, path, title, version, permission, time_created, time_updated, task_type, title_source, trace_id)
+     VALUES ('sess_smoke_previous', 'proj_smoke', 'sess_smoke_previous', '${temporaryHome}', '${temporaryHome}',
+             'Smoke previous session', '0.0.0-test', '{"mode":"build"}', 1700000000000, 1700000000000,
+             'interactive', 'first_input', '00000000-0000-0000-0000-000000000000')`
+  );
+  smokeDb.exec(
+    `INSERT INTO message (id, session_id, time_created, time_updated, data)
+     VALUES ('msg_smoke_previous_1', 'sess_smoke_previous', 1700000000000, 1700000000000,
+             '{"role":"user","time":{"created":1700000000000}}')`
+  );
+  // A directory-scoped row so the runtime's native `/resume` picker (wired to
+  // the app facade's listSessions) has something to list for the cwd as well.
+  smokeDb.exec(
+    `INSERT INTO session (id, project_id, slug, directory, path, title, version, permission, time_created, time_updated, task_type, title_source, trace_id)
+     VALUES ('sess_smoke_native', 'proj_smoke', 'sess_smoke_native', '${root}', '${root}',
+             'Smoke native resume', '0.0.0-test', '{"mode":"build"}', 1700000001000, 1700000001000,
+             'interactive', 'first_input', '00000000-0000-0000-0000-000000000001')`
+  );
+  smokeDb.close();
+  // Bare `/resume` now surfaces the runtime's own directory-scoped picker.
+  await sendAndWait(
+    "/resume\r",
+    "native resume picker",
+    /(?=[\s\S]*Resume Session)(?=[\s\S]*Choose a session to resume\.)(?=[\s\S]*Smoke native resume)/i
+  );
+  terminal.write("\x1b");
+  await Bun.sleep(500);
+  await sendAndWait(
+    "/sessions\r",
+    "sessions picker",
+    /(?=[\s\S]*Smoke previous session)(?=[\s\S]*\d+ recent sessions? · Enter resumes in place)/i
+  );
+  // A lone Esc byte needs time to flush as a standalone key before more text
+  // arrives, or the next input is parsed as part of an escape sequence.
+  terminal.write("\x1b");
+  await Bun.sleep(500);
   await sendAndWait("/mc", "runtime slash command suggestions", /mcp\s+\/mcp \[list\|status\|connect <server>/i);
   terminal.write("\x03");
   await Bun.sleep(50);

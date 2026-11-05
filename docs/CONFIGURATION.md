@@ -32,6 +32,10 @@ Hook trust commands use that file's `storage.dir` too. Providers, credentials an
 the session database (including persisted project permissions) have separate path
 overrides; changing only the settings file does not isolate those stores. See
 [host integration](HOST_INTEGRATION.md#environment-and-configuration) for examples.
+The `/resume` and `/sessions` pickers use the active runtime's session database,
+respecting `storage.sessionDbPath` and `ZCODE_SESSION_DB_PATH` overrides.
+Resuming a session from another directory also switches the TUI's workspace path,
+Git branch, file completion and `/diff` to that session's working directory.
 Desktop preferences remain in `~/.zcode/v2/setting.json`; Desktop's user hooks and
 MCP configuration in `~/.zcode/cli/config.json` are not continuously synchronized
 with the CLI settings file.

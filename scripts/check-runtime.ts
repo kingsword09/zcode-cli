@@ -141,6 +141,8 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !runtimeSource.includes(".readExecutionState=async")
   || !runtimeSource.includes(".readSessionModel=async")
   || !runtimeSource.includes(".listSkills=async()=>await")
+  || !runtimeSource.includes(".listWorkspacePathSuggestions=async $zWorkspaceRequest=>")
+  || !/listWorkspacePathSuggestions:[A-Za-z_$][\w$]*\.listWorkspacePathSuggestions/u.test(runtimeSource)
   || !runtimeSource.includes(".subscribeSessionEvents=")
   || !runtimeSource.includes(".sendBackgroundTaskMessage=async")
   || !runtimeSource.includes(".restoreTuiBackgroundTasks(")

@@ -93,3 +93,23 @@ test("a failed custom title write preserves the stored title and can be retried"
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("session pickers use the native store path and include resumable task types", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "zcode-native-picker-"));
+  const dbPath = path.join(directory, "custom.sqlite");
+  const store = await Store.openStartup({ dbPath });
+  try {
+    for (const taskType of ["interactive", "fork", "workflow_parent", "subagent_child", "workflow_child"]) {
+      await store.createSession({
+        id: `sess_${taskType}`, projectID: "picker-test", directory, slug: taskType, title: taskType, version: "test", taskType
+      });
+    }
+    assert.equal(helper.readSessionDatabasePath({ sessionStore: store }), dbPath);
+    assert.equal(helper.readSessionDatabasePath({ runtime: { sessionStore: store } }), dbPath);
+    const entries = await helper.listSessionsForPicker({ directory, sessionStore: store });
+    assert.deepEqual(entries.map(entry => entry.id).sort(), ["sess_fork", "sess_interactive", "sess_workflow_parent"]);
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

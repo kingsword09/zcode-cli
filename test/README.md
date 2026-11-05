@@ -49,6 +49,7 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 | `attachments.test.ts` | Malformed image data reaches the runtime. |
 | `rewind.test.ts` | Rewind selects the wrong message or admits an invalid workspace operation. |
 | `skill-completion.test.ts` | Discovered skills disappear from slash completion, duplicate entries surface, or skill shortcuts shadow commands. |
+| `runtime-workspace.test.ts` | Workspace snapshots use the launch directory, retain a previous project's branch, or fail to update terminal headers. |
 | `release-contract.test.ts` | Package and runtime versions diverge, installer verification is weakened, or a lagging manifest downgrades the lock. |
 | `shell-security.test.ts` | The shell formatter's known unbounded-precision denial of service returns. |
 
@@ -62,7 +63,7 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 | `config-migration.test.ts` | Migration loses providers, overwrites conflicting/invalid configuration, or runs twice concurrently. |
 | `shared-oauth.test.ts` | Native login stores plaintext/wrong tokens, ignores Desktop account changes, or damages shared login state on an HTTP failure. |
 | `network-retry.test.ts` | Retry/slow pipes lose a headless result, partial output is duplicated, or exhaustion/cancellation reports success. |
-| `session-lifecycle.test.ts` | An untouched session is saved, rename/resume loses data, or failed work becomes unresumable. |
+| `session-lifecycle.test.ts` | An untouched session is saved, rename/resume loses data, cross-directory resumes leave headers, status, diff or file completion in the launch workspace, or failed work becomes unresumable. |
 | `session-model-recovery.test.ts` | An invalid saved model sends a request, cannot be repaired and persisted, or falls back from an unavailable explicit model. |
 | `guarded-permission-tui.test.ts` | A destructive command executes before single-use approval. |
 | `custom-command-shell.test.ts` | Custom command shell blocks execute during expansion instead of reaching the model's permission-controlled Bash path. |
