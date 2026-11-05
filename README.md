@@ -146,6 +146,14 @@ cycling (Tab also cycles effort on an empty prompt); structured session-goal sta
 animated active-turn timer with a static `ZCODE_TUI_REDUCED_MOTION=1`
 fallback; responsive context-remaining and session-token metrics.
 
+**Session discovery.** Bare `/resume` opens a directory-scoped picker;
+`/sessions` browses desktop and CLI sessions across directories, including forks
+and workflow parents. Filter by title, directory or session ID, inspect details
+with Ctrl+O, then press Enter to resume. Both pickers use the runtime's configured
+session database, including `storage.sessionDbPath` and `ZCODE_SESSION_DB_PATH` overrides.
+Cross-directory resumes update the displayed workspace and Git branch, file
+completion and `/diff` to follow the restored session's working directory.
+
 **Login and permissions.** `/login` setup choices with masked API-key entry,
 redacted transcript/history and OAuth waiting state; suspended Z.AI browser
 login with terminal restoration and an optional `ZCODE_TUI_LOGIN_CMD`

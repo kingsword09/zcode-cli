@@ -54,6 +54,18 @@ export interface SessionListStore {
   }>>;
 }
 
+interface SessionDatabaseStore {
+  getDatabasePath?: () => string;
+}
+
+export function readSessionDatabasePath(app: {
+  sessionStore?: SessionDatabaseStore;
+  runtime?: { sessionStore?: SessionDatabaseStore };
+}): string | undefined {
+  const store = app.sessionStore ?? app.runtime?.sessionStore;
+  return store?.getDatabasePath?.();
+}
+
 export interface ResumePickerEntry {
   id: string;
   title: string;

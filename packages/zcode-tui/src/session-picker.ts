@@ -2,6 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
+import type { ChoiceItem } from "./choice-dialog.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 
 export interface SessionSummary {
   id: string;
@@ -74,7 +76,7 @@ function firstLine(value: string): string {
 }
 
 /**
- * List recent interactive sessions from the shared ZCode session store.
+ * List recent resumable sessions from the shared ZCode session store.
  *
  * The desktop app and the CLI persist sessions in the same SQLite database,
  * so this surfaces desktop conversations as well as CLI ones. Desktop titles
@@ -90,7 +92,7 @@ export function listRecentSessions(options: SessionListOptions = {}): SessionSum
       `SELECT s.id, s.title, s.directory, s.time_updated,
               (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id) AS message_count
        FROM session s
-       WHERE s.task_type = 'interactive'
+       WHERE s.task_type IN ('interactive', 'fork', 'workflow_parent')
          AND s.time_deleted IS NULL
          AND s.id NOT LIKE 'sess_subagent%'
        ORDER BY s.time_updated DESC
@@ -149,5 +151,21 @@ export function sessionDetail(session: SessionSummary, currentDirectory?: string
 }
 
 export function sessionPreview(session: SessionSummary, currentDirectory?: string): Text {
-  return new Text(sessionDetail(session, currentDirectory), 1, 0);
+  return new Text(sanitizeTerminalText(sessionDetail(session, currentDirectory), { preserveSgr: false }), 1, 0);
+}
+
+export function sessionChoiceItem(session: SessionSummary, currentDirectory?: string): ChoiceItem {
+  return {
+    value: session.id,
+    label: `${session.pinned ? "★ " : ""}${session.title}`,
+    description: [
+      formatSessionTimestamp(session.timeUpdated),
+      `${session.messageCount} msg${session.messageCount === 1 ? "" : "s"}`,
+      session.source,
+      session.directory
+    ].join(" · "),
+    keywords: [session.id],
+    preview: sessionPreview(session, currentDirectory),
+    payload: session
+  };
 }

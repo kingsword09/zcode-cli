@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { listSessionsForPicker } from "../src/runtime-session-lifecycle.ts";
+import { listSessionsForPicker, readSessionDatabasePath } from "../src/runtime-session-lifecycle.ts";
 
 function fakeStore(rows: Parameters<typeof Object>[0][] = []) {
   const calls: Array<Record<string, unknown>> = [];
@@ -19,6 +19,34 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   parentID: null,
   time: { created: 1_000, updated: 2_000 },
   ...overrides
+});
+
+describe("readSessionDatabasePath", () => {
+  test("reads the direct store path and preserves the method receiver", () => {
+    const store = {
+      path: "/tmp/custom-session.sqlite",
+      getDatabasePath() { return this.path; }
+    };
+    expect(readSessionDatabasePath({
+      sessionStore: store,
+      runtime: { sessionStore: { getDatabasePath: () => "/tmp/other.sqlite" } }
+    })).toBe(store.path);
+  });
+
+  test("falls back to the runtime session store", () => {
+    expect(readSessionDatabasePath({
+      runtime: { sessionStore: { getDatabasePath: () => "/tmp/runtime.sqlite" } }
+    })).toBe("/tmp/runtime.sqlite");
+  });
+
+  test("does not invent a default database path without an active SQLite store", () => {
+    expect(readSessionDatabasePath({})).toBeUndefined();
+    expect(readSessionDatabasePath({ sessionStore: {} })).toBeUndefined();
+    expect(readSessionDatabasePath({
+      sessionStore: {},
+      runtime: { sessionStore: { getDatabasePath: () => "/tmp/unrelated.sqlite" } }
+    })).toBeUndefined();
+  });
 });
 
 describe("listSessionsForPicker", () => {

@@ -106,6 +106,7 @@ export interface RuntimeContextUsage {
 
 export interface RuntimeProjectionSnapshot {
   sessionId?: string;
+  workspace?: { directory: string; branch?: string };
   status?: string;
   mode?: string;
   planEnabled?: boolean;
@@ -341,8 +342,13 @@ export function normalizeRuntimeProjection(value: unknown): RuntimeProjectionSna
   const rawLastError = isRecord(projection.lastError) ? projection.lastError : undefined;
   const lastErrorType = rawLastError && stringField(rawLastError, "type");
   const lastErrorMessage = rawLastError && stringField(rawLastError, "message");
+  const workspace = isRecord(projection.workspace) ? projection.workspace : undefined;
+  const workspaceDirectory = workspace && asString(workspace.directory);
   const snapshot: RuntimeProjectionSnapshot = {
     sessionId: stringField(projection, "sessionId", "sessionID", "id"),
+    workspace: workspaceDirectory
+      ? { directory: workspaceDirectory, branch: stringField(workspace!, "branch") }
+      : undefined,
     status: stringField(projection, "status"),
     mode: stringField(projection, "mode"),
     planEnabled: typeof projection.planEnabled === "boolean" ? projection.planEnabled : undefined,

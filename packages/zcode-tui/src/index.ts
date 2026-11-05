@@ -53,7 +53,7 @@ import { AttachmentBar } from "./attachment-bar.ts";
 import { AssistantStream } from "./assistant-stream.ts";
 import { BackgroundTaskEventStore } from "./background-task-events.ts";
 import { deliveredBackgroundTaskIds } from "./background-task-notifications.ts";
-import { formatSessionTimestamp, listRecentSessions, sessionPreview } from "./session-picker.ts";
+import { listRecentSessions, sessionChoiceItem } from "./session-picker.ts";
 import { readBackgroundTaskOutput } from "./background-task-output.ts";
 import { BoundedToolText, toolTextValue } from "./bounded-tool-text.ts";
 import { choose, promptText, type ChoiceItem } from "./choice-dialog.ts";
@@ -654,7 +654,9 @@ class ZCodeTui {
   // onEvent channel appends streamed content, so only it needs the guard.
   private readonly deliveredStreamEvents = createStreamEventRedeliveryFilter();
   private readonly notifications: TurnNotifier;
-  private readonly skillCatalog: SkillCatalog;
+  private skillCatalog: SkillCatalog;
+  private workspaceDirectory: string;
+  private workspaceGitBranch?: string;
   private readonly done: Promise<void>;
   private resolveDone!: () => void;
   private stopped = false;
@@ -771,13 +773,14 @@ class ZCodeTui {
     ) || undefined;
     this.theme = createTheme(this.colorsEnabled, initialColorScheme(this.themePreference));
     this.transcript = new Transcript(this.theme.searchMatch);
-    const workspace = options.workspaceDirectory ?? process.cwd();
+    this.workspaceDirectory = options.workspaceDirectory ?? process.cwd();
+    this.workspaceGitBranch = options.workspaceGitBranch;
     const runtimeVersion = sanitizeTerminalText(options.version ?? "unknown", { preserveSgr: false });
     this.fullscreenHeader = new FullscreenHeader(this.theme, {
-      branch: options.workspaceGitBranch,
+      branch: this.workspaceGitBranch,
       distributionVersion: this.distributionVersion,
       runtimeVersion,
-      workspace
+      workspace: this.workspaceDirectory
     });
     this.sessionWelcome = new SessionWelcome(
       this.theme,
@@ -905,6 +908,7 @@ class ZCodeTui {
         return;
       }
       await this.resolveTerminalColorScheme();
+      await this.refreshWorkspace();
       this.buildLayout();
       if (notificationConfigError) {
         this.addNotice(`Unable to load notification settings: ${notificationConfigError}`, "warning");
@@ -1203,20 +1207,45 @@ class ZCodeTui {
     editor.isTerminalFocused = () => this.terminalFocus !== "unfocused";
     if (this.options.locale?.startsWith("zh")) editor.planHint = "先调研与规划，再开始修改";
     for (const input of [...this.editorHistory].reverse()) editor.addToHistory(input);
+    this.configureWorkspaceAutocomplete(editor);
+    editor.onSubmit = (text) => void this.submit(text);
+    return editor;
+  }
+
+  private configureWorkspaceAutocomplete(editor: PlanEditor): void {
     const commands = this.autocompleteCommands();
-    const workspaceDirectory = this.options.workspaceDirectory ?? process.cwd();
     editor.setAutocompleteProvider(
       new WorkspaceAutocompleteProvider(
         commands,
-        workspaceDirectory,
+        this.workspaceDirectory,
         this.options.listWorkspacePathSuggestions,
         this.skillCatalog,
-        this.options.listPluginReferences ?? createRuntimePluginReferenceLister(workspaceDirectory),
+        this.options.listPluginReferences ?? createRuntimePluginReferenceLister(this.workspaceDirectory),
         (this.options.slashCommands ?? []).flatMap((command) => command.aliases ?? [])
       )
     );
-    editor.onSubmit = (text) => void this.submit(text);
-    return editor;
+  }
+
+  private applyWorkspace(workspace: RuntimeProjectionSnapshot["workspace"]): void {
+    if (!workspace) return;
+    const directoryChanged = workspace.directory !== this.workspaceDirectory;
+    if (!directoryChanged && workspace.branch === this.workspaceGitBranch) return;
+    this.workspaceDirectory = workspace.directory;
+    this.workspaceGitBranch = workspace.branch;
+    this.fullscreenHeader.setWorkspace(this.workspaceDirectory, this.workspaceGitBranch);
+    if (directoryChanged) {
+      this.skillCatalog = new SkillCatalog(this.options.listSkills);
+      this.configureWorkspaceAutocomplete(this.editor);
+    }
+    this.ui.requestRender(true);
+  }
+
+  private async refreshWorkspace(): Promise<void> {
+    const revision = this.executionStateRevision;
+    try {
+      const projection = normalizeRuntimeProjection(await this.options.readRuntimeProjection?.());
+      if (revision === this.executionStateRevision) this.applyWorkspace(projection?.workspace);
+    } catch {}
   }
 
   private focusEditor(): void {
@@ -1634,7 +1663,7 @@ class ZCodeTui {
           ? Promise.resolve(`${this.sessionModelIssue} Choose a model with /model before continuing.`)
           : missingCodingPlanKey({
           model: this.model,
-          workingDirectory: this.options.workspaceDirectory
+          workingDirectory: this.workspaceDirectory
         }),
         isStopped: () => this.stopped,
         submission,
@@ -2274,6 +2303,7 @@ class ZCodeTui {
       this.emittedSessionTerminalTitle = "";
       emitSessionTerminalTitle(this.options.stdout ?? process.stdout, "");
       this.sessionMetrics = {};
+      await this.refreshWorkspace();
       await this.restoreCustomSessionTitle();
       this.restoreTranscript(restoredMessages(result.restoredMessages));
       if (this.transcript.blockCount > 0) this.enterSessionRail(true);
@@ -4911,8 +4941,7 @@ class ZCodeTui {
       this.addNotice("Wait for the active turn or press Ctrl+C before opening diff.", "warning");
       return;
     }
-    const workspaceDirectory = this.options.workspaceDirectory ?? process.cwd();
-    const workspace = await readWorkspaceDiff(workspaceDirectory);
+    const workspace = await readWorkspaceDiff(this.workspaceDirectory);
     const sources = diffBrowserSources(workspace, this.turnDiffs.snapshots());
 
     while (true) {
@@ -5065,8 +5094,8 @@ class ZCodeTui {
         mode: this.mode,
         planEnabled: this.planEnabled,
         effort: this.thoughtLevel,
-        workspace: this.options.workspaceDirectory ?? process.cwd(),
-        branch: this.options.workspaceGitBranch,
+        workspace: this.workspaceDirectory,
+        branch: this.workspaceGitBranch,
         locale: this.options.locale,
         developerMode: this.options.developerMode,
         projection: this.runtimeProjection,
@@ -5135,30 +5164,26 @@ class ZCodeTui {
       return;
     }
     const currentSessionId = this.options.getMainSessionId?.();
+    const cliDbPath = await this.options.readSessionDatabasePath?.();
+    if (this.options.readSessionDatabasePath && !cliDbPath) {
+      this.addNotice("Session browsing is unavailable for this session store.", "muted");
+      return;
+    }
     const sessions = listRecentSessions({
+      cliDbPath,
       excludeIds: currentSessionId ? new Set([currentSessionId]) : undefined
     });
     if (sessions.length === 0) {
       this.addNotice("No past sessions found in the shared session store.", "muted");
       return;
     }
-    const currentDirectory = this.options.workspaceDirectory ?? process.cwd();
+    const currentDirectory = this.workspaceDirectory;
     const selected = await this.showChoice({
       title: "Sessions",
       prompt: `${sessions.length} recent session${sessions.length === 1 ? "" : "s"} · Enter resumes in place`,
       help: "Type to filter by title, directory or id · Up/Down choose · Ctrl+O details · Enter resume · Esc cancel",
-      items: sessions.map((session) => ({
-        value: session.id,
-        label: `${session.pinned ? "★ " : ""}${session.title}`,
-        description: [
-          formatSessionTimestamp(session.timeUpdated),
-          `${session.messageCount} msg${session.messageCount === 1 ? "" : "s"}`,
-          session.source,
-          session.directory
-        ].join(" · "),
-        preview: sessionPreview(session, currentDirectory),
-        payload: session
-      }))
+      filterMode: "substring",
+      items: sessions.map((session) => sessionChoiceItem(session, currentDirectory))
     });
     if (!selected) return;
     if (selected.value === currentSessionId) {
@@ -5856,6 +5881,7 @@ class ZCodeTui {
 
   private applyRuntimeProjection(projection: RuntimeProjectionSnapshot | undefined): void {
     if (!projection) return;
+    this.applyWorkspace(projection.workspace);
     this.runtimeProjection = projection;
     if (!this.settingSwitchInFlight) this.applyExecutionState(projection);
     this.noticeRestoredBackgroundTasks(projection);

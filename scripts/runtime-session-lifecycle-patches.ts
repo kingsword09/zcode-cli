@@ -18,6 +18,7 @@ export function hasRuntimeSessionLifecycle(runtime: string): boolean {
     && runtime.includes("$zTuiResumeReady=")
     && runtime.includes("$zTuiResumeOptions=")
     && runtime.includes('"readSessionResumeTarget"')
+    && runtime.includes('"readSessionDatabasePath"')
     && runtime.includes('"listSessionsForPicker"');
 }
 
@@ -44,6 +45,10 @@ export function patchRuntimeSessionLifecycle(runtime: string): string {
   if (!patched.includes('"listSessionsForPicker"')) {
     const picker = unique(patched, new RegExp(`readSessionResumeTarget:(${identifier})\\(async\\(\\)=>await ${escape(helper)}\\.readSessionResumeTarget\\((${identifier})\\),"readSessionResumeTarget"\\)`, "u"), "resume picker facade");
     patched = patched.replace(picker[0], `${picker[0]},listSessions:${picker[1]}(async()=>await ${helper}.listSessionsForPicker(${picker[2]}),"listSessionsForPicker")`);
+  }
+  if (!patched.includes('"readSessionDatabasePath"')) {
+    const database = unique(patched, new RegExp(`readSessionResumeTarget:(${identifier})\\(async\\(\\)=>await ${escape(helper)}\\.readSessionResumeTarget\\((${identifier})\\),"readSessionResumeTarget"\\)`, "u"), "session database facade");
+    patched = patched.replace(database[0], `${database[0]},readSessionDatabasePath:${database[1]}(()=>${helper}.readSessionDatabasePath(${database[2]}),"readSessionDatabasePath")`);
   }
   if (!patched.includes("$zResumeCandidateError")) {
     const switchApp = unique(patched, new RegExp(`(${identifier})\\(async (${identifier})=>\\{let (${identifier})=(${identifier}),(${identifier})=await \\2\\(\\);return \\4=\\5,\\3&&\\3!==\\5&&await (${identifier})\\(\\3\\),`, "u"), "app replacement");

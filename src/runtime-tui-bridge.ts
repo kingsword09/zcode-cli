@@ -1,3 +1,12 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+const workspaceSnapshots = new WeakMap<object, {
+  directory: string;
+  snapshot: Promise<{ directory: string; branch?: string }>;
+}>();
+
 /** Narrow structural boundary; the extracted runtime remains the state owner. */
 export interface RuntimeTask extends Record<string, unknown> {
   taskId: string;
@@ -113,6 +122,28 @@ function taskDetail(task: RuntimeTask): Record<string, unknown> {
   };
 }
 
+async function readRuntimeWorkspace(runtime: RuntimeTuiApp["runtime"]): Promise<{
+  directory: string;
+  branch?: string;
+} | undefined> {
+  const directory = runtime?.workingDirectory;
+  if (!runtime || !directory) return undefined;
+  const cached = workspaceSnapshots.get(runtime);
+  if (cached?.directory === directory) return await cached.snapshot;
+  const snapshot = execFileAsync("git", ["branch", "--show-current"], {
+    cwd: directory,
+    timeout: 1_000,
+    maxBuffer: 16 * 1024,
+    windowsHide: true,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }
+  }).then(
+    ({ stdout }) => ({ directory, branch: stdout.trim() || undefined }),
+    () => ({ directory })
+  );
+  workspaceSnapshots.set(runtime, { directory, snapshot });
+  return await snapshot;
+}
+
 export async function readTuiRuntimeProjection(
   app: RuntimeTuiApp,
   bridge: RuntimeTuiBridge
@@ -136,6 +167,7 @@ export async function readTuiRuntimeProjection(
   return {
     ...projection,
     ...(executionState && typeof executionState === "object" ? executionState : {}),
+    workspace: await readRuntimeWorkspace(app.runtime),
     backgroundTasks: tasks,
     backgroundTaskDetails: details,
     restoredBackgroundTasks: Array.isArray(app.$zRestoredBackgroundTasksLog)

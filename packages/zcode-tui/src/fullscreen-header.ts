@@ -112,10 +112,10 @@ function frameContent(content: string, width: number, theme: ZCodeTheme): string
 
 export class FullscreenHeader implements Component {
   private phase: FullscreenHeaderPhase = "welcome";
-  private readonly branch?: string;
+  private branch?: string;
   private readonly distributionVersion?: string;
   private readonly runtimeVersion: string;
-  private readonly workspace: string;
+  private workspace: string;
   private readonly homeDirectory: string;
 
   constructor(
@@ -131,6 +131,11 @@ export class FullscreenHeader implements Component {
 
   setPhase(phase: FullscreenHeaderPhase): void {
     this.phase = phase;
+  }
+
+  setWorkspace(workspace: string, branch?: string): void {
+    this.workspace = clean(workspace) ?? "";
+    this.branch = clean(branch);
   }
 
   getPhase(): FullscreenHeaderPhase {

@@ -28,6 +28,9 @@ CLI 通用设置默认使用用户目录中的 `~/.zcode/cli/setting.json`。
 旧 `config.json` 和 `migrations/` 标记使用所选文件所在目录，hook 信任命令也读取该文件的
 `storage.dir`。Provider、凭证和会话数据库（含持久化项目权限）有各自的路径覆盖变量，
 仅切换设置文件不会隔离这些存储，示例见[宿主集成](HOST_INTEGRATION.md#environment-and-configuration)。
+`/resume` 和 `/sessions` 选择器读取当前 runtime 实际使用的会话数据库，遵循
+`storage.sessionDbPath` 和 `ZCODE_SESSION_DB_PATH` 的路径覆盖。
+跨目录恢复会话时，TUI 显示的工作区路径、Git 分支、文件补全和 `/diff` 也同步切换到该会话的工作目录。
 Desktop 偏好仍位于 `~/.zcode/v2/setting.json`；桌面端保存在 `~/.zcode/cli/config.json`
 中的用户 hooks 和 MCP 配置不会与 CLI 设置文件持续同步。
 

@@ -97,6 +97,7 @@ export interface RuntimeAdapter {
   readRuntimeProjection?: () => Promise<unknown>;
   readSessionUsage?: () => Promise<unknown>;
   readSessionResumeTarget?: () => Promise<string | undefined>;
+  readSessionDatabasePath?: () => Promise<string | undefined>;
   cancelBackgroundTask?: (taskId: string) => Promise<unknown>;
   sendBackgroundTaskMessage?: (options: {
     taskId: string;

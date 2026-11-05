@@ -26,6 +26,7 @@ import {
 } from "./terminal-text.ts";
 
 export interface ChoiceItem extends SelectItem {
+  keywords?: string[];
   payload?: unknown;
   preview?: Component;
 }
@@ -450,13 +451,14 @@ export function choose(
     // this interaction.
     const numberShortcutsEnabled = options.numberShortcuts === true
       && options.items.length <= 9;
-    const searchableItems = options.items.map((item, index): SelectItem => {
+    const searchableItems = options.items.map((item, index): ChoiceItem => {
       const safeItem: ChoiceItem = {
         ...item,
         label: sanitizeTerminalText(item.label, { preserveSgr: false }),
         description: item.description
           ? sanitizeTerminalText(item.description, { preserveSgr: false })
-          : undefined
+          : undefined,
+        keywords: item.keywords?.map((keyword) => sanitizeTerminalText(keyword, { preserveSgr: false }))
       };
       // Prefix labels when the caller opted into the 1-9 quick-select mode.
       const showNumberHint = numberShortcutsEnabled;
@@ -468,7 +470,7 @@ export function choose(
       if (options.showSelectedItemDetails) {
         detailsByValue.set(value, new ChoiceItemDetails(safeItem, theme));
       }
-      return { value, label: displayLabel, description: safeItem.description };
+      return { value, label: displayLabel, description: safeItem.description, keywords: safeItem.keywords };
     });
     const hasDetails = Boolean(
       options.content
@@ -508,6 +510,7 @@ export function choose(
         const matches = searchableItems.filter((item) => (
           item.label.toLowerCase().includes(query)
           || item.description?.toLowerCase().includes(query)
+          || item.keywords?.some((keyword) => keyword.toLowerCase().includes(query))
         ));
         return new SelectList(matches, maxVisible, theme.select);
       } : undefined

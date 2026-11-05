@@ -3,14 +3,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { listRecentSessions, formatSessionTimestamp } from "../packages/zcode-tui/src/session-picker.ts";
+import { Container, type TUI } from "@earendil-works/pi-tui";
+import { choose } from "../packages/zcode-tui/src/choice-dialog.ts";
+import { listRecentSessions, formatSessionTimestamp, sessionChoiceItem, sessionPreview, type SessionSummary } from "../packages/zcode-tui/src/session-picker.ts";
+import { createTheme } from "../packages/zcode-tui/src/theme.ts";
+import { readSessionDatabasePath } from "../src/runtime-session-lifecycle.ts";
 
 let home: string;
 let cliDbPath: string;
 let tasksDbPath: string;
 
-function createCliDb(): Database {
-  const db = new Database(cliDbPath);
+function createCliDb(path = cliDbPath): Database {
+  const db = new Database(path);
   db.exec(`
     CREATE TABLE session (
       id text primary key,
@@ -109,15 +113,41 @@ describe("listRecentSessions", () => {
     expect(sessions[0]?.source).toBe("cli");
   });
 
-  test("skips subagent sessions, non-interactive tasks and deleted sessions", () => {
+  test("skips subagent sessions, non-resumable tasks and deleted sessions", () => {
     const db = createCliDb();
     insertSession(db, { id: "sess_subagent_agent_123", title: "agent" });
     insertSession(db, { id: "sess_task", title: "task", taskType: "scheduled" });
+    insertSession(db, { id: "sess_child", taskType: "subagent_child" });
+    insertSession(db, { id: "sess_workflow_child", taskType: "workflow_child" });
     insertSession(db, { id: "sess_deleted", title: "deleted", timeDeleted: 1_700_000_200_000 });
     insertSession(db, { id: "sess_keep", title: "keep" });
     db.close();
     const sessions = listRecentSessions({ home, cliDbPath, tasksDbPath });
     expect(sessions.map((session) => session.id)).toEqual(["sess_keep"]);
+  });
+
+  test("includes forks and workflow parents across directories", () => {
+    const db = createCliDb();
+    insertSession(db, { id: "sess_interactive", directory: "/tmp/project-a", timeUpdated: 1_000 });
+    insertSession(db, { id: "sess_fork", taskType: "fork", directory: "/tmp/project-b", timeUpdated: 2_000 });
+    insertSession(db, { id: "sess_workflow", taskType: "workflow_parent", directory: "/tmp/project-c", timeUpdated: 3_000 });
+    db.close();
+    const sessions = listRecentSessions({ home, cliDbPath, tasksDbPath });
+    expect(sessions.map((session) => session.id)).toEqual(["sess_workflow", "sess_fork", "sess_interactive"]);
+    expect(sessions.map((session) => session.directory)).toEqual(["/tmp/project-c", "/tmp/project-b", "/tmp/project-a"]);
+  });
+
+  test("reads the active runtime database instead of the default store", () => {
+    const db = createCliDb();
+    insertSession(db, { id: "sess_default" });
+    db.close();
+    const customPath = join(home, "custom.sqlite");
+    const custom = createCliDb(customPath);
+    insertSession(custom, { id: "sess_custom" });
+    custom.close();
+    const app = { sessionStore: { getDatabasePath: () => customPath } };
+    const sessions = listRecentSessions({ home, cliDbPath: readSessionDatabasePath(app), tasksDbPath });
+    expect(sessions.map((session) => session.id)).toEqual(["sess_custom"]);
   });
 
   test("excludes requested ids (the current session)", () => {
@@ -182,6 +212,82 @@ describe("listRecentSessions", () => {
     writeFileSync(tasksDbPath, "not a database");
     const sessions = listRecentSessions({ home, cliDbPath, tasksDbPath });
     expect(sessions.map((session) => session.id)).toEqual(["sess_plain"]);
+  });
+});
+
+function sessionSummary(overrides: Partial<SessionSummary> = {}): SessionSummary {
+  return {
+    id: "sess_previous",
+    title: "Fix parser",
+    directory: "/tmp/project-b",
+    timeUpdated: 1_700_000_000_000,
+    messageCount: 3,
+    source: "cli",
+    pinned: false,
+    archived: false,
+    ...overrides
+  };
+}
+
+describe("session picker choices", () => {
+  test.each([false, true])("filters title substrings, directories and ids with pinned=%s", async (pinned) => {
+    const session = sessionSummary({ pinned });
+    for (const query of ["Fix", "PARSER", "/tmp/project-b", "sess_previous", "PREVIOUS"]) {
+      const host = new Container();
+      const ui = {
+        terminal: { columns: 100, rows: 24 },
+        requestRender() {},
+        setFocus() {}
+      } as unknown as TUI;
+      const pending = choose(ui, host, createTheme(false), {
+        title: "Sessions",
+        prompt: "2 recent sessions",
+        filterMode: "substring",
+        items: [
+          sessionChoiceItem(sessionSummary({ id: "sess_other", title: "Other task", directory: "/tmp/project-a" })),
+          sessionChoiceItem(session)
+        ]
+      });
+      for (const character of query) host.children[0]?.handleInput?.(character);
+      const rendered = host.render(100).join("\n");
+      expect(rendered).toContain("Fix parser");
+      expect(rendered).not.toContain("Other task");
+      expect(rendered).not.toContain("No matching commands");
+      host.children[0]?.handleInput?.("\r");
+      expect(await pending).toMatchObject({ value: session.id, payload: session });
+    }
+  });
+
+  test.each(["title", "directory", "id"] as const)("sanitizes terminal commands in preview %s", (field) => {
+    const session = sessionSummary({
+      [field]: "Visible text\x1b]52;c;cHIyNTg=\x07\x1b]0;unsafe-title\x1b\\\x1b[2J\x1b[31m"
+    });
+    const rendered = sessionPreview(session, "/tmp/project-a").render(100).join("\n");
+    expect(rendered).toContain("Visible text");
+    expect(rendered).not.toContain("\x1b");
+    expect(rendered).not.toContain("\x07");
+    expect(rendered).not.toContain("unsafe-title");
+    expect(rendered).toContain("This session belongs to another directory.");
+  });
+
+  test("keeps terminal commands out of the rendered choice dialog", async () => {
+    const sequence = "\x1b]52;c;cHIyNTg=\x07";
+    const session = sessionSummary({ title: `Fix parser${sequence}`, directory: `/tmp/project-b${sequence}` });
+    const host = new Container();
+    const ui = {
+      terminal: { columns: 100, rows: 24 },
+      requestRender() {},
+      setFocus() {}
+    } as unknown as TUI;
+    const pending = choose(ui, host, createTheme(false), {
+      title: "Sessions",
+      prompt: "1 recent session",
+      filterMode: "substring",
+      items: [sessionChoiceItem(session)]
+    });
+    expect(host.render(100).join("\n")).not.toContain(sequence);
+    host.children[0]?.handleInput?.("\x1b");
+    expect(await pending).toBeNull();
   });
 });
 
