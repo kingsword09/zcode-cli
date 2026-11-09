@@ -100,6 +100,11 @@ export class TerminalSession implements AsyncDisposable {
     return terminalPlainText(this.#historyOutput.slice(start));
   }
 
+  /** Raw PTY byte stream (escape sequences intact) for renderer-level assertions. */
+  rawHistory(start = 0): string {
+    return this.#historyOutput.slice(start);
+  }
+
   screenText(): string {
     this.throwScreenError();
     return this.#screen.screenText();
