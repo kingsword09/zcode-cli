@@ -253,7 +253,6 @@ import {
 import {
   compactTerminalToolOptions,
   isTerminalToolState,
-  MAX_TOOL_PREVIEW_LINES,
   ToolExecutionView,
   toolSucceeded
 } from "./tool-view.ts";
@@ -3257,10 +3256,7 @@ class ZCodeTui {
       progress: tool.progress,
       diffs: tool.diffs,
       retainedPayloadTruncated: tool.retainedPayloadTruncated,
-      // Live cards keep a viewport-aware preview so progress ticks never touch
-      // lines above the inline renderer's viewport top (issue #260). Fullscreen
-      // owns its viewport through a ScrollView and keeps the default previews.
-      ...(isViewportTUI(this.ui) ? {} : { previewLines: this.activeToolPreviewLines() })
+      ...(terminal ? {} : { previewRows: () => this.activeToolPreviewRows() })
     });
     if (terminal) {
       tool.input = retained.input;
@@ -3278,22 +3274,17 @@ class ZCodeTui {
     }
   }
 
-  /**
-   * Collapsed preview budget (lines) for one live tool card. The card's header
-   * line must stay inside the terminal viewport: inline (regular mode) rendering
-   * cannot reach above the viewport top, so any change there triggers a full
-   * screen clear plus scrollback wipe and replays the transcript through a short
-   * pane (issue #260). Reserves roughly the composer/status chrome (8 rows) and
-   * the card's own header, status and expansion hint rows (3), split across
-   * concurrently running cards.
-   */
-  private activeToolPreviewLines(): number | undefined {
+  private activeToolPreviewRows(): number | undefined {
+    if (isViewportTUI(this.ui)) return undefined;
     const rows = this.ui.terminal?.rows;
     if (!Number.isFinite(rows) || (rows ?? 0) <= 0) return undefined;
+    const width = this.ui.terminal.columns;
+    const chromeRows = this.composerHost.render(width).length
+      + this.runtimeActivity.render(width).length
+      + this.choiceHost.render(width).length;
     const activeCount = Math.max(1, [...this.toolViews.values()]
       .filter((view) => !isTerminalToolState(view.state)).length);
-    const budget = Math.floor(((rows as number) - 8) / activeCount) - 3;
-    return Math.max(2, Math.min(MAX_TOOL_PREVIEW_LINES, budget));
+    return Math.max(1, Math.floor(((rows as number) - chromeRows) / activeCount) - 1);
   }
 
   private attachPendingToolRelationships(tool: ToolViewState): void {

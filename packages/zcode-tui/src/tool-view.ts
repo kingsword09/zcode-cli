@@ -3,7 +3,8 @@ import {
   Container,
   Image,
   Spacer,
-  Text
+  Text,
+  truncateToWidth
 } from "@earendil-works/pi-tui";
 
 import {
@@ -33,8 +34,6 @@ import {
 
 const maxPreviewGraphemes = 2_400;
 const maxPreviewLines = 16;
-/** Collapsed preview ceiling shared with the app layer's viewport-aware budget. */
-export const MAX_TOOL_PREVIEW_LINES = maxPreviewLines;
 const maxPreviewImages = 4;
 
 export interface ToolViewOptions {
@@ -50,14 +49,7 @@ export interface ToolViewOptions {
   activeOutputOmittedCharacters?: number;
   retainedPayloadCompacted?: true;
   retainedPayloadTruncated?: boolean;
-  /**
-   * Collapsed preview line cap for this update. Live tool cards set it below
-   * the default so their header line stays inside a short terminal viewport:
-   * a re-render whose first changed line sits above the viewport top forces
-   * the inline renderer into a full screen clear plus scrollback wipe, which
-   * reads as the whole transcript jumping on every progress tick (issue #260).
-   */
-  previewLines?: number;
+  previewRows?: number | (() => number | undefined);
 }
 
 interface ToolImage {
@@ -65,15 +57,14 @@ interface ToolImage {
   mimeType: string;
 }
 
-function truncate(value: string, expanded: boolean, previewLines = maxPreviewLines): { text: string; truncated: boolean } {
+function truncate(value: string, expanded: boolean): { text: string; truncated: boolean } {
   const normalized = value.replace(/\r/g, "");
   if (expanded) return { text: normalized, truncated: false };
-  const bound = Math.max(1, Math.min(maxPreviewLines, Math.floor(previewLines)));
   const lines = normalized.split("\n");
-  if (lines.length > bound) {
-    const visible = lines.slice(0, bound).join("\n");
+  if (lines.length > maxPreviewLines) {
+    const visible = lines.slice(0, maxPreviewLines).join("\n");
     return {
-      text: `${visible}\n… ${lines.length - bound} more lines · Ctrl+O to expand`,
+      text: `${visible}\n… ${lines.length - maxPreviewLines} more lines · Ctrl+O to expand`,
       truncated: true
     };
   }
@@ -317,10 +308,9 @@ function stateBackground(state: string, theme: ZCodeTheme): ((text: string) => s
 function stylePreview(
   value: string,
   theme: ZCodeTheme,
-  expanded: boolean,
-  previewLines = maxPreviewLines
+  expanded: boolean
 ): { text: string; truncated: boolean } {
-  const preview = truncate(sanitizeTerminalText(value), expanded, previewLines);
+  const preview = truncate(sanitizeTerminalText(value), expanded);
   return {
     truncated: preview.truncated,
     text: preview.text.split("\n").map((line) => {
@@ -338,7 +328,6 @@ function toolText(
   input = parsedInput(options),
   expanded = false
 ): { header: string; body?: string; images: ToolImage[]; truncated: boolean } {
-  const previewBound = options.previewLines ?? maxPreviewLines;
   const presentation = statePresentation(options.state, theme);
   const specialized = specializedToolRender({
     name: options.name,
@@ -369,14 +358,14 @@ function toolText(
   let truncated = false;
   const mutation = mutationInput(options.name, input);
   if (mutation) {
-    const preview = stylePreview(mutation, theme, expanded, previewBound);
+    const preview = stylePreview(mutation, theme, expanded);
     sections.push(preview.text);
     truncated ||= preview.truncated;
   }
   else if (input !== undefined && !isKnownCompactTool(options.name)) {
     const generic = stringify(input);
     if (generic) {
-      const preview = stylePreview(generic, theme, expanded, previewBound);
+      const preview = stylePreview(generic, theme, expanded);
       sections.push(preview.text);
       truncated ||= preview.truncated;
     }
@@ -384,7 +373,7 @@ function toolText(
 
   const result = resultContent(options.result, expanded);
   if (specialized?.body) {
-    const preview = truncate(specialized.body, expanded, previewBound);
+    const preview = truncate(specialized.body, expanded);
     const expansionHint = specialized.hiddenContent && !preview.truncated
       ? theme.muted("Ctrl+O to expand")
       : undefined;
@@ -392,7 +381,7 @@ function toolText(
     truncated ||= preview.truncated || specialized.hiddenContent === true;
   }
   if (result.text && !specialized?.consumesResult) {
-    const preview = stylePreview(result.text, theme, expanded, previewBound);
+    const preview = stylePreview(result.text, theme, expanded);
     sections.push(preview.text);
     truncated ||= preview.truncated;
   }
@@ -424,7 +413,7 @@ function toolText(
   const embeddedError = isRecord(options.result) ? options.result.error : undefined;
   const error = errorText(options.error ?? embeddedError);
   if (error) {
-    const preview = truncate(error, expanded, previewBound);
+    const preview = truncate(error, expanded);
     sections.push(theme.error(`Error: ${preview.text}`));
     truncated ||= preview.truncated;
   }
@@ -435,6 +424,7 @@ export class ToolExecutionView extends Container {
   private options: ToolViewOptions;
   private expanded = false;
   private hiddenContent = false;
+  private previewTruncated = false;
   private dirty = true;
   private readonly card = new Box(1, 0);
   private readonly imageHost = new Container();
@@ -448,6 +438,7 @@ export class ToolExecutionView extends Container {
 
   update(options: ToolViewOptions): void {
     this.options = compactTerminalToolOptions(options);
+    this.previewTruncated = false;
     this.dirty = true;
   }
 
@@ -463,12 +454,27 @@ export class ToolExecutionView extends Container {
 
   hasHiddenContent(): boolean {
     this.ensureRebuilt();
-    return this.hiddenContent;
+    return this.hiddenContent || this.previewTruncated;
   }
 
   override render(width: number): string[] {
     this.ensureRebuilt();
-    return super.render(width);
+    const lines = super.render(width);
+    this.previewTruncated = false;
+    if (this.expanded || this.isTerminal()) return lines;
+    const previewRows = typeof this.options.previewRows === "function"
+      ? this.options.previewRows()
+      : this.options.previewRows;
+    if (previewRows === undefined || !Number.isFinite(previewRows)) return lines;
+    const bound = Math.max(1, Math.floor(previewRows));
+    if (lines.length <= bound) return lines;
+    this.previewTruncated = true;
+    return bound === 1
+      ? lines.slice(0, 1)
+      : [
+        ...lines.slice(0, bound - 1),
+        truncateToWidth(this.theme.muted("  … Ctrl+O to expand"), width)
+      ];
   }
 
   getSearchText(): string {
