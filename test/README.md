@@ -22,7 +22,7 @@ bare `bun test` incorrectly discovers the Node-only `.test.cjs` files with Bun.
 Runtime and storage tests require a built, synchronized runtime; no user API key
 or model service is required. HTTP endpoints and credentials are local fixtures.
 
-The rebuilt baseline contains 97 cases in 29 files:
+The rebuilt baseline contains 99 cases in 30 files:
 
 | Group | Files | Cases |
 | --- | ---: | ---: |
@@ -30,6 +30,7 @@ The rebuilt baseline contains 97 cases in 29 files:
 | Terminal wiring | 5 | 14 |
 | Native runtime | 10 | 31 |
 | Real Node persistence | 3 | 15 |
+| Host integration | 1 | 2 |
 
 Counts describe this reset, not an assertion that future suites must have a fixed size.
 
@@ -81,6 +82,12 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 Use Node's SQLite driver, never Bun's substitute. Lock holders are separate
 processes; databases and homes are temporary. Production-length lock delays and
 large process-count stress runs are not part of this baseline.
+
+### Host integration: `test:node`
+
+| File | Failure this must prevent |
+| --- | --- |
+| `herdr-status.test.cjs` | An interactive ZCode TUI in a Herdr pane starts with unknown status, or Herdr reporting prevents the TUI from starting. |
 
 ### Real terminal wiring: `test:tui`
 
