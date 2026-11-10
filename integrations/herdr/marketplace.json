@@ -1,0 +1,11 @@
+{
+  "name": "herdr-zcode",
+  "plugins": [
+    {
+      "description": "Report ZCode CLI session state to the Herdr daemon.",
+      "name": "herdr-zcode",
+      "source": "./plugins/herdr-zcode",
+      "version": "0.1.1"
+    }
+  ]
+}
