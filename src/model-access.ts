@@ -195,6 +195,28 @@ function record(value: unknown): Record<string, unknown> | undefined {
     ? value as Record<string, unknown> : undefined;
 }
 
+/**
+ * Account providers use one of two credential shapes (see the runtime's
+ * standalone snapshot): a manual Coding Plan API key stored per account, or
+ * the shared ZCode OAuth session, which has no per-account API key at all.
+ * Start Plan providers never own an identity or API key; they ride the same
+ * family session as the family's Coding Plan provider.
+ */
+function accountProviderConfigured(credentials: Record<string, unknown>, providerId: string): boolean {
+  const present = (key: string): boolean => {
+    const value = credentials[key];
+    return typeof value === "string" && value.length > 0;
+  };
+  const manualKeyPrefix = `account-provider:coding-plan:${providerId}:account:`;
+  if (present(`account-provider:${providerId}:identity`) && Object.entries(credentials).some(
+    ([key, secret]) => key.startsWith(manualKeyPrefix) && key.endsWith(":api-key")
+      && typeof secret === "string" && secret.length > 0
+  )) return true;
+  const family = providerId.startsWith("account:zai-") ? "zai"
+    : providerId.startsWith("account:bigmodel-") ? "bigmodel" : undefined;
+  return family !== undefined && present(`oauth:${family}:access_token`) && present("zcodejwttoken");
+}
+
 /** Configuration presence only; the runtime owns credential decryption and authentication. */
 export async function readConfiguredModelAccess(env: NodeJS.ProcessEnv = process.env): Promise<ConfiguredModelAccess | null> {
   const configPath = providerConfigPath(env);
@@ -214,12 +236,7 @@ export async function readConfiguredModelAccess(env: NodeJS.ProcessEnv = process
   if (providerId.startsWith("account:")) {
     try {
       const credentials = record(JSON.parse(await readFile(credentialsPath(env), "utf8")));
-      const identity = credentials?.[`account-provider:${providerId}:identity`];
-      const keyPrefix = `account-provider:coding-plan:${providerId}:account:`;
-      return typeof identity === "string" && identity.length > 0 && Object.entries(credentials ?? {}).some(
-        ([key, secret]) => key.startsWith(keyPrefix) && key.endsWith(":api-key")
-          && typeof secret === "string" && secret.length > 0
-      ) ? result : null;
+      return accountProviderConfigured(credentials ?? {}, providerId) ? result : null;
     } catch {
       return null;
     }

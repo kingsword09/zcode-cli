@@ -8,7 +8,7 @@ import {
   readConfiguredModelAccess,
   cliSettingsPath
 } from "../src/model-access.ts";
-import { desktopSettingsPath, legacyCliConfigPath, settingsMigrationMarkerPath } from "../src/config-paths.ts";
+import { credentialsPath, desktopSettingsPath, legacyCliConfigPath, settingsMigrationMarkerPath } from "../src/config-paths.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -88,6 +88,110 @@ describe("user config bootstrap", () => {
     expect(results.filter((result) => result.created)).toHaveLength(1);
     expect(results.every((result) => result.configPath === cliSettingsPath(env))).toBe(true);
     expect(() => JSON.parse(serialized)).not.toThrow();
+  });
+
+});
+
+describe("account provider model access", () => {
+
+  async function accountAccess(
+    providerId: string,
+    modelId: string,
+    credentials: Record<string, string>
+  ): Promise<{ env: NodeJS.ProcessEnv; result: Awaited<ReturnType<typeof readConfiguredModelAccess>> }> {
+    const home = await temporaryHome();
+    const env = homeEnvironment(home);
+    const providerPath = join(home, ".zcode", "v2", "provider_config.json");
+    await mkdir(dirname(providerPath), { recursive: true });
+    await writeFile(providerPath, `${JSON.stringify({
+      schemaVersion: 1,
+      config: {
+        providerConfigRules: { providerRules: [] },
+        modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] },
+        defaultModelSelection: { providerId, modelId }
+      }
+    }, null, 2)}\n`);
+    await writeFile(credentialsPath(env), `${JSON.stringify(credentials, null, 2)}\n`);
+    return { env, result: await readConfiguredModelAccess(env) };
+  }
+
+  test("recognizes an OAuth Coding Plan account without a per-account API key", async () => {
+    // Regression for #264: OAuth login stores identity/auth-source plus the
+    // shared family session, never an account-scoped Coding Plan API key.
+    const { env, result } = await accountAccess(
+      "account:zai-individual-coding-plan",
+      "GLM-5.3",
+      {
+        "oauth:active_provider": "enc:v1:active",
+        "oauth:zai:access_token": "enc:v1:access",
+        zcodejwttoken: "enc:v1:jwt",
+        "oauth:zai:user_info": "enc:v1:profile",
+        "account-provider:account:zai-individual-coding-plan:identity": "enc:v1:identity",
+        "account-provider:account:zai-individual-coding-plan:auth-source": "enc:v1:oauth"
+      }
+    );
+
+    expect(result).toEqual({
+      configPath: join(env.HOME!, ".zcode", "v2", "provider_config.json"),
+      model: "account:zai-individual-coding-plan/GLM-5.3",
+      providerId: "account:zai-individual-coding-plan"
+    });
+  });
+
+  test("recognizes a Start Plan model from the shared family session", async () => {
+    // Start Plan providers own neither an identity nor an API key; the family
+    // Coding Plan identity and OAuth session are reused (runtime behavior).
+    const { result } = await accountAccess("account:zai-start-plan", "GLM-5.3-Flash", {
+      "oauth:zai:access_token": "enc:v1:access",
+      zcodejwttoken: "enc:v1:jwt",
+      "account-provider:account:zai-individual-coding-plan:identity": "enc:v1:identity",
+      "account-provider:account:zai-individual-coding-plan:auth-source": "enc:v1:oauth"
+    });
+
+    expect(result?.model).toBe("account:zai-start-plan/GLM-5.3-Flash");
+  });
+
+  test("recognizes a BigModel OAuth session", async () => {
+    const { result } = await accountAccess(
+      "account:bigmodel-individual-coding-plan",
+      "GLM-5.3",
+      {
+        "oauth:bigmodel:access_token": "enc:v1:access",
+        zcodejwttoken: "enc:v1:jwt"
+      }
+    );
+
+    expect(result?.model).toBe("account:bigmodel-individual-coding-plan/GLM-5.3");
+  });
+
+  test("keeps manual Coding Plan API keys working", async () => {
+    const { result } = await accountAccess(
+      "account:zai-individual-coding-plan",
+      "GLM-5.3",
+      {
+        "account-provider:account:zai-individual-coding-plan:identity": "enc:v1:identity",
+        "account-provider:account:zai-individual-coding-plan:auth-source": "enc:v1:manual",
+        "account-provider:coding-plan:account:zai-individual-coding-plan:account:user%40example.com:api-key": "enc:v1:key"
+      }
+    );
+
+    expect(result?.providerId).toBe("account:zai-individual-coding-plan");
+  });
+
+  test("does not report access from an identity or an unrelated family session alone", async () => {
+    const identityOnly = await accountAccess(
+      "account:zai-individual-coding-plan",
+      "GLM-5.3",
+      { "account-provider:account:zai-individual-coding-plan:identity": "enc:v1:identity" }
+    );
+    const otherFamily = await accountAccess(
+      "account:zai-individual-coding-plan",
+      "GLM-5.3",
+      { "oauth:bigmodel:access_token": "enc:v1:access", zcodejwttoken: "enc:v1:jwt" }
+    );
+
+    expect(identityOnly.result).toBeNull();
+    expect(otherFamily.result).toBeNull();
   });
 
 });
