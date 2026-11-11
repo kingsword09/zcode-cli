@@ -3,7 +3,8 @@ import {
   Container,
   Image,
   Spacer,
-  Text
+  Text,
+  truncateToWidth
 } from "@earendil-works/pi-tui";
 
 import {
@@ -48,6 +49,7 @@ export interface ToolViewOptions {
   activeOutputOmittedCharacters?: number;
   retainedPayloadCompacted?: true;
   retainedPayloadTruncated?: boolean;
+  previewRows?: number | (() => number | undefined);
 }
 
 interface ToolImage {
@@ -303,7 +305,11 @@ function stateBackground(state: string, theme: ZCodeTheme): ((text: string) => s
   return normalized === "waiting_permission" ? theme.toolPendingBackground : undefined;
 }
 
-function stylePreview(value: string, theme: ZCodeTheme, expanded: boolean): { text: string; truncated: boolean } {
+function stylePreview(
+  value: string,
+  theme: ZCodeTheme,
+  expanded: boolean
+): { text: string; truncated: boolean } {
   const preview = truncate(sanitizeTerminalText(value), expanded);
   return {
     truncated: preview.truncated,
@@ -418,6 +424,7 @@ export class ToolExecutionView extends Container {
   private options: ToolViewOptions;
   private expanded = false;
   private hiddenContent = false;
+  private previewTruncated = false;
   private dirty = true;
   private readonly card = new Box(1, 0);
   private readonly imageHost = new Container();
@@ -431,6 +438,7 @@ export class ToolExecutionView extends Container {
 
   update(options: ToolViewOptions): void {
     this.options = compactTerminalToolOptions(options);
+    this.previewTruncated = false;
     this.dirty = true;
   }
 
@@ -446,12 +454,27 @@ export class ToolExecutionView extends Container {
 
   hasHiddenContent(): boolean {
     this.ensureRebuilt();
-    return this.hiddenContent;
+    return this.hiddenContent || this.previewTruncated;
   }
 
   override render(width: number): string[] {
     this.ensureRebuilt();
-    return super.render(width);
+    const lines = super.render(width);
+    this.previewTruncated = false;
+    if (this.expanded || this.isTerminal()) return lines;
+    const previewRows = typeof this.options.previewRows === "function"
+      ? this.options.previewRows()
+      : this.options.previewRows;
+    if (previewRows === undefined || !Number.isFinite(previewRows)) return lines;
+    const bound = Math.max(1, Math.floor(previewRows));
+    if (lines.length <= bound) return lines;
+    this.previewTruncated = true;
+    return bound === 1
+      ? lines.slice(0, 1)
+      : [
+        ...lines.slice(0, bound - 1),
+        truncateToWidth(this.theme.muted("  … Ctrl+O to expand"), width)
+      ];
   }
 
   getSearchText(): string {

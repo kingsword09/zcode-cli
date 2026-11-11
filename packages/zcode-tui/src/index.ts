@@ -3255,7 +3255,8 @@ class ZCodeTui {
       error: tool.error,
       progress: tool.progress,
       diffs: tool.diffs,
-      retainedPayloadTruncated: tool.retainedPayloadTruncated
+      retainedPayloadTruncated: tool.retainedPayloadTruncated,
+      ...(terminal ? {} : { previewRows: () => this.activeToolPreviewRows() })
     });
     if (terminal) {
       tool.input = retained.input;
@@ -3271,6 +3272,19 @@ class ZCodeTui {
     if (["complete", "completed", "success"].includes(state.toLowerCase()) && succeeded) {
       this.turnDiffs.upsertTool(tool.id, retained.diffs ?? []);
     }
+  }
+
+  private activeToolPreviewRows(): number | undefined {
+    if (isViewportTUI(this.ui)) return undefined;
+    const rows = this.ui.terminal?.rows;
+    if (!Number.isFinite(rows) || (rows ?? 0) <= 0) return undefined;
+    const width = this.ui.terminal.columns;
+    const chromeRows = this.composerHost.render(width).length
+      + this.runtimeActivity.render(width).length
+      + this.choiceHost.render(width).length;
+    const activeCount = Math.max(1, [...this.toolViews.values()]
+      .filter((view) => !isTerminalToolState(view.state)).length);
+    return Math.max(1, Math.floor(((rows as number) - chromeRows) / activeCount) - 1);
   }
 
   private attachPendingToolRelationships(tool: ToolViewState): void {

@@ -571,6 +571,11 @@ scrollbar navigation. The composer remains available while older transcript
 content is being reviewed. The scrollbar is hidden when the transcript fits,
 then appears briefly while scrolling and follows the active dark/light theme.
 
+In regular mode, collapsed running tool cards fit their previews to the rows left
+by the current composer and status area, after accounting for text wrapping.
+Completed cards keep the default collapsed preview; use Ctrl+O to expand tool
+details. Fullscreen previews are unchanged.
+
 ```json
 {
   "ui": {
