@@ -33,6 +33,7 @@ import {
 } from "./zai-oauth.ts";
 import { requestAppServer } from "./app-server-client.ts";
 import { runPluginCommand } from "./plugin-cli.ts";
+import { runTuiWithHerdrStatus } from "./herdr-status.mjs";
 import { missingCodingPlanKey } from "./prompt-preflight.ts";
 import { extractPromptOverrides } from "./prompt-model.ts";
 import {
@@ -640,11 +641,14 @@ export async function main(args: string[]): Promise<number> {
       return 1;
     }
     const runtimeArgs = withDefaultBrowserUse(login.args);
-    const code = await runRuntime(node, runtimeArgs, {
+    const startRuntime = () => runRuntime(node, runtimeArgs, {
       ...firstRunSetupEnv(setupPending, runtimeArgs),
       ...(promptModel ? { ZCODE_CLI_PROMPT_MODEL: promptModel } : {}),
       ...(promptEffort ? { ZCODE_CLI_PROMPT_EFFORT: promptEffort } : {})
     });
+    const code = isTuiRuntimeInvocation(runtimeArgs)
+      ? await runTuiWithHerdrStatus(startRuntime)
+      : await startRuntime();
     if (code === 0 && (args.includes("--help") || args.includes("-h"))) {
       console.log("\n  --model <provider/model>  Select a model for this --prompt run without changing the saved default.");
       console.log("  --effort <level>          Select the model reasoning effort for this --prompt run; auto keeps the default.");

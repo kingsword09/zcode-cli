@@ -81,6 +81,31 @@ The following variables are supported host integration points:
 | `ZCODE_MODEL_RETRY_MAX_RETRIES` | Override the model retry limit. |
 | `ZCODE_TUI_RUNTIME_LOG` | Choose the bounded diagnostic log for TUI runtime stderr. |
 | `ZCODE_CLI_SETTINGS_FILE` | Choose an absolute path for this process's user settings, including hooks, MCP servers and default tool permissions. |
+| `HERDR_ENV` | Mark a process launched inside a Herdr pane. |
+| `HERDR_BIN_PATH` | Herdr CLI path used to report this pane's agent state. |
+| `HERDR_PANE_ID` | Herdr pane that owns this CLI process. |
+
+When all three Herdr variables are present, an interactive TUI launch reports
+an initial `unknown` state, since no session exists yet. The bundled Herdr
+plugin then reports turn and permission state changes. Other hosts do not need
+these variables.
+
+### Herdr plugin
+
+`integrations/herdr` is a ZCode plugin marketplace that keeps the pane's agent
+state current while a session runs. Install it from this checkout: in ZCode open
+**Settings → Plugins → Add marketplace**, select `integrations/herdr`, then
+install and enable `herdr-zcode`.
+
+The plugin reports `idle` at session start and stop, `working` when a prompt is
+submitted or a tool finishes, and `blocked` when ZCode asks for a permission
+decision. It also sends the session ID and `zcode --resume <session-id>` so the
+host can restore the conversation. Reports run as a detached child with no
+terminal streams and every failure is ignored, so the plugin cannot interrupt
+ZCode. Prompt and tool contents are never forwarded.
+
+Outside Herdr the hooks exit without running anything. Nothing here is required
+to use ZCode with another orchestrator.
 
 Hosts should pass user configuration through the normal ZCode environment and
 configuration files. Do not put API keys or other secrets in command-line
