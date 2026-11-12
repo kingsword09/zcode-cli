@@ -179,7 +179,7 @@ CLI 目前没有信任管理命令，可在 Desktop 中批准相应工作区声�
 
 下面区分本发行包与上游应用。源码引用固定在上游
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e)。
-本项目 runtime lock 选择的是独立发布的 Desktop 3.17.2 / runtime 0.17.1 产物，不能据此认定该产物
+本项目 runtime lock 选择的是独立发布的 Desktop 3.18.0 / runtime 0.17.1 产物，不能据此认定该产物
 由这个公开源码提交构建。
 2026-10-20 已针对
 [`0a1fc56` / `0.17.0`](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411)
@@ -287,6 +287,10 @@ Provider 文件中的 `config.defaultModelSelection` 决定新会话使用的模
 显式配置的手动 API Key 仍使用其独立的账号选择。Z.AI 凭证统一采用桌面端的业务令牌格式；
 旧版 CLI 保存的 OAuth 令牌会在首次请求验证成功后转换，验证失败或并发登录不会覆盖更新的共享会话。
 
+Runtime 使用操作系统凭据仓库保护凭据。无可用系统凭据仓库的无头环境必须配置
+`ZCODE_CREDENTIAL_SECRET` 或可读取的 `ZCODE_CREDENTIAL_SECRET_FILE`（文件长度 32–4096 字节），
+两者不可同时设置。登录及后续请求应使用相同的密钥来源，否则已有凭据无法解密。
+
 Start Plan 与 Coding Plan 共用同一次 ZCode OAuth 登录，不需要第二次套餐授权；已有桌面端
 会话也无需再次登录。在 `/model` 中选择 `account:zai-start-plan/<model>` 或
 `account:bigmodel-start-plan/<model>`，也可以通过 `--model` 指定。Start Plan 请求直接使用
@@ -298,8 +302,7 @@ Start Plan 与 Coding Plan 共用同一次 ZCode OAuth 登录，不需要第二�
 过期或被拒绝时，需要更新共享的 ZCode 登录，而不是新增套餐专属登录。Start Plan 请求不会
 回退使用付费 Coding Plan 凭证。新请求跟随桌面端当前账号，同一请求重试时禁止切换账号或令牌。
 
-macOS OAuth 会临时注册回调接收器、校验 `state`，恢复原来的 `zcode://` 处理程序，并通过
-stdin 把回调交给 runtime。Runtime 先取得业务和项目访问令牌，再保存加密登录凭证与
+Z.AI OAuth 使用 runtime 原生的授权轮询流程。Runtime 取得业务和项目访问令牌后，保存加密登录凭证与
 原生默认模型；TUI 随后重新读取 provider 配置。BigModel 使用 runtime 的 localhost
 回调，校验 `state` 后，将匹配的回调地址和 state 提交到
 `https://zcode.z.ai/api/v1/oauth/token`。BigModel access token 和 ZCode JWT 均通过原生

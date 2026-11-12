@@ -19,6 +19,7 @@ export function runtimeTestEnv(
     ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: join(testHome, ".zcode", "v2", "provider_config.json"),
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: join(packageRoot, "vendor", "provider", "zcode-builtin.json"),
     ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE: "",
+    ZCODE_CREDENTIAL_SECRET: "zcode-cli-runtime-test-secret-32-bytes",
     ZCODE_DISABLE_MODEL_CATALOG_REFRESH: "1",
     ZCODE_DISABLE_UPDATE_CHECK: "1"
   };

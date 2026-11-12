@@ -6,6 +6,7 @@ export interface RuntimeSqliteStatement {
 
 export interface RuntimeSqliteConnection {
   readonly isTransaction: boolean;
+  close?(): void;
   exec(sql: string): unknown;
   prepare(sql: string): RuntimeSqliteStatement;
 }

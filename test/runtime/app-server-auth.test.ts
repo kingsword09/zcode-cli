@@ -53,7 +53,7 @@ async function withServer(
   });
   let stop: (() => Promise<void>) | undefined;
   try {
-    const env: NodeJS.ProcessEnv = { ...runtimeTestEnv(home), NODE_EXTRA_CA_CERTS: join(tls, "localhost-cert.pem"), ZCODE_BASE_URL: server.url.origin,
+    const env: NodeJS.ProcessEnv = { ...runtimeTestEnv(home), ZCODE_CREDENTIAL_SECRET: "app-server-auth-test-secret", NODE_EXTRA_CA_CERTS: join(tls, "localhost-cert.pem"), ZCODE_BASE_URL: server.url.origin,
       ...(mode === undefined ? {} : { ZCODE_APP_SERVER_AUTH_MODE: mode }) };
     const builtin = await Bun.file(join(root, "vendor/provider/zcode-builtin.json")).json();
     const provider = builtin.config.providerConfigRules.providerRules.find((item: { providerId: string }) => item.providerId === providerId);

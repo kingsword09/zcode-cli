@@ -43,7 +43,7 @@ const orderedWrites = [
   "updateTargetSummaryTitle", "clearTarget", "claimLegacySessionWorkspace",
   "repairLegacyRemoteSessionWorkspace", "repairRemoteSessionPaths", "upsertScriptWorkflowDefinition",
   "createScriptWorkflowRun", "updateScriptWorkflowRun", "createScriptWorkflowActivity",
-  "updateScriptWorkflowActivity", "appendScriptWorkflowEvent", "createSessionTaskLink", "pruneUsage"
+  "updateScriptWorkflowActivity", "appendScriptWorkflowEvent", "createSessionTaskLink"
 ] as const;
 
 interface RuntimeSqliteStore {
@@ -161,7 +161,7 @@ export function installSqliteWriteRecovery(store: RuntimeSqliteStore, options: S
   const specifications = [
     ...sqliteReplayableWrites.map(name => ({ name, retry: true, priority: "conversation" as const })),
     ...usageWrites.map(name => ({ name, retry: true, priority: "usage" as const })),
-    ...orderedWrites.map(name => ({ name, retry: false, priority: name === "pruneUsage" ? "usage" as const : "conversation" as const }))
+    ...orderedWrites.map(name => ({ name, retry: false, priority: "conversation" as const }))
   ];
   const originals = specifications.map(spec => {
     const method = methods[spec.name];
@@ -190,7 +190,20 @@ export function installSqliteWriteRecovery(store: RuntimeSqliteStore, options: S
       queue.users--;
       if (!queue.active && queue.users === 0) queues.delete(key);
     }
-    close();
+    const scope: SqliteOperationScope = {
+      db: store.db,
+      active: true,
+      nativeBusyMs: options.nativeBusyMs ?? sqliteWriteRecoveryPolicy.nativeBusyMs,
+      deadline: performance.now() + (options.nativeBusyMs ?? sqliteWriteRecoveryPolicy.nativeBusyMs)
+    };
+    try {
+      sqliteOperationScope.run(scope, close);
+    } catch (error) {
+      if (!isSqliteBusyError(error) || !store.db.close) throw error;
+      store.db.close();
+    } finally {
+      scope.active = false;
+    }
   };
 
   for (const { name, method, retry, priority } of originals) {

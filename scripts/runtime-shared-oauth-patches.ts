@@ -41,9 +41,9 @@ export function hasRuntimeSharedOAuth(runtime: string): boolean {
       && body("createSharedZCodeCredentialStore").includes("async saveIfValue(")
       && resolver.includes(`${marker}==="business"`) && resolver.includes("zaiBusinessToken:")
       && /\.business\.token\|\|new Headers\(/u.test(resolver)
-      && [...login.matchAll(/\.saveZaiLoginCredentials\(\{accessToken:require\(require\("node:path"\)\.join\(__dirname,"cli-config.cjs"\)\)\.zaiBusinessAccessToken\(/gu)].length === 2
-      && login.includes(".zaiBusinessAccessToken($zApiKey)")
-      && login.indexOf("let $zApiKey=") < login.indexOf("$zStore.saveZaiLoginCredentials(");
+      && login.includes(".saveZaiLoginCredentials({accessToken:")
+      && login.includes(".zaiBusinessAccessToken(")
+      && /\.saveZaiLoginCredentials\(\{accessToken:require\(require\("node:path"\)\.join\(__dirname,"cli-config.cjs"\)\)\.zaiBusinessAccessToken\(/u.test(login);
   } catch { return false; }
 }
 
@@ -127,30 +127,14 @@ export function patchRuntimeSharedOAuth(runtime: string): string {
   const login = namedFunction(runtime, "loginZCodeCli");
   const materialResolver = symbol(runtime, "resolveCodingPlanMaterial");
   const source = runtime.slice(login.start, login.end);
-  const material = unique([...source.matchAll(new RegExp(`(${identifier})=await ${identifier}\\(${escape(materialResolver)}\\(\\{accessToken:(${identifier})\\.accessToken,`, "gu"))], "polling login material");
-  replace(login, new RegExp(`\\.saveZaiLoginCredentials\\(\\{accessToken:${escape(material[2]!)}\\.accessToken,`, "gu"),
+  const material = unique([...source.matchAll(new RegExp(
+    `(${identifier})=await (?:${identifier}\\()?${escape(materialResolver)}\\(\\{accessToken:(${identifier})\\.accessToken,`, "gu"
+  ))], "polling login material");
+  const credential = unique([...source.matchAll(new RegExp(
+    `\\.saveZaiLoginCredentials\\(\\{accessToken:(${identifier})\\.accessToken,`, "gu"
+  ))], "polling credential publication");
+  replace(login, new RegExp(`\\.saveZaiLoginCredentials\\(\\{accessToken:${escape(credential[1]!)}\\.accessToken,`, "gu"),
     () => `.saveZaiLoginCredentials({accessToken:${helper}.zaiBusinessAccessToken(${material[1]}),`, "polling credential publication");
-
-  // The macOS bridge originally published the raw token before resolving model access.
-  // Move resolution ahead of publication so a failed exchange leaves the shared login intact.
-  const bridge = login.body.body.find(node => node.type === "IfStatement"
-    && runtime.slice(node.test.start, node.test.end).includes("ZCODE_CLI_OAUTH_CALLBACK_STDIN"));
-  if (bridge?.type !== "IfStatement" || bridge.consequent.type !== "BlockStatement") incompatible("macOS login bridge missing");
-  const statements = bridge.consequent.body;
-  const publication = unique(statements.filter(node => node.type === "TryStatement"
-    && runtime.slice(node.block.start, node.block.end).includes("$zStore.saveZaiLoginCredentials")), "macOS credential publication");
-  const resolution = unique(statements.filter(node => node.type === "VariableDeclaration"
-    && node.declarations.some(declaration => declaration.id.type === "Identifier" && declaration.id.name === "$zApiKey")), "macOS login material");
-  const resolutionSource = runtime.slice(resolution.start, resolution.end);
-  if (!resolutionSource.includes(`await ${materialResolver}(`) || publication.end > resolution.start) incompatible("macOS publication order changed");
-  const loginOptions = login.params[0];
-  if (loginOptions?.type !== "AssignmentPattern" || loginOptions.left.type !== "Identifier") incompatible("login options changed");
-  edits.push({ start: publication.start, end: publication.start,
-    value: `${resolutionSource}${loginOptions.left.name}.abortSignal?.throwIfAborted();` });
-  edits.push({ start: resolution.start, end: resolution.end, value: "" });
-  const accessToken = unique([...runtime.slice(publication.start, publication.end).matchAll(/accessToken:\$zAccessToken,/gu)], "macOS shared token");
-  edits.push({ start: publication.start + accessToken.index!, end: publication.start + accessToken.index! + accessToken[0].length,
-    value: `accessToken:${helper}.zaiBusinessAccessToken($zApiKey),` });
 
   // Reject unexpected overlaps before touching the bundle.
   const sorted = edits.sort((a, b) => b.start - a.start);

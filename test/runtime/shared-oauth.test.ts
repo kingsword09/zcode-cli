@@ -7,7 +7,7 @@ import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 const root = join(import.meta.dir, "../..");
 
 /** Run native login, encryption, account projection and request signing; only HTTP is simulated. */
-async function probe(body: string, options: { callback?: boolean } = {}) {
+async function probe(body: string) {
   const directory = await mkdtemp(join(tmpdir(), "zcode-shared-oauth-"));
   try {
     const file = join(root, "vendor/zcode.cjs");
@@ -31,9 +31,8 @@ async function probe(body: string, options: { callback?: boolean } = {}) {
       runtime._compile(fs.readFileSync(file,"utf8").replace(${JSON.stringify(main[0])},${JSON.stringify(main[0] + injected)}),file);`;
     const child = Bun.spawn([Bun.which("node")!, "--eval", script], {
       cwd: directory,
-      env: { ...runtimeTestEnv(directory), ZCODE_CREDENTIAL_SECRET: "shared-oauth-test-secret",
-        ...options.callback ? { ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" } : {} },
-      stdin: new Blob([JSON.stringify({ callbackUrl: "zcode://zai-auth/callback?code=fixture-code&state=fixture-state", state: "fixture-state" })]),
+      env: { ...runtimeTestEnv(directory), ZCODE_CREDENTIAL_SECRET: "shared-oauth-test-secret" },
+      stdin: "ignore",
       stdout: "pipe", stderr: "pipe"
     });
     const timer = setTimeout(() => child.kill(), 12_000);
@@ -78,14 +77,14 @@ const httpFixture = `
   const input={providerId,accountAccess:{mode:"individual-coding-plan",accountType:"zai"}};
 `;
 
-for (const callback of [false, true]) test(`one Z.AI ${callback ? "macOS callback" : "polling"} login authorizes Coding Plan and Start Plan`, async () => {
+test("one native polling Z.AI login authorizes Coding Plan and Start Plan", async () => {
   await probe(`
     await loginZCodeCli({env,noBrowser:true,httpClient});
     assert.equal(await store.load("oauth:zai:access_token"),businessToken);
     assert.equal(await store.load("zcodejwttoken"),zcodeJwt);
     assert.deepEqual(JSON.parse(await store.load("oauth:zai:user_info")),{user_id:"fixture-user"});
     const saved=await fs.readFile(store.filePath,"utf8");
-    assert.ok(saved.includes("enc:v1:"));
+    assert.ok(saved.includes("enc:v2:"));
     assert.ok(!saved.includes(businessToken)&&!saved.includes("fixture-oauth-token"));
     const desktop=await httpClient.request({url:"https://api.z.ai/api/biz/customer/getCustomerInfo",headers:{Authorization:"Bearer "+await store.load("oauth:zai:access_token")}});
     assert.equal(desktop.status,200);
@@ -100,7 +99,7 @@ for (const callback of [false, true]) test(`one Z.AI ${callback ? "macOS callbac
       assert.equal(snapshot.providers.entries().find(([key])=>key===id)[1].access.entitled,true);
     }
     assert.ok(!calls.includes("/api/auth/z/login"));
-  `, { callback });
+  `);
 }, 15_000);
 
 test("a Desktop-only session authorizes CLI requests without a second login", async () => {

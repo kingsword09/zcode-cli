@@ -26,10 +26,7 @@ import {
 import { sharedDataBaseDir } from "./config-paths.ts";
 import { providerMigrationNeeded } from "./runtime-config-bridge.ts";
 import {
-  classifyZaiOAuthInvocation,
-  runZaiOAuthLogin,
-  usesNativeZaiOAuth,
-  type OfficialLoginPayload
+  classifyZaiOAuthInvocation
 } from "./zai-oauth.ts";
 import { requestAppServer } from "./app-server-client.ts";
 import { runPluginCommand } from "./plugin-cli.ts";
@@ -288,7 +285,6 @@ export function firstRunSetupEnv(setupPending: boolean, args: string[]): NodeJS.
 
 function runtimeEnvironment(extra: NodeJS.ProcessEnv = {}, inspectConfiguration = false): Record<string, string> {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.ZCODE_CLI_OAUTH_CALLBACK_STDIN;
   delete env.ZCODE_CLI_MIGRATE_CONFIG;
   delete env.ZCODE_CLI_PROMPT_MODEL;
   delete env.ZCODE_CLI_PROMPT_EFFORT;
@@ -448,28 +444,6 @@ async function runRuntime(
   }
 }
 
-async function completeOfficialZaiLogin(
-  node: string,
-  payload: OfficialLoginPayload,
-  runtimeArgs: string[],
-  abortSignal: AbortSignal
-): Promise<number> {
-  if (abortSignal.aborted) return abortSignalExitCode(abortSignal);
-  const child = spawnChild(node, [runtimePath, ...runtimeArgs], {
-    cwd: process.cwd(),
-    env: runtimeEnvironment({ ZCODE_CLI_OAUTH_CALLBACK_STDIN: "1" }),
-    stdio: ["pipe", "inherit", "inherit"]
-  });
-  const onAbort = () => child.kill(abortSignalName(abortSignal) ?? "SIGINT");
-  abortSignal.addEventListener("abort", onAbort, { once: true });
-  try {
-    child.stdin?.end(JSON.stringify(payload));
-    return await waitForChild(child);
-  } finally {
-    abortSignal.removeEventListener("abort", onAbort);
-  }
-}
-
 export async function main(args: string[]): Promise<number> {
   if (!existsSync(runtimePath)) {
     console.error(
@@ -593,45 +567,9 @@ export async function main(args: string[]): Promise<number> {
   }
 
   if (zaiOAuth) {
-    if (usesNativeZaiOAuth()) {
-      // The runtime uses ZCode's registered HTTPS callback and polls for the
-      // result. Only macOS needs the custom-protocol Desktop bridge below.
-      const code = await runRuntime(node, zaiOAuth.runtimeArgs);
-      if (code === 0 && await readConfiguredModelAccess()) await clearSetupPending();
-      return code;
-    }
-    const abortController = new AbortController();
-    const cancel = (signal: NodeJS.Signals) => () => abortController.abort(signal);
-    const onSigint = cancel("SIGINT");
-    const onSigterm = cancel("SIGTERM");
-    const onSighup = cancel("SIGHUP");
-    process.once("SIGINT", onSigint);
-    process.once("SIGTERM", onSigterm);
-    if (process.platform !== "win32") process.once("SIGHUP", onSighup);
-    try {
-      const code = await runZaiOAuthLogin({
-        abortSignal: abortController.signal,
-        completeLogin: (payload, runtimeArgs) => completeOfficialZaiLogin(
-          node,
-          payload,
-          runtimeArgs,
-          abortController.signal
-        ),
-        invocation: zaiOAuth,
-        output: zaiOAuth.json ? process.stderr : process.stdout
-      });
-      // A successful CLI-side login completes first-run setup; otherwise the
-      // pending wizard would reappear over an already-configured account.
-      if (code === 0 && await readConfiguredModelAccess()) await clearSetupPending();
-      return code;
-    } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-      return abortController.signal.aborted ? abortSignalExitCode(abortController.signal) : 1;
-    } finally {
-      process.off("SIGINT", onSigint);
-      process.off("SIGTERM", onSigterm);
-      if (process.platform !== "win32") process.off("SIGHUP", onSighup);
-    }
+    const code = await runRuntime(node, zaiOAuth.runtimeArgs);
+    if (code === 0 && await readConfiguredModelAccess()) await clearSetupPending();
+    return code;
   }
 
   try {

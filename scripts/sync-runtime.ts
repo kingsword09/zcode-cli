@@ -18,12 +18,13 @@ import { hasRuntimeHeadlessLifecycle, patchRuntimeHeadlessLifecycle } from "./ru
 export { hasRuntimeHeadlessLifecycle, patchRuntimeHeadlessLifecycle } from "./runtime-headless-patches.ts";
 import { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 export { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
-import { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
+import { hasRuntimeBigmodelOAuth, hasRuntimeNativePollingOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
 import { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
 export { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
 import { hasRuntimeStartPlan, patchRuntimeStartPlan } from "./runtime-start-plan-patches.ts";
 export { hasRuntimeStartPlan, patchRuntimeStartPlan } from "./runtime-start-plan-patches.ts";
 export { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
+export { hasRuntimeNativePollingOAuth } from "./runtime-bigmodel-oauth-patches.ts";
 import { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
 export { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
 import { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
@@ -1568,6 +1569,7 @@ export function patchRuntimeCliCredentials(runtime: string): string {
 }
 
 export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
+  if (hasRuntimeNativePollingOAuth(runtime)) return runtime;
   if (runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')) return runtime;
 
   const credentialMarker = ".saveZaiLoginCredentials({accessToken:";
@@ -1771,6 +1773,7 @@ async function installLocalTui(nextVendor: string): Promise<void> {
 
 /** Align Coding Plan defaults without depending on platform-specific minifier names. */
 export function patchRuntimeLoginModelDefaults(runtime: string): string {
+  const identifier = "[A-Za-z_$][\\w$]*";
   // Registry runtimes select the first model declared by the server's unique
   // Individual Coding Plan provider and persist that selection natively. The
   // old hard-coded main/lite table must not override that catalog. Imported
@@ -1786,7 +1789,10 @@ export function patchRuntimeLoginModelDefaults(runtime: string): string {
     if (!patched.includes("let $zSelectedModel=")) {
       // 0.17.0 routes non-transient switches through CliDefaultSelection. Keep
       // the reasoning-level completion ahead of that ternary.
-      const setter = /return ([A-Za-z_$][\w$]*)\.cliDefaultSelection&&[^{};]*?\1\.cliDefaultSelection\.set\(([A-Za-z_$][\w$]*)\):\1\.runtime\.setSessionModelSelection\(\2\),[A-Za-z_$][\w$]*\?\.transient/u.exec(patched);
+      const setter = new RegExp(
+        `return (${identifier})\\.cliDefaultSelection&&[^{};]*?\\1\\.cliDefaultSelection\\.set\\((${identifier})\\):\\1\\.runtime\\.setSessionModelSelection\\(\\2\\),`,
+        "u"
+      ).exec(patched);
       if (!setter) throw new Error("ZCode runtime is incompatible with login model defaults (registry model switch anchor missing).");
       const [, context, selection] = setter;
       patched = patched.replace(setter[0], `if(!${selection}.options?.reasoningLevel){let $zSelectedModel=${complete}(${context}.providerRegistry.getView(),${selection});if($zSelectedModel)${selection}={...${selection},options:{...${selection}.options,...$zSelectedModel.options}}}${setter[0]}`);
@@ -1987,7 +1993,8 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     id: "desktop-oauth",
     requirement: "required",
     apply: patchRuntimeZaiDesktopOAuth,
-    verify: (runtime) => runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
+    verify: (runtime) => hasRuntimeNativePollingOAuth(runtime)
+      || runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
   },
   {
     id: "bigmodel-session-reuse",
