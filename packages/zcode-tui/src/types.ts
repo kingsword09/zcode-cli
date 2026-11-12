@@ -24,6 +24,8 @@ export interface PromptCallOptions {
   requestPermission?: (request: unknown, context?: unknown) => Promise<unknown>;
 }
 
+export type PermissionRequester = (request: unknown, context?: unknown) => Promise<unknown>;
+
 export interface InterruptTurnOptions {
   pendingInputIds?: string[];
   reason?: string;
@@ -130,6 +132,7 @@ export interface RuntimeAdapter {
 }
 
 export interface TuiOptions extends RuntimeAdapter {
+  registerPermissionRequester?: (requester: PermissionRequester) => () => void;
   loadStartupOptions?: () => Promise<TuiStartupOptions>;
   initialMode?: string;
   initialPlanEnabled?: boolean;

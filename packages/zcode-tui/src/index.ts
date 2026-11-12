@@ -896,11 +896,15 @@ class ZCodeTui {
     process.on("SIGTERM", onSigterm);
     if (process.platform !== "win32") process.on("SIGHUP", onSighup);
     let startAttempted = false;
+    let unregisterPermissionRequester: (() => void) | undefined;
     try {
       if (this.stopped) {
         await this.done;
         return;
       }
+      unregisterPermissionRequester = this.options.registerPermissionRequester?.(
+        (request, context) => this.requestPermission(request, context)
+      );
       startAttempted = true;
       this.ui.start();
       if (this.stopped) {
@@ -961,6 +965,7 @@ class ZCodeTui {
           await this.done;
         }
       } finally {
+        unregisterPermissionRequester?.();
         // Leave the guards installed through the I/O turn containing the final
         // terminal restore writes, which can report stream errors asynchronously.
         await new Promise<void>((resolve) => setImmediate(resolve));

@@ -14,7 +14,7 @@ test.skipIf(process.platform === "win32")("native guarded commands require singl
     files: { "scratch/keep.txt": "preserve until approved\n" }
   });
   const root = join(import.meta.dir, "../..");
-  const env = runtimeTestEnv(workspace.home);
+  const env = { ...runtimeTestEnv(workspace.home), ZCODE_CREDENTIAL_SECRET: "guarded-permission-test-secret" };
   await ensureCliSettings(env);
   const settings = JSON.parse(await readFile(cliSettingsPath(env), "utf8"));
   settings.plugins.enabled = false;
@@ -25,9 +25,11 @@ test.skipIf(process.platform === "win32")("native guarded commands require singl
   let requestedCommands = 0;
   let completedCommands = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const body = await request.json() as { stream?: boolean; messages: { role: string }[] };
+    const body = await request.json() as { stream?: boolean; messages: { role: string; content?: unknown }[] };
     if (!body.stream) return Response.json({ choices: [{ message: { role: "assistant", content: "Guarded permission test" }, finish_reason: "stop" }] });
-    const finished = body.messages.at(-1)?.role === "tool";
+    const promptIndex = body.messages.findLastIndex(message => message.role === "user"
+      && typeof message.content === "string" && message.content.startsWith("Request the isolated deletion ("));
+    const finished = promptIndex >= 0 && body.messages.slice(promptIndex + 1).some(message => message.role === "tool");
     const delta = finished
       ? { role: "assistant", content: `GUARDED_COMPLETE_${++completedCommands}` }
       : { role: "assistant", tool_calls: [{

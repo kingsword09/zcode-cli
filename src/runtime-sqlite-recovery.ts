@@ -190,7 +190,20 @@ export function installSqliteWriteRecovery(store: RuntimeSqliteStore, options: S
       queue.users--;
       if (!queue.active && queue.users === 0) queues.delete(key);
     }
-    close();
+    const scope: SqliteOperationScope = {
+      db: store.db,
+      active: true,
+      nativeBusyMs: options.nativeBusyMs ?? sqliteWriteRecoveryPolicy.nativeBusyMs,
+      deadline: performance.now() + (options.nativeBusyMs ?? sqliteWriteRecoveryPolicy.nativeBusyMs)
+    };
+    try {
+      sqliteOperationScope.run(scope, close);
+    } catch (error) {
+      if (!isSqliteBusyError(error) || !store.db.close) throw error;
+      store.db.close();
+    } finally {
+      scope.active = false;
+    }
   };
 
   for (const { name, method, retry, priority } of originals) {
