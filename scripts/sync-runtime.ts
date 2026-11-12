@@ -34,6 +34,8 @@ import { hasRuntimeResolvedContextWindow, patchRuntimeResolvedContextWindow } fr
 export { hasRuntimeResolvedContextWindow, patchRuntimeResolvedContextWindow } from "./runtime-context-window-patches.ts";
 import { hasRuntimeRecursiveWorkspacePaths, patchRuntimeRecursiveWorkspacePaths } from "./runtime-workspace-path-patches.ts";
 export { hasRuntimeRecursiveWorkspacePaths, patchRuntimeRecursiveWorkspacePaths } from "./runtime-workspace-path-patches.ts";
+import { hasRuntimeMarketplaceGitUrlRecovery, patchRuntimeMarketplaceGitUrlRecovery } from "./runtime-marketplace-patches.ts";
+export { hasRuntimeMarketplaceGitUrlRecovery, patchRuntimeMarketplaceGitUrlRecovery } from "./runtime-marketplace-patches.ts";
 import { patchRuntimeWorkflowManagement } from "./runtime-workflow-patches.ts";
 export { patchRuntimeWorkflowManagement } from "./runtime-workflow-patches.ts";
 export { hasRuntimeConfigurationDiagnostics, patchRuntimeConfigurationDiagnostics } from "./runtime-config-diagnostic-patches.ts";
@@ -1878,6 +1880,12 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     requirement: "required",
     apply: patchRuntimeRecursiveWorkspacePaths,
     verify: hasRuntimeRecursiveWorkspacePaths
+  },
+  {
+    id: "marketplace-git-url-recovery",
+    requirement: "required",
+    apply: patchRuntimeMarketplaceGitUrlRecovery,
+    verify: hasRuntimeMarketplaceGitUrlRecovery
   },
   {
     id: "tui-bridge",
