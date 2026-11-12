@@ -38,6 +38,22 @@ Record the PID and exit status in your supervisor if you need reliable
 cancellation and completion tracking. Configure permissions deliberately;
 headless execution does not provide the TUI's interactive approval experience.
 
+## Credentials
+
+Headless hosts usually have no unlocked OS credential store. The runtime falls
+back to a managed secret in this order:
+
+1. `ZCODE_CREDENTIAL_SECRET` (32–4096 bytes), or
+2. `ZCODE_CREDENTIAL_SECRET_FILE`, or
+3. `credential-secret` next to the credentials file
+   (`~/.zcode/v2/credential-secret` by default), mode `0600`, 32–4096 bytes.
+
+Set at most one environment variable. Keep the same secret for login and later
+runs; credentials encrypted with a different secret cannot be decrypted. On
+macOS over SSH the login keychain is locked in launchd's `Background` domain, so
+the CLI reports `CREDENTIAL_SECURE_STORAGE_UNAVAILABLE` unless you run
+`security unlock-keychain` in that session or provide a managed secret.
+
 ## Regression coverage and limits
 
 Local HTTP fixtures and real Node child processes exercise:

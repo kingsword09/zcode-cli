@@ -287,9 +287,19 @@ Provider 文件中的 `config.defaultModelSelection` 决定新会话使用的模
 显式配置的手动 API Key 仍使用其独立的账号选择。Z.AI 凭证统一采用桌面端的业务令牌格式；
 旧版 CLI 保存的 OAuth 令牌会在首次请求验证成功后转换，验证失败或并发登录不会覆盖更新的共享会话。
 
-Runtime 使用操作系统凭据仓库保护凭据。无可用系统凭据仓库的无头环境必须配置
+Runtime 使用操作系统凭据仓库保护凭据。无可用系统凭据仓库的无头环境必须提供托管密钥：
 `ZCODE_CREDENTIAL_SECRET` 或可读取的 `ZCODE_CREDENTIAL_SECRET_FILE`（文件长度 32–4096 字节），
 两者不可同时设置。登录及后续请求应使用相同的密钥来源，否则已有凭据无法解密。
+
+两个环境变量都未设置时，Runtime 还会读取凭据文件所在目录下的 `credential-secret`
+（默认 `~/.zcode/v2/credential-secret`）。该文件须为普通文件，权限为 `0600`（或 `0400`），
+长度 32–4096 字节，作用与 `ZCODE_CREDENTIAL_SECRET_FILE` 相同；由于无需配置环境变量，
+这是无头主机最简单的方式。以此方式加密的凭据标记为 `enc:v2:env:`，缺少同一文件将无法解密。
+
+macOS 上的操作系统凭据仓库即登录钥匙串。SSH 会话运行在 launchd 的 `Background` 域中，
+无法显示钥匙串解锁提示，因此钥匙串处于锁定状态时会报 `CREDENTIAL_SECURE_STORAGE_UNAVAILABLE`。
+可在该会话中运行 `security unlock-keychain` 解锁（休眠或注销后会重新锁定），
+或改用上述托管密钥来源。
 
 Start Plan 与 Coding Plan 共用同一次 ZCode OAuth 登录，不需要第二次套餐授权；已有桌面端
 会话也无需再次登录。在 `/model` 中选择 `account:zai-start-plan/<model>` 或

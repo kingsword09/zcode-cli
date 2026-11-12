@@ -339,10 +339,24 @@ are converted after successful validation on their first request; failed
 validation or a concurrent login never overwrites the newer shared session.
 
 The runtime protects credentials with the OS credential store. Headless
-environments without an available system store must configure either
-`ZCODE_CREDENTIAL_SECRET` or a readable `ZCODE_CREDENTIAL_SECRET_FILE` containing
-32–4096 bytes; do not set both. Keep the same secret source for login and later
-requests so existing credentials remain decryptable.
+environments without an available system store must supply a managed secret:
+either `ZCODE_CREDENTIAL_SECRET` or a readable `ZCODE_CREDENTIAL_SECRET_FILE`
+containing 32–4096 bytes; do not set both. Keep the same secret source for login
+and later requests so existing credentials remain decryptable.
+
+When neither variable is set, the runtime also reads `credential-secret` from the
+directory that holds the credentials file (`~/.zcode/v2/credential-secret` by
+default). The file must be a regular file with mode `0600` (or `0400`) and
+32–4096 bytes, and it behaves like `ZCODE_CREDENTIAL_SECRET_FILE`; because no
+environment plumbing is required, it is the simplest option for headless hosts.
+Credentials encrypted this way are tagged `enc:v2:env:` and cannot be decrypted
+without the same file.
+
+On macOS the OS credential store is the login keychain. An SSH session runs in
+launchd's `Background` domain, where the keychain unlock prompt cannot be shown,
+so a locked keychain fails with `CREDENTIAL_SECURE_STORAGE_UNAVAILABLE`. Unlock it
+in that session with `security unlock-keychain` (it re-locks on sleep or logout),
+or use one of the managed secret sources above.
 
 Start Plan uses the same ZCode OAuth login as Coding Plan; there is no second
 Start Plan sign-in. An existing Desktop session works without another login.
