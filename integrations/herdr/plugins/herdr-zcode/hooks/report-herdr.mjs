@@ -60,7 +60,12 @@ function reportState(input) {
   const session = typeof input.session_id === "string" && SESSION_ID.test(input.session_id)
     ? input.session_id
     : undefined;
-  if (session) args.push("--agent-session-id", session, "--", "zcode", "--resume", session);
+  // `herdr pane report-agent` takes the session id as a flag and has no
+  // trailing-command support: a `-- zcode --resume <id>` tail makes the
+  // daemon refuse the whole report ("unknown option: --"), so on CLIs that
+  // pass a session id (3.18.1+) every report dies and the pane reads
+  // unknown. The flag alone is the contract.
+  if (session) args.push("--agent-session-id", session);
 
   try {
     const child = spawn(binary, args, { stdio: "ignore", windowsHide: true });
