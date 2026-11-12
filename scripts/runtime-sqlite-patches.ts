@@ -65,14 +65,27 @@ export function hasRuntimeSqliteWriteRecovery(runtime: string): boolean {
   const opened = openedAnchor.exec(runtime);
   if (!opened) return false;
   const after = runtime.slice(opened.index + opened[0].length, opened.index + opened[0].length + 600);
-  return count(after, new RegExp(storeRecovery.source, "gu")) === 1
-    && runtime.split(`${helper}.pruneSqliteUsage(`).length === 2;
+  const recoveryInstalled = count(after, new RegExp(storeRecovery.source, "gu")) === 1;
+  const usagePruningPatched = runtime.split(`${helper}.pruneSqliteUsage(`).length === 2;
+  const usageRetentionRemoved = !runtime.includes('"pruneUsage"')
+    && !runtime.includes('delete from model_usage where started_at <')
+    && !runtime.includes('delete from turn_usage where started_at <')
+    && !runtime.includes('delete from tool_usage where started_at <');
+  return recoveryInstalled && (usagePruningPatched || usageRetentionRemoved);
 }
 
 /** Keep the native SQL body and transaction; only the maintenance admission moves into our helper. */
 function patchUsageCleanup(runtime: string): string {
   const labels = [...runtime.matchAll(new RegExp(`${boundedIdentifier}\\((${boundedIdentifier}),"pruneUsage"\\)`, "gu"))];
-  if (labels.length !== 1) throw new Error("SQLite recovery pruneUsage symbol is missing or ambiguous.");
+  if (labels.length === 0) {
+    if (runtime.includes('delete from model_usage where started_at <')
+      || runtime.includes('delete from turn_usage where started_at <')
+      || runtime.includes('delete from tool_usage where started_at <')) {
+      throw new Error("SQLite recovery usage cleanup lost its symbol but still contains retention deletes.");
+    }
+    return runtime;
+  }
+  if (labels.length !== 1) throw new Error("SQLite recovery pruneUsage symbol is ambiguous.");
   const name = labels[0]![1]!;
   const prefix = new RegExp(`async function ${escape(name)}\\((${boundedIdentifier}),(${boundedIdentifier})=\\{\\}\\)\\{(?:let|const) (${boundedIdentifier})=\\2\\.beforeTime\\?\\?Date\\.now\\(\\)-[^;]{1,100};`, "gu");
   const starts = [...runtime.matchAll(prefix)];

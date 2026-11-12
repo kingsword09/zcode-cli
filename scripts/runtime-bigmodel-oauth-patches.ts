@@ -81,7 +81,7 @@ function inspect(runtime: string) {
   return { call, exchange, persistenceEnd, jwt, patched: stored };
 }
 
-function hasNativePollingOAuth(runtime: string): boolean {
+export function hasRuntimeNativePollingOAuth(runtime: string): boolean {
   try {
     const login = namedFunction(runtime, "loginZCodeCli");
     const wrapper = namedFunction(runtime, "loginBigmodelCodingPlan");
@@ -98,13 +98,13 @@ function hasNativePollingOAuth(runtime: string): boolean {
 }
 
 export function hasRuntimeBigmodelOAuth(runtime: string): boolean {
-  if (hasNativePollingOAuth(runtime)) return true;
+  if (hasRuntimeNativePollingOAuth(runtime)) return true;
   try { return inspect(runtime).patched; } catch { return false; }
 }
 
 /** Exchange through the official Desktop broker and persist both provider and ZCode tokens. */
 export function patchRuntimeBigmodelOAuth(runtime: string): string {
-  if (hasNativePollingOAuth(runtime)) return runtime;
+  if (hasRuntimeNativePollingOAuth(runtime)) return runtime;
   const { call, exchange, persistenceEnd, jwt, patched } = inspect(runtime);
   if (patched) return runtime;
   const edits = [

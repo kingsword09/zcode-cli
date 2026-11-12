@@ -209,7 +209,7 @@ Plugin controls remain under `plugins`, hook declarations under
 These paths distinguish the packaged CLI from the upstream application. The
 source references below are pinned to upstream
 [`29628c9` / `v3.14.3`](https://github.com/zai-org/ZCode/tree/29628c9acdb81b703bbd4080c207a0e7ce5e276e).
-This package's runtime lock selects the separate Desktop 3.17.2 / runtime 0.17.1 artifact; the
+This package's runtime lock selects the separate Desktop 3.18.0 / runtime 0.17.1 artifact; the
 public source snapshot is not an assertion of that artifact's build commit.
 The configuration boundaries were rechecked on 2026-10-20 against
 [`0a1fc56` / `0.17.0`](https://github.com/zai-org/ZCode/tree/0a1fc56d279fd1001f78387bd81aec1c26767411).
@@ -338,6 +338,12 @@ Z.AI credentials use Desktop's business-token format. Older CLI OAuth credential
 are converted after successful validation on their first request; failed
 validation or a concurrent login never overwrites the newer shared session.
 
+The runtime protects credentials with the OS credential store. Headless
+environments without an available system store must configure either
+`ZCODE_CREDENTIAL_SECRET` or a readable `ZCODE_CREDENTIAL_SECRET_FILE` containing
+32–4096 bytes; do not set both. Keep the same secret source for login and later
+requests so existing credentials remain decryptable.
+
 Start Plan uses the same ZCode OAuth login as Coding Plan; there is no second
 Start Plan sign-in. An existing Desktop session works without another login.
 Choose `account:zai-start-plan/<model>` or `account:bigmodel-start-plan/<model>`
@@ -353,11 +359,10 @@ ZCode login to be renewed, not an additional plan-specific login. Start Plan
 requests never fall back to paid Coding Plan credentials. New requests follow
 the current Desktop account; retries cannot switch accounts or tokens mid-turn.
 
-For macOS OAuth, the CLI temporarily registers a callback receiver, checks
-`state`, restores the previous `zcode://` handler and sends the callback through
-stdin. The runtime resolves business and project access before publishing
-encrypted login credentials and saving the native default model. The TUI then rereads
-provider configuration. BigModel uses the runtime's localhost callback, checks
+Z.AI OAuth uses the runtime's native authorization-polling flow. The runtime
+resolves business and project access before publishing encrypted login
+credentials and saving the native default model. The TUI then rereads provider
+configuration. BigModel uses the runtime's localhost callback, checks
 `state`, and sends the matching callback URI and state to
 `https://zcode.z.ai/api/v1/oauth/token`. Both the BigModel access token and ZCode
 JWT are saved in the native encrypted credential store before account setup

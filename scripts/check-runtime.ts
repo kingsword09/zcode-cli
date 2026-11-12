@@ -35,6 +35,7 @@ import {
   patchRuntimeHttpNoContent,
   patchRuntimeHeadlessLifecycle,
   patchRuntimeLoginModelDefaults,
+  hasRuntimeNativePollingOAuth,
   patchRuntimeNetworkRetryClassification,
   patchRuntimeOfficialMcpAvailability,
   patchRuntimeSqliteBusyTimeout,
@@ -83,6 +84,11 @@ if (packageManifest.dependencies?.["playwright-core"] !== "1.59.1"
   || playwrightManifest.version !== packageManifest.dependencies["playwright-core"]) {
   throw new Error("The runtime-compatible playwright-core dependency is missing or has the wrong version.");
 }
+const keyring = await import("@napi-rs/keyring");
+if (packageManifest.dependencies?.["@napi-rs/keyring"] !== "2.1.2"
+  || typeof keyring.AsyncEntry !== "function") {
+  throw new Error("The runtime-required @napi-rs/keyring dependency is missing or incompatible.");
+}
 
 const runtimeSource = await Bun.file(runtime).text();
 const metadataCapabilities = capabilitiesFromExtractionMetadata(extractionMetadata);
@@ -123,7 +129,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !runtimeSource.includes('pluginsInstall:"plugins/install"')
   || (patchEnabled("oauth-http-errors")
     && runtimeSource.includes('"OAuth response is not valid JSON",{httpStatus:void 0}'))
-  || !runtimeSource.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
+  || !hasRuntimeNativePollingOAuth(runtimeSource)
   || !runtimeSource.includes("ZCODE_CLI_CREDENTIALS_FILE")
   || !runtimeSource.includes("ZCODE_CLI_PROMPT_MODEL")
   || !runtimeSource.includes("ZCODE_CLI_PROMPT_EFFORT")

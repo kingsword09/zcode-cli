@@ -138,6 +138,9 @@ export async function validatePackageTree(base = root): Promise<void> {
   if (packageJson.dependencies?.["playwright-core"] !== "1.59.1") {
     throw new Error("The published package must pin the runtime-compatible playwright-core version.");
   }
+  if (packageJson.dependencies?.["@napi-rs/keyring"] !== "2.1.2") {
+    throw new Error("The published package must pin the runtime-required @napi-rs/keyring version.");
+  }
 
   const lock = parseRuntimeLock(JSON.parse(await readFile(join(base, "zcode-runtime.lock.json"), "utf8")));
   const extraction = JSON.parse(

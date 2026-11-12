@@ -31,8 +31,18 @@ export function patchRuntimeSessionLifecycle(runtime: string): string {
     patched = patched.replace(prefix[0], `${prefix[0]}await ${helper}.ensureSessionForTitle(this,${prefix[1]});`);
   }
   if (!patched.includes("$zValidatedResumeSession=")) {
-    const store = unique(patched, new RegExp(`(${identifier})=(${identifier})\\.sessionStore===void 0,(${identifier})=\\2\\.sessionStore\\?\\?await ${identifier}\\(${identifier},${identifier}\\),`, "u"), "app session store");
-    patched = patched.replace(store[0], `${store[0]}$zValidatedResumeSession=${store[2]}.resume?await ${helper}.assertResumableSession(${store[3]},${store[2]}.sessionId).catch(async $zResumeStoreError=>{if(${store[1]})await ${store[3]}.close();throw $zResumeStoreError}):void 0,`);
+    const legacyPattern = new RegExp(`(${identifier})=(${identifier})\\.sessionStore===void 0,(${identifier})=\\2\\.sessionStore\\?\\?await ${identifier}\\(${identifier},${identifier}\\),`, "u");
+    const legacyStore = [...patched.matchAll(new RegExp(legacyPattern.source, "gu"))];
+    const store = legacyStore.length === 1
+      ? legacyStore[0]!
+      : unique(
+        patched,
+        new RegExp(`(${identifier})=(${identifier})\\.sessionStore===void 0,(${identifier})=\\2\\.sessionStore\\?\\?await ${identifier}\\(${identifier},${identifier}\\);`, "u"),
+        "app session store"
+      );
+    const suffix = store[0]!.slice(-1);
+    const validatedSession = `$zValidatedResumeSession=${store[2]}.resume?await ${helper}.assertResumableSession(${store[3]},${store[2]}.sessionId).catch(async $zResumeStoreError=>{if(${store[1]})await ${store[3]}.close();throw $zResumeStoreError}):void 0`;
+    patched = patched.replace(store[0]!, `${store[0]!.slice(0, -1)},${validatedSession}${suffix}`);
   }
   if (!patched.includes('"readSessionResumeTarget"')) {
     const facade = unique(patched, new RegExp(`setCustomSessionTitle:(${identifier})\\(async (${identifier})=>(${identifier})\\.runtime\\.setCustomSessionTitle\\(\\{title:\\2\\.title,traceContext:\\2\\.traceContext\\?\\?\\3\\.traceContext\\}\\),"setCustomSessionTitle"\\)`, "u"), "app title facade");

@@ -18,7 +18,7 @@ compatibility patches applied.
 
 The [upstream notices shipped here](../LICENSES/README.md) come from a separately
 pinned public source revision. That revision declares version 3.14.0; the current
-runtime lock selects Desktop 3.17.2. The notices are a conservative upstream
+runtime lock selects Desktop 3.18.0. The notices are a conservative upstream
 inventory, not proof that the extracted binary was built from that exact commit
 or that every listed component is included in this npm package. Review artifact
 contents and applicable terms when updating the runtime.
@@ -41,10 +41,10 @@ patches; the patch report is in `vendor/extraction.json`.
 
 ## Plugin declarations
 
-These are the declarations observed in the Desktop 3.16.3 packages, not a
+These are the declarations observed in the Desktop 3.18.0 packages, not a
 replacement for nested dependency or asset licenses:
 
-Desktop 3.17.2 also includes `zcode-site-plugin` 0.4.2, whose package and plugin
+Desktop 3.18.0 also includes `zcode-site-plugin` 0.5.1, whose package and plugin
 manifests declare MIT. Its bundled `dist/THIRD_PARTY_NOTICES.txt` is retained.
 
 | Package directory | Manifest declaration |

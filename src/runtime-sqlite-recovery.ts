@@ -43,7 +43,7 @@ const orderedWrites = [
   "updateTargetSummaryTitle", "clearTarget", "claimLegacySessionWorkspace",
   "repairLegacyRemoteSessionWorkspace", "repairRemoteSessionPaths", "upsertScriptWorkflowDefinition",
   "createScriptWorkflowRun", "updateScriptWorkflowRun", "createScriptWorkflowActivity",
-  "updateScriptWorkflowActivity", "appendScriptWorkflowEvent", "createSessionTaskLink", "pruneUsage"
+  "updateScriptWorkflowActivity", "appendScriptWorkflowEvent", "createSessionTaskLink"
 ] as const;
 
 interface RuntimeSqliteStore {
@@ -161,7 +161,7 @@ export function installSqliteWriteRecovery(store: RuntimeSqliteStore, options: S
   const specifications = [
     ...sqliteReplayableWrites.map(name => ({ name, retry: true, priority: "conversation" as const })),
     ...usageWrites.map(name => ({ name, retry: true, priority: "usage" as const })),
-    ...orderedWrites.map(name => ({ name, retry: false, priority: name === "pruneUsage" ? "usage" as const : "conversation" as const }))
+    ...orderedWrites.map(name => ({ name, retry: false, priority: "conversation" as const }))
   ];
   const originals = specifications.map(spec => {
     const method = methods[spec.name];
