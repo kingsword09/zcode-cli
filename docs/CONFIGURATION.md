@@ -11,7 +11,7 @@ permissions and other general runtime settings live in the CLI's `setting.json`.
 | File | Purpose |
 | --- | --- |
 | `~/.zcode/cli/setting.json` | MCP servers, hooks, plugins, permissions, network, storage and CLI display settings |
-| `~/.zcode/v2/setting.json` | Existing Desktop language and memory preferences, read without modification |
+| `~/.zcode/v2/setting.json` | Existing Desktop language, memory and reasoning-display preferences, read without modification |
 | `~/.zcode/v2/provider_config.json` | Providers, model metadata overrides and the default model |
 | `~/.zcode/v2/credentials.json` | Credentials persisted by the native runtime |
 
@@ -109,14 +109,18 @@ reported rather than replaced by old settings.
 | `/new` | Reads the current shared default |
 | Resume/restart | Restores the session's model and reasoning options |
 | Language and memory | Reads Desktop `localePreference` / `memoryEnabled`; explicit CLI settings override these values |
+| TUI reasoning text | Reads and updates Desktop `messageStreamShowReasoning` from `/settings` |
 | Theme, terminal layout, copy-on-select and notifications | CLI `setting.json` |
 | MCP servers | CLI `setting.json` → `mcp.servers`; [MCP precedence](#project-settings-and-plugins) applies to project and plugin servers |
 | Tool permissions, retries, stream timeout, hooks, plugins and other runtime settings | CLI `setting.json`, with native project/environment precedence |
 | Update cache, diagnostic logs and migration state | Operational files beneath the CLI directory |
 
-The CLI does not add keys to Desktop's `setting.json`. Notification and display
-changes write only the CLI file. Shared preferences are applied while loading
-runtime settings, not copied into CLI settings during unrelated updates.
+The CLI does not add CLI-specific keys to Desktop's `setting.json`. Notification
+and CLI-only display changes write only the CLI file. `/settings` updates the
+shared Desktop `messageStreamShowReasoning` preference, so the CLI and Desktop
+use the same saved value. When enabled, the interactive CLI TUI shows all
+reasoning text; when disabled, it keeps the first thought in each turn visible.
+It does not change model reasoning effort or machine-readable headless output.
 
 ## MCP servers
 

@@ -4,6 +4,7 @@ import { constants as osConstants } from "node:os";
 import { basename } from "node:path";
 
 import { missingCodingPlanKey } from "../../../src/prompt-preflight.ts";
+import { writeTuiShowReasoning } from "../../../src/runtime-config-bridge.ts";
 import { loadTuiStartupOptions } from "./startup.ts";
 import { preflightSubmission } from "./prompt-preflight.ts";
 import {
@@ -676,6 +677,9 @@ class ZCodeTui {
   private recentSteerCommit?: { at: number; turnEpoch: number };
   private currentThinking?: ThinkingView;
   private currentThinkingPartId?: string;
+  private currentTurnHasReasoning = false;
+  private currentTurnReasoningPartId?: string;
+  private currentTurnReasoningMessageId?: string;
   private readonly presentationRegistry = new TurnPresentationRegistry<ToolViewState>();
   private readonly thinkingParts = this.presentationRegistry.thinkingParts;
   private readonly protocolPartViews = this.presentationRegistry.protocolPartViews;
@@ -699,6 +703,7 @@ class ZCodeTui {
   private terminalFocus: TerminalFocusState = "unknown";
   private copyOnSelect = true;
   private thoughtLevel?: string;
+  private showReasoning: boolean;
   private modelOptions: unknown[];
   private effortOptions: unknown[];
   private lastAssistantText = "";
@@ -792,6 +797,7 @@ class ZCodeTui {
     this.planEnabled = options.initialPlanEnabled ?? false;
     this.model = modelLabel(options.initialModel);
     this.thoughtLevel = options.initialThoughtLevel;
+    this.showReasoning = options.showReasoning ?? true;
     this.modelOptions = [...(options.modelOptions ?? [])];
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.loginRequired = options.loginRequired === true;
@@ -1021,6 +1027,33 @@ class ZCodeTui {
   private setCopyOnSelect(enabled: boolean): void {
     this.copyOnSelect = enabled;
     this.fullscreenAltScreen?.setCopyOnSelect(enabled);
+  }
+
+  private setShowReasoning(enabled: boolean): void {
+    this.showReasoning = enabled;
+  }
+
+  private resetTurnReasoningVisibility(): void {
+    this.currentTurnHasReasoning = false;
+    this.currentTurnReasoningPartId = undefined;
+    this.currentTurnReasoningMessageId = undefined;
+  }
+
+  private shouldShowCurrentTurnReasoning(partId?: string, messageId?: string): boolean {
+    if (!this.currentTurnHasReasoning) {
+      this.currentTurnHasReasoning = true;
+      this.currentTurnReasoningPartId = partId;
+      this.currentTurnReasoningMessageId = messageId;
+      return true;
+    }
+    if (this.showReasoning) return true;
+    if (this.currentTurnReasoningPartId) return partId === this.currentTurnReasoningPartId;
+    if (partId && this.currentTurnReasoningMessageId && messageId === this.currentTurnReasoningMessageId) {
+      this.currentTurnReasoningPartId = partId;
+      return true;
+    }
+    if (this.currentTurnReasoningMessageId) return messageId === this.currentTurnReasoningMessageId;
+    return !partId && !messageId && this.currentThinking !== undefined;
   }
 
   /**
@@ -2820,7 +2853,7 @@ class ZCodeTui {
     }
 
     if (part.type === "thought") {
-      if (!part.partId) return;
+      if (!part.partId || !this.shouldShowCurrentTurnReasoning(part.partId, part.messageId)) return;
       let view = this.thinkingParts.get(part.partId);
       if (!view) {
         view = new ThinkingView(this.theme);
@@ -2956,6 +2989,7 @@ class ZCodeTui {
 
   private beginTurn(prompt?: string): void {
     this.completeThinking();
+    this.resetTurnReasoningVisibility();
     this.presentationRegistry.beginTurn();
     this.modelStatusBlockId = `${modelStatusBlockIdPrefix}_${this.turnEpoch}`;
     this.currentThinking = undefined;
@@ -2991,6 +3025,7 @@ class ZCodeTui {
     this.assistantStream.clear();
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
+    this.resetTurnReasoningVisibility();
     this.backgroundCoordinatorMessageIds.clear();
     this.presentationRegistry.clear();
     this.turnDiffs.clear();
@@ -3000,6 +3035,7 @@ class ZCodeTui {
   }
 
   private appendThinking(delta: string, partId?: string, messageId?: string): void {
+    if (!this.shouldShowCurrentTurnReasoning(partId, messageId)) return;
     if (delta.trim()) this.enterSessionRail();
     if (partId) {
       let view = this.thinkingParts.get(partId);
@@ -3441,6 +3477,7 @@ class ZCodeTui {
   }
 
   private restoreTranscript(messages: RestoredMessage[]): void {
+    this.resetTurnReasoningVisibility();
     let firstUserMessageText: string | undefined;
     let lastAssistantModel: string | undefined;
     for (const message of messages) {
@@ -3449,6 +3486,7 @@ class ZCodeTui {
       this.currentToolGroupMessageId = undefined;
       this.assistantStream.breakSegment();
       if (message.role === "user") {
+        this.resetTurnReasoningVisibility();
         const text = message.parts.map((part) => part.type === "text" || part.type === "file" ? part.text : "")
           .filter(Boolean)
           .join("\n");
@@ -3506,6 +3544,7 @@ class ZCodeTui {
       return;
     }
     if (part.type === "thought") {
+      if (!this.shouldShowCurrentTurnReasoning(part.partId, messageId)) return;
       if (part.partId) {
         this.upsertProtocolPart(identifiedPart);
         this.completeThinking(part.partId);
@@ -4333,6 +4372,11 @@ class ZCodeTui {
               : `Current: ${this.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"}`
           },
           {
+            value: "reasoning-text",
+            label: "Reasoning text",
+            description: `Current: ${this.showReasoning ? "All thoughts" : "First thought per turn"} · shared with Desktop`
+          },
+          {
             value: "copy-on-select",
             label: "Fullscreen copy on select",
             description: `Current: ${this.copyOnSelect ? "Enabled" : "Disabled"}`
@@ -4386,8 +4430,63 @@ class ZCodeTui {
         continue;
       }
 
-      if (setting.value === "copy-on-select") {
+      if (setting.value === "reasoning-text") {
         selectedSettingIndex = 4;
+        const selected = await this.showChoice({
+          title: "Reasoning text",
+          prompt: "Compare the example output, then choose what appears in each turn.",
+          help: "Up/Down choose · Enter save · Esc back",
+          items: [
+            {
+              value: "shown",
+              label: "Show all thoughts",
+              description: "Keep every thought and the answer in the stream.",
+              preview: new Text([
+                this.theme.muted("Example output"),
+                `${this.theme.muted("◇")} ${this.theme.bold("Thought")}`,
+                this.theme.muted("  Check the input details."),
+                `${this.theme.muted("◇")} ${this.theme.bold("Thought")}`,
+                this.theme.muted("  Verify the edge cases."),
+                `${this.theme.accent("›")} The answer is 42.`,
+              ].join("\n"), 1, 0)
+            },
+            {
+              value: "hidden",
+              label: "Show first thought only",
+              description: "Hide later thoughts; the answer still appears.",
+              preview: new Text([
+                this.theme.muted("Example output"),
+                `${this.theme.muted("◇")} ${this.theme.bold("Thought")}`,
+                this.theme.muted("  Check the input details."),
+                this.theme.muted("  (Later thought omitted)"),
+                `${this.theme.accent("›")} The answer is 42.`,
+              ].join("\n"), 1, 0)
+            }
+          ],
+          selectedIndex: this.showReasoning ? 0 : 1
+        });
+        if (!selected) {
+          feedback = "No changes · Esc closes settings";
+          continue;
+        }
+        const next = selected.value === "shown";
+        if (next === this.showReasoning) {
+          feedback = "Reasoning text setting unchanged";
+          continue;
+        }
+        try {
+          await writeTuiShowReasoning(next);
+          this.setShowReasoning(next);
+          feedback = `${next ? "All reasoning text shown" : "First thought per turn shown"} · saved to shared Desktop settings`;
+        } catch (error) {
+          this.addNotice(error instanceof Error ? error.message : String(error), "error");
+          feedback = "Could not save the setting · select it to retry";
+        }
+        continue;
+      }
+
+      if (setting.value === "copy-on-select") {
+        selectedSettingIndex = 5;
         const selected = await this.showChoice({
           title: "Fullscreen copy on select",
           prompt: "Only applies to fullscreen mode. Releasing a mouse selection copies it to the clipboard.",

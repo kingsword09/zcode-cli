@@ -138,6 +138,7 @@ export interface TuiOptions extends RuntimeAdapter {
   initialPlanEnabled?: boolean;
   initialModel?: unknown;
   initialThoughtLevel?: string;
+  showReasoning?: boolean;
   initialTuiMode?: "regular" | "fullscreen";
   loginRequired?: boolean;
   locale?: string;
