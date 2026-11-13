@@ -91,17 +91,16 @@ CLI 专属字段迁移到 `~/.zcode/cli/setting.json`，省略 provider、main/l
 | `/new` | 读取当前共享默认模型 |
 | 恢复会话／重启 | 恢复该会话保存的模型和推理选项 |
 | 语言与记忆 | 读取桌面端 `localePreference`／`memoryEnabled`，显式 CLI 设置优先 |
-| TUI 思考文本 | 读取桌面端 `messageStreamShowReasoning`；CLI `ui.showReasoning` 可覆盖 |
+| TUI 思考文本 | 从 `/settings` 读取和更新桌面端 `messageStreamShowReasoning` |
 | 主题、终端布局、选中复制、通知 | CLI `setting.json` |
 | MCP 服务器 | CLI `setting.json` → `mcp.servers`；项目与插件服务器的合并规则见 [项目配置与插件](#项目配置与插件) |
 | 工具权限、重试、流超时、hooks、插件等运行设置 | CLI `setting.json`，保留原生项目和环境配置优先级 |
 | 更新缓存、诊断日志、迁移状态 | CLI 目录下的运行文件 |
 
-CLI 不向桌面端的 `setting.json` 增加字段。通知和显示设置只写 CLI 文件。
-共享偏好在加载 runtime 设置时生效，不会因修改其他 CLI 选项而被复制进 CLI 设置。
-桌面端的思考文本开关只控制交互式 TUI 是否显示思考文本，不改变模型推理强度，也不影响
-机器可读的无头输出。可在 `~/.zcode/cli/setting.json` 中将 `ui.showReasoning` 设为 `true` 或
-`false`，覆盖桌面端偏好。
+CLI 不向桌面端的 `setting.json` 写入 CLI 专属字段。通知和 CLI 专属显示设置只写 CLI 文件；
+`/settings` 中的思考文本选项会直接更新桌面端共享的 `messageStreamShowReasoning`，让 CLI 与
+桌面端使用同一个保存值。该偏好只控制交互式 TUI 是否显示思考文本，不改变模型推理强度，也不影响
+机器可读的无头输出。
 
 ## MCP 服务器
 

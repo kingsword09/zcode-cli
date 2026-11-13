@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { cliSettingsPath, legacyCliConfigPath, providerConfigPath, providerMigrationMarkerPath, readDesktopSettings } from "./config-paths.ts";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
+import { cliSettingsPath, desktopSettingsPath, legacyCliConfigPath, providerConfigPath, providerMigrationMarkerPath, readDesktopSettings } from "./config-paths.ts";
 
 export { assertSessionModelReady, readSessionModelState } from "./session-model-recovery.ts";
 export { assertResumableSession, ensureSessionForTitle, listSessionsForPicker, readSessionDatabasePath, readSessionResumeTarget } from "./runtime-session-lifecycle.ts";
@@ -23,17 +24,37 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 export function readTuiShowReasoning(env: NodeJS.ProcessEnv = process.env): boolean {
-  let cliSettings: Record<string, unknown> | undefined;
-  try {
-    cliSettings = record(JSON.parse(readFileSync(cliSettingsPath(env), "utf8")));
-  } catch {
-    cliSettings = undefined;
-  }
-  const cliPreference = record(cliSettings?.ui)?.showReasoning;
-  if (typeof cliPreference === "boolean") return cliPreference;
-  if (env.ZCODE_CLI_SETTINGS_FILE?.trim()) return true;
   const desktopPreference = readDesktopSettings(env).messageStreamShowReasoning;
   return typeof desktopPreference === "boolean" ? desktopPreference : true;
+}
+
+export async function writeTuiShowReasoning(value: boolean, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const filePath = desktopSettingsPath(env);
+  let settings: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(await readFile(filePath, "utf8"));
+    const existing = record(parsed);
+    if (!existing) throw new Error("Desktop setting.json must contain an object.");
+    settings = existing;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error("Unable to read Desktop setting.json; the file was left unchanged.", { cause: error });
+    }
+  }
+
+  const directory = dirname(filePath);
+  const temporaryPath = join(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify({ ...settings, messageStreamShowReasoning: value }, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600
+    });
+    await rename(temporaryPath, filePath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => {});
+    throw new Error("Unable to save Desktop reasoning visibility; the setting was left unchanged.", { cause: error });
+  }
 }
 
 /** Desktop preferences supply defaults; explicit CLI and project settings still win. */

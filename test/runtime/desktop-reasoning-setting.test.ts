@@ -2,9 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { readTuiShowReasoning } from "../../src/runtime-config-bridge.ts";
+import { readTuiShowReasoning, writeTuiShowReasoning } from "../../src/runtime-config-bridge.ts";
 
-test("Desktop reasoning visibility supplies the CLI default and explicit CLI preference wins", async () => {
+test("CLI reasoning visibility follows the shared Desktop preference", async () => {
   const home = await mkdtemp(join(tmpdir(), "zcode-reasoning-setting-"));
   const env = { ...process.env, HOME: home };
   const desktopFile = join(home, ".zcode", "v2", "setting.json");
@@ -19,14 +19,19 @@ test("Desktop reasoning visibility supplies the CLI default and explicit CLI pre
     expect(readTuiShowReasoning(env)).toBe(false);
 
     await put(cliFile, { ui: { showReasoning: true } });
-    expect(readTuiShowReasoning(env)).toBe(true);
-
-    await put(desktopFile, { messageStreamShowReasoning: true });
-    await put(cliFile, { ui: { showReasoning: false } });
     expect(readTuiShowReasoning(env)).toBe(false);
 
-    await put(cliFile, {});
-    expect(readTuiShowReasoning({ ...env, ZCODE_CLI_SETTINGS_FILE: join(home, "isolated.json") })).toBe(true);
+    await writeTuiShowReasoning(true, env);
+    expect(readTuiShowReasoning(env)).toBe(true);
+    expect(JSON.parse(await Bun.file(desktopFile).text())).toEqual({ messageStreamShowReasoning: true });
+
+    await writeFile(desktopFile, JSON.stringify({ messageStreamShowReasoning: false, localePreference: "en-US" }));
+    await writeTuiShowReasoning(true, { ...env, ZCODE_CLI_SETTINGS_FILE: join(home, "isolated.json") });
+    expect(JSON.parse(await Bun.file(desktopFile).text())).toEqual({ messageStreamShowReasoning: true, localePreference: "en-US" });
+
+    await writeFile(desktopFile, "{");
+    await expect(writeTuiShowReasoning(false, env)).rejects.toThrow("Unable to read Desktop setting.json");
+    expect(await Bun.file(desktopFile).text()).toBe("{");
   } finally {
     await rm(home, { recursive: true, force: true });
   }

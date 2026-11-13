@@ -4,6 +4,7 @@ import { constants as osConstants } from "node:os";
 import { basename } from "node:path";
 
 import { missingCodingPlanKey } from "../../../src/prompt-preflight.ts";
+import { writeTuiShowReasoning } from "../../../src/runtime-config-bridge.ts";
 import { loadTuiStartupOptions } from "./startup.ts";
 import { preflightSubmission } from "./prompt-preflight.ts";
 import {
@@ -676,6 +677,7 @@ class ZCodeTui {
   private recentSteerCommit?: { at: number; turnEpoch: number };
   private currentThinking?: ThinkingView;
   private currentThinkingPartId?: string;
+  private readonly anonymousThinkingBlocks = new Set<string>();
   private readonly presentationRegistry = new TurnPresentationRegistry<ToolViewState>();
   private readonly thinkingParts = this.presentationRegistry.thinkingParts;
   private readonly protocolPartViews = this.presentationRegistry.protocolPartViews;
@@ -699,7 +701,7 @@ class ZCodeTui {
   private terminalFocus: TerminalFocusState = "unknown";
   private copyOnSelect = true;
   private thoughtLevel?: string;
-  private readonly showReasoning: boolean;
+  private showReasoning: boolean;
   private modelOptions: unknown[];
   private effortOptions: unknown[];
   private lastAssistantText = "";
@@ -1023,6 +1025,30 @@ class ZCodeTui {
   private setCopyOnSelect(enabled: boolean): void {
     this.copyOnSelect = enabled;
     this.fullscreenAltScreen?.setCopyOnSelect(enabled);
+  }
+
+  private setShowReasoning(enabled: boolean): void {
+    this.showReasoning = enabled;
+    if (enabled) return;
+    let changed = false;
+    for (const [partId, thinking] of [...this.thinkingParts]) {
+      this.thinkingParts.delete(partId);
+      this.protocolPartKinds.delete(partId);
+      this.protocolPartMessages.delete(partId);
+      this.protocolPartViews.delete(partId);
+      changed = this.transcript.removeBlock(partId) || changed;
+      if (this.currentThinking === thinking) {
+        this.currentThinking = undefined;
+        this.currentThinkingPartId = undefined;
+      }
+    }
+    for (const blockId of this.anonymousThinkingBlocks) {
+      changed = this.transcript.removeBlock(blockId) || changed;
+    }
+    this.anonymousThinkingBlocks.clear();
+    this.currentThinking = undefined;
+    this.currentThinkingPartId = undefined;
+    if (changed) this.ui.requestRender();
   }
 
   /**
@@ -2993,6 +3019,7 @@ class ZCodeTui {
     this.assistantStream.clear();
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
+    this.anonymousThinkingBlocks.clear();
     this.backgroundCoordinatorMessageIds.clear();
     this.presentationRegistry.clear();
     this.turnDiffs.clear();
@@ -3018,7 +3045,7 @@ class ZCodeTui {
     } else if (!this.currentThinking || this.currentThinkingPartId) {
       this.currentThinking = new ThinkingView(this.theme);
       this.currentThinkingPartId = undefined;
-      this.transcript.addBlock(this.currentThinking, { kind: "thinking", messageId });
+      this.anonymousThinkingBlocks.add(this.transcript.addBlock(this.currentThinking, { kind: "thinking", messageId }));
     }
     this.currentThinking.append(delta);
   }
@@ -4337,6 +4364,11 @@ class ZCodeTui {
               : `Current: ${this.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"}`
           },
           {
+            value: "reasoning-text",
+            label: "Reasoning text",
+            description: `Current: ${this.showReasoning ? "Shown" : "Hidden"} · shared with Desktop`
+          },
+          {
             value: "copy-on-select",
             label: "Fullscreen copy on select",
             description: `Current: ${this.copyOnSelect ? "Enabled" : "Disabled"}`
@@ -4390,8 +4422,40 @@ class ZCodeTui {
         continue;
       }
 
-      if (setting.value === "copy-on-select") {
+      if (setting.value === "reasoning-text") {
         selectedSettingIndex = 4;
+        const selected = await this.showChoice({
+          title: "Reasoning text",
+          prompt: "Choose the shared reasoning text visibility preference.",
+          help: "Up/Down choose · Enter save · Esc back",
+          items: [
+            { value: "shown", label: "Shown", description: "Display reasoning text" },
+            { value: "hidden", label: "Hidden", description: "Hide reasoning text but keep thinking activity visible" }
+          ],
+          selectedIndex: this.showReasoning ? 0 : 1
+        });
+        if (!selected) {
+          feedback = "No changes · Esc closes settings";
+          continue;
+        }
+        const next = selected.value === "shown";
+        if (next === this.showReasoning) {
+          feedback = "Reasoning text setting unchanged";
+          continue;
+        }
+        try {
+          await writeTuiShowReasoning(next);
+          this.setShowReasoning(next);
+          feedback = `Reasoning text ${next ? "shown" : "hidden"} · saved to shared Desktop settings`;
+        } catch (error) {
+          this.addNotice(error instanceof Error ? error.message : String(error), "error");
+          feedback = "Could not save the setting · select it to retry";
+        }
+        continue;
+      }
+
+      if (setting.value === "copy-on-select") {
+        selectedSettingIndex = 5;
         const selected = await this.showChoice({
           title: "Fullscreen copy on select",
           prompt: "Only applies to fullscreen mode. Releasing a mouse selection copies it to the clipboard.",
