@@ -4434,11 +4434,34 @@ class ZCodeTui {
         selectedSettingIndex = 4;
         const selected = await this.showChoice({
           title: "Reasoning text",
-          prompt: "Choose how much reasoning content appears in the stream.",
+          prompt: "Compare the example output, then choose what appears in each turn.",
           help: "Up/Down choose · Enter save · Esc back",
           items: [
-            { value: "shown", label: "Shown", description: "Display all reasoning content" },
-            { value: "hidden", label: "Hidden", description: "Display only the first thought in each turn" }
+            {
+              value: "shown",
+              label: "Show all thoughts",
+              description: "Keep every thought and the answer in the stream.",
+              preview: new Text([
+                this.theme.muted("Example output"),
+                `${this.theme.muted("◇")} ${this.theme.bold("Thought")}`,
+                this.theme.muted("  Check the input details."),
+                `${this.theme.muted("◇")} ${this.theme.bold("Thought")}`,
+                this.theme.muted("  Verify the edge cases."),
+                `${this.theme.accent("›")} The answer is 42.`,
+              ].join("\n"), 1, 0)
+            },
+            {
+              value: "hidden",
+              label: "Show first thought only",
+              description: "Hide later thoughts; the answer still appears.",
+              preview: new Text([
+                this.theme.muted("Example output"),
+                `${this.theme.muted("◇")} ${this.theme.bold("Thought")}`,
+                this.theme.muted("  Check the input details."),
+                this.theme.muted("  (Later thought omitted)"),
+                `${this.theme.accent("›")} The answer is 42.`,
+              ].join("\n"), 1, 0)
+            }
           ],
           selectedIndex: this.showReasoning ? 0 : 1
         });
