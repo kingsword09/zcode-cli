@@ -118,9 +118,9 @@ reported rather than replaced by old settings.
 The CLI does not add CLI-specific keys to Desktop's `setting.json`. Notification
 and CLI-only display changes write only the CLI file. `/settings` updates the
 shared Desktop `messageStreamShowReasoning` preference, so the CLI and Desktop
-use the same saved value. This preference only hides or shows reasoning text in
-the interactive CLI TUI; it does not change model reasoning effort or
-machine-readable headless output.
+use the same saved value. When enabled, the interactive CLI TUI shows all
+reasoning text; when disabled, it keeps the first thought in each turn visible.
+It does not change model reasoning effort or machine-readable headless output.
 
 ## MCP servers
 

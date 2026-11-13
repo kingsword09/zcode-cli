@@ -99,8 +99,8 @@ CLI 专属字段迁移到 `~/.zcode/cli/setting.json`，省略 provider、main/l
 
 CLI 不向桌面端的 `setting.json` 写入 CLI 专属字段。通知和 CLI 专属显示设置只写 CLI 文件；
 `/settings` 中的思考文本选项会直接更新桌面端共享的 `messageStreamShowReasoning`，让 CLI 与
-桌面端使用同一个保存值。该偏好只控制交互式 TUI 是否显示思考文本，不改变模型推理强度，也不影响
-机器可读的无头输出。
+桌面端使用同一个保存值。开启时交互式 TUI 显示全部思考内容；关闭时每轮仍显示第一条思考，隐藏后续
+思考内容。该偏好不改变模型推理强度，也不影响机器可读的无头输出。
 
 ## MCP 服务器
 

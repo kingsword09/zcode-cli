@@ -677,7 +677,9 @@ class ZCodeTui {
   private recentSteerCommit?: { at: number; turnEpoch: number };
   private currentThinking?: ThinkingView;
   private currentThinkingPartId?: string;
-  private readonly anonymousThinkingBlocks = new Set<string>();
+  private currentTurnHasReasoning = false;
+  private currentTurnReasoningPartId?: string;
+  private currentTurnReasoningMessageId?: string;
   private readonly presentationRegistry = new TurnPresentationRegistry<ToolViewState>();
   private readonly thinkingParts = this.presentationRegistry.thinkingParts;
   private readonly protocolPartViews = this.presentationRegistry.protocolPartViews;
@@ -1029,26 +1031,29 @@ class ZCodeTui {
 
   private setShowReasoning(enabled: boolean): void {
     this.showReasoning = enabled;
-    if (enabled) return;
-    let changed = false;
-    for (const [partId, thinking] of [...this.thinkingParts]) {
-      this.thinkingParts.delete(partId);
-      this.protocolPartKinds.delete(partId);
-      this.protocolPartMessages.delete(partId);
-      this.protocolPartViews.delete(partId);
-      changed = this.transcript.removeBlock(partId) || changed;
-      if (this.currentThinking === thinking) {
-        this.currentThinking = undefined;
-        this.currentThinkingPartId = undefined;
-      }
+  }
+
+  private resetTurnReasoningVisibility(): void {
+    this.currentTurnHasReasoning = false;
+    this.currentTurnReasoningPartId = undefined;
+    this.currentTurnReasoningMessageId = undefined;
+  }
+
+  private shouldShowCurrentTurnReasoning(partId?: string, messageId?: string): boolean {
+    if (!this.currentTurnHasReasoning) {
+      this.currentTurnHasReasoning = true;
+      this.currentTurnReasoningPartId = partId;
+      this.currentTurnReasoningMessageId = messageId;
+      return true;
     }
-    for (const blockId of this.anonymousThinkingBlocks) {
-      changed = this.transcript.removeBlock(blockId) || changed;
+    if (this.showReasoning) return true;
+    if (this.currentTurnReasoningPartId) return partId === this.currentTurnReasoningPartId;
+    if (partId && this.currentTurnReasoningMessageId && messageId === this.currentTurnReasoningMessageId) {
+      this.currentTurnReasoningPartId = partId;
+      return true;
     }
-    this.anonymousThinkingBlocks.clear();
-    this.currentThinking = undefined;
-    this.currentThinkingPartId = undefined;
-    if (changed) this.ui.requestRender();
+    if (this.currentTurnReasoningMessageId) return messageId === this.currentTurnReasoningMessageId;
+    return !partId && !messageId && this.currentThinking !== undefined;
   }
 
   /**
@@ -2848,7 +2853,7 @@ class ZCodeTui {
     }
 
     if (part.type === "thought") {
-      if (!this.showReasoning || !part.partId) return;
+      if (!part.partId || !this.shouldShowCurrentTurnReasoning(part.partId, part.messageId)) return;
       let view = this.thinkingParts.get(part.partId);
       if (!view) {
         view = new ThinkingView(this.theme);
@@ -2984,6 +2989,7 @@ class ZCodeTui {
 
   private beginTurn(prompt?: string): void {
     this.completeThinking();
+    this.resetTurnReasoningVisibility();
     this.presentationRegistry.beginTurn();
     this.modelStatusBlockId = `${modelStatusBlockIdPrefix}_${this.turnEpoch}`;
     this.currentThinking = undefined;
@@ -3019,7 +3025,7 @@ class ZCodeTui {
     this.assistantStream.clear();
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
-    this.anonymousThinkingBlocks.clear();
+    this.resetTurnReasoningVisibility();
     this.backgroundCoordinatorMessageIds.clear();
     this.presentationRegistry.clear();
     this.turnDiffs.clear();
@@ -3029,7 +3035,7 @@ class ZCodeTui {
   }
 
   private appendThinking(delta: string, partId?: string, messageId?: string): void {
-    if (!this.showReasoning) return;
+    if (!this.shouldShowCurrentTurnReasoning(partId, messageId)) return;
     if (delta.trim()) this.enterSessionRail();
     if (partId) {
       let view = this.thinkingParts.get(partId);
@@ -3045,7 +3051,7 @@ class ZCodeTui {
     } else if (!this.currentThinking || this.currentThinkingPartId) {
       this.currentThinking = new ThinkingView(this.theme);
       this.currentThinkingPartId = undefined;
-      this.anonymousThinkingBlocks.add(this.transcript.addBlock(this.currentThinking, { kind: "thinking", messageId }));
+      this.transcript.addBlock(this.currentThinking, { kind: "thinking", messageId });
     }
     this.currentThinking.append(delta);
   }
@@ -3471,6 +3477,7 @@ class ZCodeTui {
   }
 
   private restoreTranscript(messages: RestoredMessage[]): void {
+    this.resetTurnReasoningVisibility();
     let firstUserMessageText: string | undefined;
     let lastAssistantModel: string | undefined;
     for (const message of messages) {
@@ -3479,6 +3486,7 @@ class ZCodeTui {
       this.currentToolGroupMessageId = undefined;
       this.assistantStream.breakSegment();
       if (message.role === "user") {
+        this.resetTurnReasoningVisibility();
         const text = message.parts.map((part) => part.type === "text" || part.type === "file" ? part.text : "")
           .filter(Boolean)
           .join("\n");
@@ -3520,7 +3528,6 @@ class ZCodeTui {
   }
 
   private restorePart(part: RestoredPart, role: "assistant" | "system", fallbackMessageId?: string): void {
-    if (part.type === "thought" && !this.showReasoning) return;
     const messageId = part.messageId ?? fallbackMessageId;
     const identifiedPart = messageId && !part.messageId ? { ...part, messageId } as RestoredPart : part;
     if (part.type === "text") {
@@ -3537,6 +3544,7 @@ class ZCodeTui {
       return;
     }
     if (part.type === "thought") {
+      if (!this.shouldShowCurrentTurnReasoning(part.partId, messageId)) return;
       if (part.partId) {
         this.upsertProtocolPart(identifiedPart);
         this.completeThinking(part.partId);
@@ -4366,7 +4374,7 @@ class ZCodeTui {
           {
             value: "reasoning-text",
             label: "Reasoning text",
-            description: `Current: ${this.showReasoning ? "Shown" : "Hidden"} · shared with Desktop`
+            description: `Current: ${this.showReasoning ? "All thoughts" : "First thought per turn"} · shared with Desktop`
           },
           {
             value: "copy-on-select",
@@ -4426,11 +4434,11 @@ class ZCodeTui {
         selectedSettingIndex = 4;
         const selected = await this.showChoice({
           title: "Reasoning text",
-          prompt: "Choose the shared reasoning text visibility preference.",
+          prompt: "Choose how much reasoning content appears in the stream.",
           help: "Up/Down choose · Enter save · Esc back",
           items: [
-            { value: "shown", label: "Shown", description: "Display reasoning text" },
-            { value: "hidden", label: "Hidden", description: "Hide reasoning text but keep thinking activity visible" }
+            { value: "shown", label: "Shown", description: "Display all reasoning content" },
+            { value: "hidden", label: "Hidden", description: "Display only the first thought in each turn" }
           ],
           selectedIndex: this.showReasoning ? 0 : 1
         });
@@ -4446,7 +4454,7 @@ class ZCodeTui {
         try {
           await writeTuiShowReasoning(next);
           this.setShowReasoning(next);
-          feedback = `Reasoning text ${next ? "shown" : "hidden"} · saved to shared Desktop settings`;
+          feedback = `${next ? "All reasoning text shown" : "First thought per turn shown"} · saved to shared Desktop settings`;
         } catch (error) {
           this.addNotice(error instanceof Error ? error.message : String(error), "error");
           feedback = "Could not save the setting · select it to retry";
