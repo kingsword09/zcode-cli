@@ -38,6 +38,31 @@ Record the PID and exit status in your supervisor if you need reliable
 cancellation and completion tracking. Configure permissions deliberately;
 headless execution does not provide the TUI's interactive approval experience.
 
+## macOS keychain over SSH
+
+Headless mode does not require a separate credential secret when the macOS
+keychain is available. If credential access fails because the keychain requires
+user interaction, the CLI pauses that credential operation and runs the system
+`security unlock-keychain` tool in the controlling terminal. Enter the keychain
+password at its hidden prompt. After a successful unlock, the same process
+retries the pending credential operation and continues; restarting the CLI or
+logging in again is not required. Existing credentials and encryption keys are
+not replaced, and completed tasks or tool calls are not replayed.
+
+Use an interactive SSH terminal (`ssh -t user@host`) for this flow. The password
+is handled by the system tool, not passed in arguments or environment variables,
+and prompts go to `/dev/tty`, not task stdin or JSON/JSONL stdout. Concurrent
+credential requests share one unlock attempt. A failed unlock or persistent
+keychain item access-control failure stops the operation rather than prompting
+indefinitely. With a raw-mode terminal UI, unlock in a separate terminal and
+retry the operation in the existing session instead.
+
+Without a controlling terminal (for example, an unattended service), the CLI
+cannot prompt. Unlock the keychain in an appropriate interactive session or
+configure a stable `ZCODE_CREDENTIAL_SECRET_FILE` before login. Changing secret
+sources does not decrypt or migrate existing `enc:v2:os:` credentials; keep the
+original keychain accessible or use a separate data directory and log in again.
+
 ## Regression coverage and limits
 
 Local HTTP fixtures and real Node child processes exercise:

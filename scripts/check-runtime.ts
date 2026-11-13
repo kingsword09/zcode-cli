@@ -22,6 +22,7 @@ import {
   hasRuntimeCliHelpContract,
   hasRuntimeHttpNoContentGuard,
   hasRuntimeHeadlessLifecycle,
+  hasRuntimeKeychainRecovery,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeResolvedContextWindow,
   hasRuntimeRecursiveWorkspacePaths,
@@ -86,7 +87,8 @@ if (packageManifest.dependencies?.["playwright-core"] !== "1.59.1"
 }
 const keyring = await import("@napi-rs/keyring");
 if (packageManifest.dependencies?.["@napi-rs/keyring"] !== "2.1.2"
-  || typeof keyring.AsyncEntry !== "function") {
+  || typeof keyring.AsyncEntry !== "function"
+  || typeof keyring.AsyncEntry.prototype.getSecret !== "function") {
   throw new Error("The runtime-required @napi-rs/keyring dependency is missing or incompatible.");
 }
 
@@ -103,6 +105,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeHttpNoContentGuard(runtimeSource)
   || patchRuntimeHeadlessLifecycle(runtimeSource) !== runtimeSource
   || !hasRuntimeHeadlessLifecycle(runtimeSource)
+  || !hasRuntimeKeychainRecovery(runtimeSource)
   || patchRuntimeNetworkRetryClassification(runtimeSource) !== runtimeSource
   || !hasRuntimeNetworkRetryGuard(runtimeSource)
   || patchRuntimeSqliteBusyTimeout(runtimeSource) !== runtimeSource

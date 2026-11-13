@@ -16,6 +16,8 @@ import { parseReleaseVersion, syncedReleaseVersion } from "./release-version.ts"
 import { markRuntimeModified } from "./runtime-attribution.ts";
 import { hasRuntimeHeadlessLifecycle, patchRuntimeHeadlessLifecycle } from "./runtime-headless-patches.ts";
 export { hasRuntimeHeadlessLifecycle, patchRuntimeHeadlessLifecycle } from "./runtime-headless-patches.ts";
+import { hasRuntimeKeychainRecovery, patchRuntimeKeychainRecovery } from "./runtime-keychain-patches.ts";
+export { hasRuntimeKeychainRecovery, patchRuntimeKeychainRecovery } from "./runtime-keychain-patches.ts";
 import { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 export { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 import { hasRuntimeBigmodelOAuth, hasRuntimeNativePollingOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
@@ -2013,6 +2015,10 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
   {
     id: "shared-oauth", requirement: "required", apply: patchRuntimeSharedOAuth,
     verify: hasRuntimeSharedOAuth
+  },
+  {
+    id: "terminal-keychain-recovery", requirement: "required", apply: patchRuntimeKeychainRecovery,
+    verify: hasRuntimeKeychainRecovery
   },
   {
     id: "start-plan-standalone", requirement: "optional", apply: patchRuntimeStartPlan,

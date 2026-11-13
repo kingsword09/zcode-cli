@@ -291,6 +291,12 @@ Runtime 使用操作系统凭据仓库保护凭据。无可用系统凭据仓库
 `ZCODE_CREDENTIAL_SECRET` 或可读取的 `ZCODE_CREDENTIAL_SECRET_FILE`（文件长度 32–4096 字节），
 两者不可同时设置。登录及后续请求应使用相同的密钥来源，否则已有凭据无法解密。
 
+macOS SSH 会话中，钥匙串锁定不要求重启 CLI。当凭据访问需要用户交互且存在控制终端时，
+CLI 会调用系统的 `security unlock-keychain`，通过隐藏输入提示读取密码；解锁后在原进程中
+只重试待完成的凭据操作，不更换加密密钥，也不重放已完成的任务。无人值守或无交互终端时的
+限制见[无头模式指南](HEADLESS.md#macos-keychain-over-ssh)。配置新的托管密钥不会自动迁移
+已有的系统钥匙串加密凭据。
+
 Start Plan 与 Coding Plan 共用同一次 ZCode OAuth 登录，不需要第二次套餐授权；已有桌面端
 会话也无需再次登录。在 `/model` 中选择 `account:zai-start-plan/<model>` 或
 `account:bigmodel-start-plan/<model>`，也可以通过 `--model` 指定。Start Plan 请求直接使用
