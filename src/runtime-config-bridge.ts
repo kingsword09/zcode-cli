@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { cliSettingsPath, legacyCliConfigPath, providerConfigPath, providerMigrationMarkerPath, readDesktopSettings } from "./config-paths.ts";
@@ -20,6 +20,20 @@ export { withHeadlessPromptLifecycle } from "./runtime-headless-lifecycle.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+export function readTuiShowReasoning(env: NodeJS.ProcessEnv = process.env): boolean {
+  let cliSettings: Record<string, unknown> | undefined;
+  try {
+    cliSettings = record(JSON.parse(readFileSync(cliSettingsPath(env), "utf8")));
+  } catch {
+    cliSettings = undefined;
+  }
+  const cliPreference = record(cliSettings?.ui)?.showReasoning;
+  if (typeof cliPreference === "boolean") return cliPreference;
+  if (env.ZCODE_CLI_SETTINGS_FILE?.trim()) return true;
+  const desktopPreference = readDesktopSettings(env).messageStreamShowReasoning;
+  return typeof desktopPreference === "boolean" ? desktopPreference : true;
 }
 
 /** Desktop preferences supply defaults; explicit CLI and project settings still win. */

@@ -945,6 +945,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   if (!options) throw new Error("ZCode runtime is incompatible with the TUI bridge (runTui options anchor missing).");
   const [optionsAssignment, submitBridge] = options;
   const optionFields: string[] = [];
+  if (!/showReasoning:require\(require\("node:path"\)\.join\(__dirname,"cli-config\.cjs"\)\)\.readTuiShowReasoning\(process\.env\)/u.test(patched)) {
+    optionFields.push(`showReasoning:require(require("node:path").join(__dirname,"cli-config.cjs")).readTuiShowReasoning(process.env)`);
+  }
   if (!/loadSessionTranscript:[A-Za-z_$][\w$]*\.loadSessionTranscript/u.test(patched)) {
     optionFields.push(`loadSessionTranscript:${submitBridge}.loadSessionTranscript`);
   }
@@ -1894,6 +1897,7 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     verify: (runtime) => runtime.includes(".readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ")
       && runtime.includes(".loadSessionContextMessages=async()=>await(await")
       && runtime.includes("projectChildEvents:e=>new ")
+      && runtime.includes("readTuiShowReasoning(process.env)")
   },
   {
     id: "model-catalog-reload",

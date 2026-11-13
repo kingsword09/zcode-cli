@@ -699,6 +699,7 @@ class ZCodeTui {
   private terminalFocus: TerminalFocusState = "unknown";
   private copyOnSelect = true;
   private thoughtLevel?: string;
+  private readonly showReasoning: boolean;
   private modelOptions: unknown[];
   private effortOptions: unknown[];
   private lastAssistantText = "";
@@ -792,6 +793,7 @@ class ZCodeTui {
     this.planEnabled = options.initialPlanEnabled ?? false;
     this.model = modelLabel(options.initialModel);
     this.thoughtLevel = options.initialThoughtLevel;
+    this.showReasoning = options.showReasoning ?? true;
     this.modelOptions = [...(options.modelOptions ?? [])];
     this.effortOptions = [...(options.effortOptions ?? [])];
     this.loginRequired = options.loginRequired === true;
@@ -2820,7 +2822,7 @@ class ZCodeTui {
     }
 
     if (part.type === "thought") {
-      if (!part.partId) return;
+      if (!this.showReasoning || !part.partId) return;
       let view = this.thinkingParts.get(part.partId);
       if (!view) {
         view = new ThinkingView(this.theme);
@@ -3000,6 +3002,7 @@ class ZCodeTui {
   }
 
   private appendThinking(delta: string, partId?: string, messageId?: string): void {
+    if (!this.showReasoning) return;
     if (delta.trim()) this.enterSessionRail();
     if (partId) {
       let view = this.thinkingParts.get(partId);
@@ -3490,6 +3493,7 @@ class ZCodeTui {
   }
 
   private restorePart(part: RestoredPart, role: "assistant" | "system", fallbackMessageId?: string): void {
+    if (part.type === "thought" && !this.showReasoning) return;
     const messageId = part.messageId ?? fallbackMessageId;
     const identifiedPart = messageId && !part.messageId ? { ...part, messageId } as RestoredPart : part;
     if (part.type === "text") {
