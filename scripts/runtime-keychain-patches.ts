@@ -1,4 +1,4 @@
-import { parseExpressionAt, type FunctionExpression } from "acorn";
+import { parseExpressionAt, type CatchClause, type FunctionExpression, type Node, type VariableDeclarator } from "acorn";
 
 const identifier = "[A-Za-z_$][\\w$]*";
 const helper = 'require(require("node:path").join(__dirname,"cli-config.cjs"))';
@@ -16,6 +16,39 @@ function namedFunction(runtime: string, label: string): FunctionExpression {
   const declaration = parseExpressionAt(runtime, declarations[0]!.index!, { ecmaVersion: "latest" });
   if (declaration.type !== "FunctionExpression") incompatible(`${label} signature changed`);
   return declaration;
+}
+
+function keyLookupBoundary(cipher: FunctionExpression, pending: string, unavailable: string): CatchClause {
+  const bindings: VariableDeclarator[] = [];
+  const visit = (node: Node): void => {
+    if (node.type === "VariableDeclarator") {
+      const binding = node as VariableDeclarator;
+      if (binding.id.type === "Identifier" && binding.id.name === pending) bindings.push(binding);
+    }
+    for (const value of Object.values(node)) {
+      for (const child of Array.isArray(value) ? value : [value]) {
+        if (child && typeof child === "object" && typeof child.type === "string") visit(child);
+      }
+    }
+  };
+  visit(cipher.body);
+  if (bindings.length !== 1) incompatible("key lookup binding missing or ambiguous");
+  const initializer = bindings[0]!.init;
+  if (initializer?.type !== "CallExpression" || initializer.arguments.length !== 2) incompatible("key lookup lock changed");
+  const callback = initializer.arguments[1];
+  if (callback?.type !== "ArrowFunctionExpression" || !callback.async || callback.body.type !== "BlockStatement") {
+    incompatible("key lookup callback changed");
+  }
+  const boundaries = callback.body.body.filter(statement => statement.type === "TryStatement");
+  if (boundaries.length !== 1 || boundaries[0]?.type !== "TryStatement") incompatible("key lookup error boundary changed");
+  const boundary = boundaries[0].handler;
+  const failure = boundary?.body.body[0];
+  if (!boundary || boundary.param || boundary.body.body.length !== 1 || failure?.type !== "ThrowStatement"
+    || failure.argument.type !== "CallExpression" || failure.argument.callee.type !== "Identifier"
+    || failure.argument.callee.name !== unavailable || failure.argument.arguments.length !== 0) {
+    incompatible("key lookup error boundary changed");
+  }
+  return boundary;
 }
 
 export function hasRuntimeKeychainRecovery(runtime: string): boolean {
@@ -43,15 +76,13 @@ export function patchRuntimeKeychainRecovery(runtime: string): string {
   const caches = [...cipherSource.matchAll(cachePattern)];
   if (caches.length !== 1) incompatible("key cache failure handler changed");
   const cache = caches[0]!;
-  const failures = [...cipherSource.matchAll(new RegExp(`\\}catch\\{throw (${identifier})\\(\\)\\}\\}\\)`, "gu"))];
-  if (failures.length !== 1) incompatible("key lookup error boundary changed");
-  const failure = failures[0]!;
+  const boundary = keyLookupBoundary(cipher, cache[3]!, methods[2]!);
   const edits = [
     { start: storeReturn.start, end: storeReturn.end, value: `return ${helper}.createRecoverableSystemKeyStore(${methods[1]},${methods[2]})` },
     { start: cipher.start + cache.index!, end: cipher.start + cache.index! + cache[0].length,
       value: `return ${helper}.cacheCredentialKey(${cache[1]},${cache[2]},${cache[3]})` },
-    { start: cipher.start + failure.index!, end: cipher.start + failure.index! + failure[0].length,
-      value: `}catch($zCredentialError){if($zCredentialError?.code==="CREDENTIAL_SECURE_STORAGE_UNAVAILABLE")throw $zCredentialError;throw ${failure[1]}()}})` }
+    { start: boundary.start, end: boundary.end,
+      value: `catch($zCredentialError){if($zCredentialError?.code==="CREDENTIAL_SECURE_STORAGE_UNAVAILABLE")throw $zCredentialError;throw ${methods[2]}()}` }
   ];
   let patched = runtime;
   for (const edit of edits.sort((left, right) => right.start - left.start)) {
