@@ -33,6 +33,7 @@ import { runPluginCommand } from "./plugin-cli.ts";
 import { runTuiWithHerdrStatus } from "./herdr-status.mjs";
 import { missingCodingPlanKey } from "./prompt-preflight.ts";
 import { extractPromptOverrides } from "./prompt-model.ts";
+import { preparePromptEnvironment, resolvePromptEnvironment, type PromptEnvironment } from "./prompt-environment.ts";
 import {
   capabilitiesFromExtractionMetadata,
   type RuntimeCliOptionType
@@ -463,13 +464,11 @@ export async function main(args: string[]): Promise<number> {
     return 0;
   }
 
-  let promptModel: string | undefined;
-  let promptEffort: string | undefined;
+  let promptSelection: PromptEnvironment;
   try {
-    const parsed = extractPromptOverrides(args, readRuntimeCliOptionTypes());
+    const parsed = extractPromptOverrides(args, readRuntimeCliOptionTypes(), Boolean(process.env.ZCODE_MODEL_BASE_URL?.trim()));
     args = parsed.args;
-    promptModel = parsed.model;
-    promptEffort = parsed.effort;
+    promptSelection = resolvePromptEnvironment(parsed);
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
@@ -495,7 +494,7 @@ export async function main(args: string[]): Promise<number> {
   }
 
   const node = resolveNodeExecutable();
-  if (providerMigrationNeeded()) {
+  if (!promptSelection.provider && providerMigrationNeeded()) {
     try {
       await new Promise<void>((resolve, reject) => {
         const child = spawnChild(node, [runtimePath, "--version"], {
@@ -572,8 +571,11 @@ export async function main(args: string[]): Promise<number> {
     return code;
   }
 
+  let preparedPrompt: Awaited<ReturnType<typeof preparePromptEnvironment>> | undefined;
   try {
-    const diagnostic = await readConfiguredModelAccess() ? undefined : await promptPreflight(login.args, process.env, promptModel);
+    preparedPrompt = await preparePromptEnvironment(promptSelection);
+    const promptEnv = { ...process.env, ...preparedPrompt.env };
+    const diagnostic = await readConfiguredModelAccess(promptEnv) ? undefined : await promptPreflight(login.args, promptEnv, promptSelection.model);
     if (diagnostic) {
       console.error(diagnostic);
       return 1;
@@ -581,19 +583,21 @@ export async function main(args: string[]): Promise<number> {
     const runtimeArgs = withDefaultBrowserUse(login.args);
     const startRuntime = () => runRuntime(node, runtimeArgs, {
       ...firstRunSetupEnv(setupPending, runtimeArgs),
-      ...(promptModel ? { ZCODE_CLI_PROMPT_MODEL: promptModel } : {}),
-      ...(promptEffort ? { ZCODE_CLI_PROMPT_EFFORT: promptEffort } : {})
+      ...preparedPrompt.env
     });
     const code = isTuiRuntimeInvocation(runtimeArgs)
       ? await runTuiWithHerdrStatus(startRuntime)
       : await startRuntime();
     if (code === 0 && (args.includes("--help") || args.includes("-h"))) {
-      console.log("\n  --model <provider/model>  Select a model for this --prompt run without changing the saved default.");
+      console.log("\n  --model <provider/model>  Select a model for this --prompt run; with ZCODE_MODEL_BASE_URL, use a raw server model ID.");
       console.log("  --effort <level>          Select the model reasoning effort for this --prompt run; auto keeps the default.");
+      console.log("\n  Headless environment: ZCODE_MODEL, ZCODE_EFFORT; custom endpoint: ZCODE_MODEL_BASE_URL, ZCODE_API_KEY, ZCODE_API_TYPE.");
     }
     return code;
   } catch (error) {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
+  } finally {
+    await preparedPrompt?.dispose();
   }
 }

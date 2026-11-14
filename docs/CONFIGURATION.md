@@ -406,6 +406,13 @@ flow; ciphertext is not an API key.
 
 ## Custom provider
 
+For unattended `--prompt` runs, `ZCODE_MODEL_BASE_URL`, `ZCODE_API_KEY`,
+`ZCODE_MODEL`, `ZCODE_API_TYPE` and `ZCODE_EFFORT` provide a temporary custom
+provider without writing personal settings. See [CI environment
+configuration](HEADLESS.md#environment-configuration-for-ci) for precedence,
+protocol mappings, GitHub Actions setup and security limits. `ZCODE_BASE_URL`
+remains the account service URL, not the inference URL.
+
 Use `provider.example.json` as a reference for a new provider file. Its enabled
 model inherits the upstream catalog; its disabled reference models demonstrate
 all smart-override and manual fields. Fill the empty API key, replace the
