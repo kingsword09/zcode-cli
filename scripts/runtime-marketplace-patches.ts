@@ -1,9 +1,16 @@
-import { parseExpressionAt, type FunctionExpression, type SwitchCase, type SwitchStatement } from "acorn";
+import { parseExpressionAt, type FunctionExpression, type MemberExpression, type Node, type SwitchCase, type SwitchStatement } from "acorn";
 
 const marker = 'Marketplace manifest not found in git repo:';
 
 function incompatible(detail: string): never {
   throw new Error(`ZCode runtime is incompatible with marketplace Git URL recovery (${detail}).`);
+}
+
+function isMember(node: Node, object: string, property: string): boolean {
+  if (node.type !== "MemberExpression") return false;
+  const member = node as MemberExpression;
+  return !member.computed && member.object.type === "Identifier" && member.object.name === object
+    && member.property.type === "Identifier" && member.property.name === property;
 }
 
 function findSwitch(node: FunctionExpression): SwitchStatement[] {
@@ -41,7 +48,22 @@ function inspect(runtime: string) {
   }
   const block = urlCase.consequent[0];
   const branchSource = runtime.slice(block.start, block.end);
-  if (!branchSource.includes("Hwo(") || !branchSource.includes("Hae(")) incompatible("URL manifest loader changed");
+  const [load, result] = block.body.slice(-2);
+  if (load?.type !== "VariableDeclaration" || load.declarations.length !== 1
+    || result?.type !== "ReturnStatement" || result.argument?.type !== "ObjectExpression"
+    || result.argument.properties.length !== 1) incompatible("URL manifest loader changed");
+  const binding = load.declarations[0]!;
+  const manifest = result.argument.properties[0]!;
+  if (binding.id.type !== "Identifier" || binding.init?.type !== "AwaitExpression"
+    || binding.init.argument.type !== "CallExpression" || binding.init.argument.callee.type !== "Identifier"
+    || binding.init.argument.arguments.length !== 3
+    || !binding.init.argument.arguments.every((argument, index) => isMember(argument,
+      index === 2 ? options! : source!, ["url", "headers", "signal"][index]!))
+    || manifest.type !== "Property" || manifest.computed || manifest.key.type !== "Identifier"
+    || manifest.key.name !== "manifest" || manifest.value.type !== "CallExpression"
+    || manifest.value.callee.type !== "Identifier" || manifest.value.arguments.length !== 1
+    || manifest.value.arguments[0]?.type !== "Identifier"
+    || manifest.value.arguments[0].name !== binding.id.name) incompatible("URL manifest loader changed");
   const guard = `if(/(?:\\.git(?:[?#].*)?$|\\/_git\\/)/iu.test(${source}.url))return await ${fn.id.name}({...${source},source:"git"},${storageRoot},${options});`;
   const fallbackMarker = `return await ${fn.id.name}({...${source},source:"git"},${storageRoot},${options});`;
   return { start: block.start, insertion: block.start + 1, guard, fallbackMarker, patched: branchSource.includes(fallbackMarker) };
