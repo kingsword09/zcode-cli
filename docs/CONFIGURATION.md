@@ -348,6 +348,15 @@ environments without an available system store must configure either
 32–4096 bytes; do not set both. Keep the same secret source for login and later
 requests so existing credentials remain decryptable.
 
+On macOS over SSH, a locked keychain can be unlocked without restarting the CLI.
+When credential access requires interaction and a controlling terminal is
+available, the CLI runs `security unlock-keychain` with a hidden password prompt
+and retries only the pending credential operation in the same process. It does
+not change the encryption key or replay completed tasks. See
+[macOS keychain over SSH](HEADLESS.md#macos-keychain-over-ssh) for unattended and
+non-interactive limits. Configuring a new managed secret does not migrate
+existing OS-keychain-encrypted credentials.
+
 Start Plan uses the same ZCode OAuth login as Coding Plan; there is no second
 Start Plan sign-in. An existing Desktop session works without another login.
 Choose `account:zai-start-plan/<model>` or `account:bigmodel-start-plan/<model>`
