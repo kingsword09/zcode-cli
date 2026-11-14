@@ -88,6 +88,8 @@ large process-count stress runs are not part of this baseline.
 | File | Failure this must prevent |
 | --- | --- |
 | `herdr-status.test.cjs` | An interactive ZCode TUI in a Herdr pane starts with unknown status, or Herdr reporting prevents the TUI from starting. |
+| `integrations/herdr/tests/report-herdr.test.mjs` | Herdr 0.9.5+ reports lose state or resume arguments, invalid sessions produce resume commands, or advisory reporting interrupts ZCode. |
+| `integrations/herdr/tests/report-sequence.test.mjs` | Hook reports use an obsolete sequence scale or regress across adjacent milliseconds. |
 
 ### Real terminal wiring: `test:tui`
 
