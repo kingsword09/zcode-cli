@@ -93,16 +93,22 @@ these variables.
 ### Herdr plugin
 
 `integrations/herdr` is a ZCode plugin marketplace that keeps the pane's agent
-state current while a session runs. Install it from this checkout: in ZCode open
+state current while a session runs. The plugin requires **Herdr 0.9.5 or newer**;
+older versions are not supported. Upgrade both the Herdr CLI and the running
+daemon before enabling the plugin. Check the CLI version with `herdr --version`.
+
+Install it from this checkout: in ZCode open
 **Settings → Plugins → Add marketplace**, select `integrations/herdr`, then
 install and enable `herdr-zcode`.
 
 The plugin reports `idle` at session start and stop, `working` when a prompt is
 submitted or a tool finishes, and `blocked` when ZCode asks for a permission
 decision. It also sends the session ID and `zcode --resume <session-id>` so the
-host can restore the conversation. Reports run as a detached child with no
-terminal streams and every failure is ignored, so the plugin cannot interrupt
-ZCode. Prompt and tool contents are never forwarded.
+host can restore the conversation. The resume command is passed after `--`, as
+supported by Herdr 0.9.5's `pane report-agent` interface. The plugin does not
+fall back to state-only reports for older Herdr versions. Reports run as a
+detached child with no terminal streams and every failure is ignored, so the
+plugin cannot interrupt ZCode. Prompt and tool contents are never forwarded.
 
 Outside Herdr the hooks exit without running anything. Nothing here is required
 to use ZCode with another orchestrator.

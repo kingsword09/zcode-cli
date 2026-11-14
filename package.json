@@ -69,7 +69,7 @@
     "test:unit": "bun test test/*.test.ts",
     "test:runtime": "bun test test/runtime/*.test.ts",
     "test:runtime:compat": "bun test test/runtime/launcher.test.ts test/runtime/network-retry.test.ts test/runtime/app-server-auth.test.ts",
-    "test:node": "node --test test/node/*.test.cjs",
+    "test:node": "node --test test/node/*.test.cjs integrations/herdr/tests/*.test.mjs",
     "test:tui": "bun test test/tui/*.test.ts",
     "test:tui:manual": "bun scripts/tui-scenario.ts --manual",
     "test:tui-scenario": "bun scripts/tui-scenario.ts",

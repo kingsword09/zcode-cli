@@ -2,10 +2,10 @@
   "name": "herdr-zcode",
   "plugins": [
     {
-      "description": "Report ZCode CLI session state to the Herdr daemon.",
+      "description": "Report ZCode CLI session state and resume commands to Herdr 0.9.5 or newer.",
       "name": "herdr-zcode",
       "source": "./plugins/herdr-zcode",
-      "version": "0.1.1"
+      "version": "0.1.2"
     }
   ]
 }
