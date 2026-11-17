@@ -6,7 +6,7 @@ const path = require("node:path");
 function loadCredentialRuntime(options = {}) {
   const file = path.resolve(__dirname, "../../vendor/zcode.cjs");
   let source = fs.readFileSync(file, "utf8");
-  const names = ["createSystemCredentialCipher", "createLegacyCredentialCipher", "createSharedZCodeCredentialStore"];
+  const names = ["createSystemCredentialCipher", "createLegacyCredentialCipher", "createSharedZCodeCredentialStore", "withFileLock", "loginZCodeCli"];
   const functions = names.map(name => {
     const label = new RegExp(`[A-Za-z_$][\\w$]*\\(([A-Za-z_$][\\w$]*),"${name}"\\)`, "u").exec(source);
     assert.ok(label, `Missing native ${name}`);
@@ -26,6 +26,7 @@ function loadCredentialRuntime(options = {}) {
   const recover = helper.createKeychainRecovery({ platform: options.platform ?? "darwin", unlock: options.unlock });
   runtime.require = id => id === helperPath ? {
     ...helper,
+    credentialStorageError: error => helper.credentialStorageError(error, options.platform ?? "darwin"),
     createRecoverableSystemKeyStore: (_entry, unavailable) => helper.createRecoverableSystemKeyStore(
       async () => options.entry, unavailable, recover
     )

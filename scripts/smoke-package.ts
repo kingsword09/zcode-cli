@@ -11,6 +11,7 @@ import { runtimeModificationNotice } from "./runtime-attribution.ts";
 import { pluginLicenseFiles } from "./package-contents.ts";
 import { runPackageCommand } from "./package-command.ts";
 import { runtimeTestEnv } from "./runtime-test-env.ts";
+import { hasRuntimeManagedCredentialSetup } from "./runtime-credential-setup-patches.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -61,6 +62,8 @@ export async function smokePackagedCli(tarball: string): Promise<void> {
     }
     const runtime = await readFile(join(packageRoot, "vendor", "zcode.cjs"), "utf8");
     if (!runtime.includes(runtimeModificationNotice)) throw new Error("Installed runtime has no modification notice.");
+
+    if (!hasRuntimeManagedCredentialSetup(runtime)) throw new Error("Installed runtime is missing login credential recovery.");
 
     const pluginArgs = process.platform === "win32"
       ? ["/d", "/s", "/c", `\"${bin}\" plugins list --json`]

@@ -1954,7 +1954,19 @@ class ZCodeTui {
       pendingInputId,
       queryId: `query_${crypto.randomUUID()}`,
       onEvent: (event) => this.onEvent(event, turnEpoch),
-      requestPermission: (request, context) => this.requestPermission(request, context)
+      requestPermission: (request, context) => this.requestPermission(request, context),
+      confirmCredentialStorage: async ({ signal }) => {
+        const selected = await this.showChoice({
+          title: "Save login on this device?",
+          prompt: "The system credential store is unavailable. ZCode can encrypt your login using a private local key file. Keep that file to retain access to your login.",
+          items: [
+            { value: "continue", label: "Use local encrypted storage", description: "Save the key on this device and continue login." },
+            { value: "cancel", label: "Cancel login", description: "Leave credential storage unchanged." }
+          ],
+          signal
+        });
+        return selected?.value === "continue";
+      }
     };
     const pendingSteer = steering
       ? this.inputQueue.trackSteer(
