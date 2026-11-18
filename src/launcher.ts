@@ -33,6 +33,7 @@ import { runPluginCommand } from "./plugin-cli.ts";
 import { runTuiWithHerdrStatus } from "./herdr-status.mjs";
 import { missingCodingPlanKey } from "./prompt-preflight.ts";
 import { extractPromptOverrides } from "./prompt-model.ts";
+import { invalidConfiguredPromptModel } from "./prompt-model-validation.ts";
 import {
   capabilitiesFromExtractionMetadata,
   type RuntimeCliOptionType
@@ -515,6 +516,11 @@ export async function main(args: string[]): Promise<number> {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
       return 1;
     }
+  }
+  const invalidPromptModel = await invalidConfiguredPromptModel(promptModel);
+  if (invalidPromptModel) {
+    console.error(`Error: ${invalidPromptModel}. Check the provider/model ID and try again.`);
+    return 1;
   }
   const pluginAbortController = new AbortController();
   const cancelPluginCommand = (signal: NodeJS.Signals) => () => pluginAbortController.abort(signal);
