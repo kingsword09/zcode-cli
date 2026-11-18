@@ -32,9 +32,6 @@ export function extractPromptOverrides(
   if (modelTokens.length === 0 && effortTokens.length === 0) return { args };
   if (modelTokens.length !== 0 && modelTokens.length !== 1) throw new Error("Specify --model only once.");
   if (effortTokens.length !== 0 && effortTokens.length !== 1) throw new Error("Specify --effort only once.");
-  if (typeof parsed.values.prompt !== "string") {
-    throw new Error(`${modelTokens.length ? "--model" : "--effort"} requires --prompt or -p.`);
-  }
 
   const removed = new Set<number>();
   let model: string | undefined;

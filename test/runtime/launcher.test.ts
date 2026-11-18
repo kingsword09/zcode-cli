@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readRuntimeVersion } from "../../src/launcher.ts";
+import { providerFixture } from "../fixtures/provider-config.ts";
 import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 
 let home = "";
@@ -159,6 +160,56 @@ describe("launcher/runtime integration", () => {
       expect(result.stderr).toContain("Session not found: sess_missing_target");
       expect(result.stderr).not.toContain("ProviderBusinessError");
     } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  test("shows an actionable error when an interactive model does not exist", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-launcher-invalid-model-"));
+    const fakeNode = join(directory, "fake-node");
+    await writeFile(fakeNode, [
+      "#!/bin/sh",
+      "printf '%s\\n' 'Error: Provider Registry 中不存在 Model: provider/missing' >&2",
+      "exit 1",
+      ""
+    ].join("\n"));
+    await chmod(fakeNode, 0o755);
+    try {
+      const result = await run(["--model", "provider/missing"], "", {
+        HOME: directory, USERPROFILE: directory, ZCODE_NODE: fakeNode,
+        ZCODE_TUI_RUNTIME_LOG: join(directory, "runtime.log"),
+        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: join(directory, "unavailable-builtin.json")
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("Unknown model: provider/missing");
+      expect(result.stderr).not.toContain("Provider Registry");
+      expect(result.stderr).not.toContain("exited with status 1");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  test("rejects a locally known invalid --model before starting the runtime", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-launcher-model-preflight-"));
+    const fakeNode = join(directory, "fake-node");
+    const personalPath = join(directory, "personal.json");
+    const builtinPath = join(directory, "builtin.json");
+    const runtimeMarker = join(directory, "runtime-started");
+    await writeFile(fakeNode, `#!/bin/sh\nprintf started > '${runtimeMarker}'\nexit 99\n`);
+    await chmod(fakeNode, 0o755);
+    await writeFile(personalPath, JSON.stringify(providerFixture({ providerId: "custom", modelId: "known" })));
+    await writeFile(builtinPath, JSON.stringify(providerFixture({ providerId: "builtin", modelId: "available" })));
+    try {
+      const result = await run(["--model", "custom/missing"], "", {
+        HOME: directory,
+        USERPROFILE: directory,
+        ZCODE_NODE: fakeNode,
+        ZCODE_DATA_BASE_DIR: directory,
+        ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalPath,
+        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinPath
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("Unknown model: custom/missing");
+      expect(await Bun.file(runtimeMarker).exists()).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   test("adds a local marketplace and installs its Plugin end to end", async () => {

@@ -1449,6 +1449,7 @@ export function patchRuntimeStreamEofFinishGuard(runtime: string): string {
 const restoredPromptModelSwitch = /([A-Za-z_$][\w$]*)\.cliDefaultSelection&&\(([A-Za-z_$][\w$]*)\?\.cliDefault&&await \1\.prepareResume\(\),!\2\?\.transient\|\|\2\?\.cliDefault\)\?/u;
 const promptModelMarker = "$zCliDefaultPromptModel";
 const promptEffortMarker = "$zCliDefaultPromptEffort";
+const tuiPromptOverrideMarker = "$zTuiCliDefaultPromptModel";
 const legacyPromptModelInsertion = /let \$zCliDefaultPromptModel=process\.env\.ZCODE_CLI_PROMPT_MODEL;if\(\$zCliDefaultPromptModel\)await ([A-Za-z_$][\w$]*)\.setModel\(\$zCliDefaultPromptModel,\{transient:true,cliDefault:true\}\);/u;
 
 function promptOverrideInsertion(app: string): string {
@@ -1474,7 +1475,7 @@ function promptOverrideInsertion(app: string): string {
     `$zPromptSelection={...$zPromptCurrent.ref};`,
     `}`,
     `let $zPromptOption=${app}.getModelOption?.($zPromptSelection);`,
-    `let $zPromptLevels=($zPromptOption?.reasoning?.levels??$zPromptCurrent?.reasoning?.levels??[]).map($zLevel=>$zLevel.value);`,
+    `let $zPromptLevels=($zPromptOption?.reasoning?.levels??[]).map($zLevel=>$zLevel.value);`,
     `if($zPromptOption&&$zPromptLevels.length===0)throw new Error("Model "+$zPromptSelection.providerId+"/"+$zPromptSelection.modelId+" does not support reasoning effort.");`,
     `let $zPromptLevel=$zPromptLevels.find($zLevel=>$zLevel===${promptEffortMarker})??$zPromptLevels.find($zLevel=>$zLevel.toLowerCase()===${promptEffortMarker}.toLowerCase());`,
     `if($zPromptLevels.length>0&&!$zPromptLevel)throw new Error("Unsupported reasoning effort: "+${promptEffortMarker}+". Available: "+$zPromptLevels.join(", ")+".");`,
@@ -1484,7 +1485,8 @@ function promptOverrideInsertion(app: string): string {
 }
 
 export function patchRuntimePromptModel(runtime: string): string {
-  if (runtime.includes(promptEffortMarker) && restoredPromptModelSwitch.test(runtime)) return runtime;
+  if (runtime.includes(tuiPromptOverrideMarker) && runtime.includes(promptEffortMarker)
+    && restoredPromptModelSwitch.test(runtime)) return runtime;
   const anchor = /if\([A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\.traceId,[A-Za-z_$][\w$]*\.memoryBench/u.exec(runtime);
   if (!anchor) throw new Error("ZCode runtime is incompatible with the prompt model patch.");
   // cli-default prompt admission reads CliDefaultSelection, not the runtime
@@ -1497,7 +1499,9 @@ export function patchRuntimePromptModel(runtime: string): string {
   }
   const insertion = promptOverrideInsertion(anchor[1]);
   let patched: string;
-  if (legacyPromptModelInsertion.test(runtime)) {
+  if (runtime.includes(promptEffortMarker) && restoredPromptModelSwitch.test(runtime)) {
+    patched = runtime;
+  } else if (legacyPromptModelInsertion.test(runtime)) {
     // Upgrade a runtime that only has the earlier --model insertion.
     patched = runtime.replace(legacyPromptModelInsertion, insertion);
   } else if (runtime.includes(promptModelMarker)) {
@@ -1510,6 +1514,11 @@ export function patchRuntimePromptModel(runtime: string): string {
     const options = switchAnchor[2] ?? switchAnchor[3];
     patched = patched.replace(switchAnchor[0], `${context}.cliDefaultSelection&&(${options}?.cliDefault&&await ${context}.prepareResume(),!${options}?.transient||${options}?.cliDefault)?`);
   }
+  const tuiAnchor = /if\(qe&&j\.set\(ut,qe\),P\)throw await q\(ut\),new Error\("TUI prompt handler is closed"\)/u;
+  if (!tuiAnchor.test(patched)) {
+    throw new Error("ZCode runtime is incompatible with the prompt model patch (TUI app anchor missing).");
+  }
+  patched = patched.replace(tuiAnchor, `let ${tuiPromptOverrideMarker}=true;${promptOverrideInsertion("ut")}if(qe&&j.set(ut,qe),P)throw await q(ut),new Error("TUI prompt handler is closed")`);
   return patched;
 }
 
@@ -1989,6 +1998,7 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     apply: patchRuntimePromptModel,
     verify: (runtime) => runtime.includes(promptModelMarker) && runtime.includes(promptEffortMarker)
       && runtime.includes("ZCODE_CLI_PROMPT_EFFORT") && runtime.includes("cliDefault:true")
+      && runtime.includes(tuiPromptOverrideMarker)
       && restoredPromptModelSwitch.test(runtime)
   },
   {
