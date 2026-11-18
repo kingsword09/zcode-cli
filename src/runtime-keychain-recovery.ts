@@ -116,7 +116,8 @@ const recoverKeychain = createKeychainRecovery();
 export function createRecoverableSystemKeyStore(
   entry: () => Promise<KeyringEntry>,
   unavailable: () => Error,
-  recover: Recovery = recoverKeychain
+  recover: Recovery = recoverKeychain,
+  platform: NodeJS.Platform = process.platform
 ): { get(): Promise<string | null>; set(value: string): Promise<void> } {
   const attempt = async <Result>(operation: () => Promise<Result>): Promise<Result> => {
     try {
@@ -131,7 +132,8 @@ export function createRecoverableSystemKeyStore(
   return {
     get: () => attempt(async () => {
       const secret = await (await entry()).getSecret();
-      return secret === null ? null : new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(secret));
+      // Match setPassword: Windows stores UTF-16LE; the other backends store UTF-8.
+      return secret === null ? null : new TextDecoder(platform === "win32" ? "utf-16le" : "utf-8", { fatal: true }).decode(Uint8Array.from(secret));
     }),
     set: value => attempt(async () => { await (await entry()).setPassword(value); })
   };

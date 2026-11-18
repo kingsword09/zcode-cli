@@ -26,6 +26,49 @@ function encryptedRecord(key, value) {
   return `enc:v2:os:${crypto.createHash("sha256").update(key).digest("hex").slice(0, 24)}:${[iv, cipher.getAuthTag(), ciphertext].map(bytes => bytes.toString("base64url")).join(".")}`;
 }
 
+test("the native cipher decrypts an existing Windows UTF-16LE key without replacing it", async () => {
+  await withCredentials(async (directory, filePath) => {
+    let writes = 0;
+    const key = crypto.randomBytes(32);
+    const original = JSON.stringify({ token: encryptedRecord(key, "fixture-token") });
+    await writeFile(filePath, original);
+    await writeFile(path.join(directory, "credential-source"), "os\n");
+    const { createSystemCredentialCipher } = loadCredentialRuntime({
+      platform: "win32",
+      entry: {
+        getSecret: async () => [...Buffer.from(key.toString("base64url"), "utf16le")],
+        setPassword: async () => { writes++; throw new Error("Do not replace an existing key"); }
+      }
+    });
+    const cipher = createSystemCredentialCipher({ filePath, env: {} });
+    assert.equal(await cipher.decrypt(JSON.parse(original).token), "fixture-token");
+    assert.equal(writes, 0);
+    assert.equal(await readFile(filePath, "utf8"), original);
+    assert.equal(await readFile(path.join(directory, "credential-source"), "utf8"), "os\n");
+  });
+});
+
+test("the native cipher creates and rereads a Windows UTF-16LE key on first login", async () => {
+  await withCredentials(async (directory, filePath) => {
+    let writes = 0, savedKey = null;
+    const { createSystemCredentialCipher } = loadCredentialRuntime({
+      platform: "win32",
+      entry: {
+        getSecret: async () => savedKey === null ? null : [...Buffer.from(savedKey, "utf16le")],
+        setPassword: async value => { writes++; savedKey = value; }
+      }
+    });
+    const cipher = createSystemCredentialCipher({ filePath, env: {} });
+    const ciphertext = await cipher.encrypt("fixture-token");
+    assert.match(ciphertext, /^enc:v2:os:/u);
+    assert.equal(await cipher.decrypt(ciphertext), "fixture-token");
+    assert.equal(writes, 1);
+    assert.match(savedKey, /^[A-Za-z0-9_-]{43}$/u);
+    assert.equal(await readFile(path.join(directory, "credential-source"), "utf8"), "os\n");
+    assert.equal(fs.existsSync(path.join(directory, "credential-secret")), false);
+  });
+});
+
 test("real native cipher unlocks in place, preserves OS ciphertext and never writes a replacement key", async () => {
   await withCredentials(async (directory, filePath) => {
     let isLocked = true, unlocks = 0, reads = 0, writes = 0;

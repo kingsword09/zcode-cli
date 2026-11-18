@@ -27,7 +27,7 @@ function loadCredentialRuntime(options = {}) {
   runtime.require = id => id === helperPath ? {
     ...helper,
     createRecoverableSystemKeyStore: (_entry, unavailable) => helper.createRecoverableSystemKeyStore(
-      async () => options.entry, unavailable, recover
+      async () => options.entry, unavailable, recover, options.platform ?? "darwin"
     )
   } : nativeRequire(id);
   runtime._compile(source, file);
