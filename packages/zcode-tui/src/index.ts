@@ -4560,12 +4560,23 @@ class ZCodeTui {
             {
               value: "regular",
               label: "Regular",
-              description: "Show tool input and output in the current multi-line view (default)"
+              description: "Show tool input and output in the current multi-line view (default)",
+              preview: new Text([
+                this.theme.muted("Example tool card"),
+                `${this.theme.accent("●")} ${this.theme.bold("Bash")} ${this.theme.muted('rg -n "compact" README.md')}`,
+                this.theme.muted('  rg -n "compact" README.md'),
+                this.theme.muted("  README.md:42: compact tool display")
+              ].join("\n"), 1, 0)
             },
             {
               value: "compact",
               label: "Compact",
-              description: "Show each tool call on one line; press Ctrl+O for details"
+              description: "Show each tool call on one line; press Ctrl+O for details",
+              preview: new Text([
+                this.theme.muted("Example tool card"),
+                `${this.theme.success("✓")} ${this.theme.bold("Bash")} ${this.theme.muted('rg -n "compact" README.md · 3 matches · 120ms')}`,
+                this.theme.muted("  Ctrl+O to expand")
+              ].join("\n"), 1, 0)
             }
           ],
           selectedIndex: this.toolCallStyle === "compact" ? 1 : 0
