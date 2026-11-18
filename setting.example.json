@@ -55,6 +55,7 @@
   "ui": {
     "theme": "auto",
     "tuiMode": "regular",
+    "toolCallStyle": "regular",
     "copyOnSelect": true,
     "notifications": {
       "method": "auto",

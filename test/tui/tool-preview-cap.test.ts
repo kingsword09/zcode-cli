@@ -31,6 +31,25 @@ describe("live tool card viewport-aware preview cap", () => {
     expect(view.render(100).join("\n")).toContain("… 45 more lines · Ctrl+O to expand");
   });
 
+  test("regular tool cards remain the default and compact cards expand on demand", () => {
+    const view = new ToolExecutionView(theme, {
+      name: "Bash",
+      state: "complete",
+      input: { command: "printf hello" },
+      result: tallOutput(8)
+    });
+    expect(view.render(100).length).toBeGreaterThan(1);
+
+    view.setCompact(true);
+    expect(view.render(100)).toHaveLength(1);
+    expect(view.render(100)[0]).toContain("Ctrl+O to expand");
+    expect(view.hasHiddenContent()).toBe(true);
+
+    view.setExpanded(true);
+    const expanded = view.render(100).join("\n");
+    expect(expanded).toContain("line 8 of streaming output");
+  });
+
   test.each(["complete", "failed"])("%s card ignores the live cap even when supplied", (state) => {
     const view = new ToolExecutionView(theme, {
       name: "Bash",
