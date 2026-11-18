@@ -322,6 +322,26 @@ function stylePreview(
   };
 }
 
+function toolHeaderFromSpecialized(
+  options: ToolViewOptions,
+  theme: ZCodeTheme,
+  specialized: ReturnType<typeof specializedToolRender>
+): string {
+  const presentation = statePresentation(options.state, theme);
+  const input = parsedInput(options);
+  const summary = specialized?.summary ?? toolSummary(options.name, input);
+  const displayName = sanitizeTerminalText(
+    specialized?.displayName ?? options.name,
+    { preserveSgr: false }
+  );
+  return [
+    presentation.icon,
+    theme.bold(displayName || "Tool"),
+    summary && theme.muted(oneLine(summary)),
+    presentation.suffix && theme.muted(`· ${presentation.suffix}`)
+  ].filter(Boolean).join(" ");
+}
+
 function toolText(
   options: ToolViewOptions,
   theme: ZCodeTheme,
@@ -338,17 +358,7 @@ function toolText(
     expanded,
     theme
   });
-  const summary = specialized?.summary ?? toolSummary(options.name, input);
-  const displayName = sanitizeTerminalText(
-    specialized?.displayName ?? options.name,
-    { preserveSgr: false }
-  );
-  const header = [
-    presentation.icon,
-    theme.bold(displayName || "Tool"),
-    summary && theme.muted(oneLine(summary)),
-    presentation.suffix && theme.muted(`· ${presentation.suffix}`)
-  ].filter(Boolean).join(" ");
+  const header = toolHeaderFromSpecialized(options, theme, specialized);
 
   if (options.state.toLowerCase() === "cancelled") {
     return { header, images: [], truncated: false };
@@ -425,6 +435,7 @@ export class ToolExecutionView extends Container {
   private expanded = false;
   private hiddenContent = false;
   private previewTruncated = false;
+  private compact = false;
   private dirty = true;
   private readonly card = new Box(1, 0);
   private readonly imageHost = new Container();
@@ -448,16 +459,38 @@ export class ToolExecutionView extends Container {
     this.dirty = true;
   }
 
+  setCompact(compact: boolean): void {
+    if (this.compact === compact) return;
+    this.compact = compact;
+    this.dirty = true;
+  }
+
   isExpanded(): boolean {
     return this.expanded;
   }
 
   hasHiddenContent(): boolean {
+    if (this.compact && !this.expanded) return true;
     this.ensureRebuilt();
     return this.hiddenContent || this.previewTruncated;
   }
 
   override render(width: number): string[] {
+    if (this.compact && !this.expanded) {
+      const options = materializeToolText(this.options);
+      const specialized = specializedToolRender({
+        name: options.name,
+        state: options.state,
+        input: parsedInput(options),
+        result: options.result,
+        progress: options.progress,
+        expanded: false,
+        theme: this.theme
+      });
+      const header = toolHeaderFromSpecialized(options, this.theme, specialized);
+      const line = `${header} ${this.theme.muted("· Ctrl+O to expand")}`;
+      return new Text(truncateToWidth(line, Math.max(1, width)), 0, 0).render(width);
+    }
     this.ensureRebuilt();
     const lines = super.render(width);
     this.previewTruncated = false;

@@ -153,6 +153,11 @@ import {
   writeCopyOnSelect
 } from "./copy-on-select.ts";
 import {
+  readToolCallStyle,
+  writeToolCallStyle,
+  type ToolCallStyle
+} from "./tool-call-style.ts";
+import {
   effortPicker,
   explicitModelRequest,
   isEffortPickerRequest,
@@ -702,6 +707,7 @@ class ZCodeTui {
   private tuiMode: TuiMode;
   private terminalFocus: TerminalFocusState = "unknown";
   private copyOnSelect = true;
+  private toolCallStyle: ToolCallStyle = "regular";
   private thoughtLevel?: string;
   private showReasoning: boolean;
   private modelOptions: unknown[];
@@ -870,6 +876,11 @@ class ZCodeTui {
     } catch {
       // Config unreadable — keep the constructor's default (enabled).
     }
+    try {
+      this.setToolCallStyle(await readToolCallStyle());
+    } catch {
+      // Config unreadable — keep the default regular tool cards.
+    }
     // Resolve the effective TUI mode from env > options > config. The vendor
     // runtime does not forward initialTuiMode, so read the persisted config
     // here and rebuild the TUI instance before start() when it differs from
@@ -1027,6 +1038,14 @@ class ZCodeTui {
   private setCopyOnSelect(enabled: boolean): void {
     this.copyOnSelect = enabled;
     this.fullscreenAltScreen?.setCopyOnSelect(enabled);
+  }
+
+  private setToolCallStyle(style: ToolCallStyle): void {
+    this.toolCallStyle = style;
+    for (const tool of this.toolViews.values()) {
+      tool.view.setCompact(style === "compact");
+    }
+    this.ui.requestRender();
   }
 
   private setShowReasoning(enabled: boolean): void {
@@ -3211,6 +3230,7 @@ class ZCodeTui {
       name: toolName ?? "tool",
       state: "preparing"
     });
+    view.setCompact(this.toolCallStyle === "compact");
     const tree = new ToolTreeView(this.theme, view);
     let blockId: string;
     let group: ToolGroupView | undefined;
@@ -4380,6 +4400,11 @@ class ZCodeTui {
             value: "copy-on-select",
             label: "Fullscreen copy on select",
             description: `Current: ${this.copyOnSelect ? "Enabled" : "Disabled"}`
+          },
+          {
+            value: "tool-call-style",
+            label: "Tool call display",
+            description: `Current: ${this.toolCallStyle === "compact" ? "Compact" : "Regular"}`
           }
         ],
         selectedIndex: selectedSettingIndex
@@ -4518,6 +4543,57 @@ class ZCodeTui {
           await writeCopyOnSelect(next);
           this.setCopyOnSelect(next);
           feedback = `Copy on select ${next ? "enabled" : "disabled"} · saved`;
+        } catch (error) {
+          this.addNotice(error instanceof Error ? error.message : String(error), "error");
+          feedback = "Could not save the setting · select it to retry";
+        }
+        continue;
+      }
+
+      if (setting.value === "tool-call-style") {
+        selectedSettingIndex = 6;
+        const selected = await this.showChoice({
+          title: "Tool call display",
+          prompt: "Choose how tool calls appear in the conversation.",
+          help: "Up/Down choose · Enter save · Esc back",
+          items: [
+            {
+              value: "regular",
+              label: "Regular",
+              description: "Show tool input and output in the current multi-line view (default)",
+              preview: new Text([
+                this.theme.muted("Example tool card"),
+                `${this.theme.accent("●")} ${this.theme.bold("Bash")} ${this.theme.muted('rg -n "compact" README.md')}`,
+                this.theme.muted('  rg -n "compact" README.md'),
+                this.theme.muted("  README.md:42: compact tool display")
+              ].join("\n"), 1, 0)
+            },
+            {
+              value: "compact",
+              label: "Compact",
+              description: "Show each tool call on one line; press Ctrl+O for details",
+              preview: new Text([
+                this.theme.muted("Example tool card"),
+                `${this.theme.success("✓")} ${this.theme.bold("Bash")} ${this.theme.muted('rg -n "compact" README.md · 3 matches · 120ms')}`,
+                this.theme.muted("  Ctrl+O to expand")
+              ].join("\n"), 1, 0)
+            }
+          ],
+          selectedIndex: this.toolCallStyle === "compact" ? 1 : 0
+        });
+        if (!selected) {
+          feedback = "No changes · Esc closes settings";
+          continue;
+        }
+        const next = selected.value as ToolCallStyle;
+        if (next === this.toolCallStyle) {
+          feedback = "Tool call display unchanged";
+          continue;
+        }
+        try {
+          await writeToolCallStyle(next);
+          this.setToolCallStyle(next);
+          feedback = `Tool call display: ${next} · saved`;
         } catch (error) {
           this.addNotice(error instanceof Error ? error.message : String(error), "error");
           feedback = "Could not save the setting · select it to retry";

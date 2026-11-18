@@ -502,6 +502,18 @@ ZCODE_TUI_RUNTIME_LOG=/tmp/zcode-tui-runtime.log zcode
 `ZCODE_TUI_MODE=fullscreen` 和 `ZCODE_TUI_MODE=regular` 临时覆盖保存值，设置页会提示该覆盖，
 不会删除环境变量。
 
+工具调用默认使用现有的多行卡片。可在 `/settings` 或 `/config` 的 **Tool call display** 中
+选择 **Compact**，让每次工具调用以单行摘要显示；按 Ctrl+O 可展开查看完整输入和输出。
+该设置保存在 `ui.toolCallStyle`，支持 `regular`（默认）和 `compact`：
+
+```json
+{
+  "ui": {
+    "toolCallStyle": "compact"
+  }
+}
+```
+
 正常退出或处理 `SIGINT`、`SIGTERM`、`SIGHUP` 时会恢复终端状态。
 任何终端程序都无法拦截强制的 `SIGKILL`。
 
