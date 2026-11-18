@@ -14,10 +14,50 @@ test("keychain unlock resumes the same pending operation and never replays compl
   const store = createRecoverableSystemKeyStore(async () => ({
     getSecret: async () => { reads++; if (isLocked) throw locked(); return [...Buffer.from("existing-key")]; },
     setPassword: async () => { throw new Error("Existing keys must not be replaced"); }
-  }), unavailable, recover);
+  }), unavailable, recover, "darwin");
   completedWork++;
   expect(await store.get()).toBe("existing-key");
   expect({ reads, unlocks, completedWork }).toEqual({ reads: 2, unlocks: 1, completedWork: 1 });
+});
+
+test.each([
+  ["win32", "utf16le"],
+  ["darwin", "utf8"],
+  ["linux", "utf8"]
+] as const)("%s decodes password secrets stored as %s", async (platform, encoding) => {
+  const key = Buffer.alloc(32, 0x31).toString("base64url");
+  const store = createRecoverableSystemKeyStore(async () => ({
+    getSecret: async () => [...Buffer.from(key, encoding)],
+    setPassword: async () => { throw new Error("Existing keys must not be replaced"); }
+  }), unavailable, createKeychainRecovery({ platform }), platform);
+  expect(await store.get()).toBe(key);
+});
+
+test("password decoding defaults to the current platform", async () => {
+  const key = Buffer.alloc(32, 0x31).toString("base64url");
+  const bytes = Buffer.from(key, process.platform === "win32" ? "utf16le" : "utf8");
+  const store = createRecoverableSystemKeyStore(async () => ({
+    getSecret: async () => [...bytes],
+    setPassword: async () => { throw new Error("Existing keys must not be replaced"); }
+  }), unavailable);
+  expect(await store.get()).toBe(key);
+});
+
+test.each([
+  ["win32", [0x41]],
+  ["win32", [0x00, 0xd8]],
+  ["darwin", [0xc3, 0x28]],
+  ["linux", [0xff]]
+] as const)("%s rejects malformed password bytes %j without replacing the key", async (platform, bytes) => {
+  let writes = 0;
+  const store = createRecoverableSystemKeyStore(async () => ({
+    getSecret: async () => [...bytes],
+    setPassword: async () => { writes++; }
+  }), unavailable, createKeychainRecovery({ platform }), platform);
+  const error = await store.get().catch(error => error);
+  expect(error.code).toBe("CREDENTIAL_SECURE_STORAGE_UNAVAILABLE");
+  expect(error.cause).toBeInstanceOf(TypeError);
+  expect(writes).toBe(0);
 });
 
 test("concurrent credential readers share one unlock, including late failures", async () => {
@@ -103,7 +143,7 @@ test("unrelated storage errors do not prompt for a password", async () => {
   let unlocks = 0;
   const cause = new Error("Module could not be loaded");
   const recover = createKeychainRecovery({ platform: "darwin", unlock: async () => { unlocks++; } });
-  const store = createRecoverableSystemKeyStore(async () => { throw cause; }, unavailable, recover);
+  const store = createRecoverableSystemKeyStore(async () => { throw cause; }, unavailable, recover, "darwin");
   const error = await store.get().catch(error => error);
   expect(error.code).toBe("CREDENTIAL_SECURE_STORAGE_UNAVAILABLE");
   expect(error.cause).toBe(cause);
@@ -117,7 +157,7 @@ test("missing keys stay missing and a locked write resumes with the same key", a
   const store = createRecoverableSystemKeyStore(async () => ({
     getSecret: async () => null,
     setPassword: async value => { writes++; if (isLocked) throw locked(); saved.push(value); }
-  }), unavailable, recover);
+  }), unavailable, recover, "darwin");
   expect(await store.get()).toBeNull();
   expect(unlocks).toBe(0);
   isLocked = true;
