@@ -179,7 +179,8 @@ describe("launcher/runtime integration", () => {
         ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: join(directory, "unavailable-builtin.json")
       });
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain("Provider Registry 中不存在 Model: provider/missing");
+      expect(result.stderr).toContain("Unknown model: provider/missing");
+      expect(result.stderr).not.toContain("Provider Registry");
       expect(result.stderr).not.toContain("exited with status 1");
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
@@ -204,7 +205,7 @@ describe("launcher/runtime integration", () => {
         ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinPath
       });
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain("Provider Registry 中不存在 Model: custom/missing");
+      expect(result.stderr).toContain("Unknown model: custom/missing");
       expect(await Bun.file(runtimeMarker).exists()).toBe(false);
     } finally {
       await rm(directory, { recursive: true, force: true });

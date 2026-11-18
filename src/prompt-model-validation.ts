@@ -94,10 +94,10 @@ export async function invalidConfiguredPromptModel(
   const personalModels = personal.get(providerId);
   const builtinModels = builtin.get(providerId);
   if (!personalModels && !builtinModels) {
-    return `Provider Registry 中不存在 Provider: ${providerId}`;
+    return `Unknown model provider: ${providerId}`;
   }
   if (!personalModels?.has(modelId) && !builtinModels?.has(modelId)) {
-    return `Provider Registry 中不存在 Model: ${providerId}/${modelId}`;
+    return `Unknown model: ${providerId}/${modelId}`;
   }
   return undefined;
 }

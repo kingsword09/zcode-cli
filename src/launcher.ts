@@ -360,8 +360,13 @@ function appendTuiRuntimeDiagnostic(chunk: Buffer | string, state: TuiRuntimeDia
   for (const line of lines) {
     const missing = /^Error: Session not found: ([A-Za-z0-9_-]{1,512})$/u.exec(line);
     if (missing) state.sessionError = `Session not found: ${missing[1]}`;
-    if (/^Error: (?:Provider Registry 中不存在 (?:Provider|Model): |Unsupported reasoning effort: |Model .+ does not support reasoning effort\.|Reasoning effort .+ is not supported by |Cannot apply --effort without a current model\.|Invalid prompt model selection\.)/u.test(line)) {
-      state.startupError = line.slice("Error: ".length).replace(/[\u001B\u007F-\u009F]/gu, "").slice(0, 512);
+    const cleanLine = line.replace(/[\u001B\u007F-\u009F]/gu, "");
+    const unknownProvider = /^Error: Provider Registry 中不存在 Provider: (.+)$/u.exec(cleanLine);
+    const unknownModel = /^Error: Provider Registry 中不存在 Model: (.+)$/u.exec(cleanLine);
+    if (unknownProvider) state.startupError = `Unknown model provider: ${unknownProvider[1]}`;
+    else if (unknownModel) state.startupError = `Unknown model: ${unknownModel[1]}`;
+    else if (/^Error: (?:Unknown model provider: |Unknown model: |Unsupported reasoning effort: |Model .+ does not support reasoning effort\.|Reasoning effort .+ is not supported by |Cannot apply --effort without a current model\.|Invalid prompt model selection\.)/u.test(cleanLine)) {
+      state.startupError = cleanLine.slice("Error: ".length).slice(0, 512);
     }
   }
   if (state.bytes >= tuiRuntimeLogLimitBytes) return;

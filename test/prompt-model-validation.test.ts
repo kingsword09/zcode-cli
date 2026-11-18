@@ -26,7 +26,7 @@ describe("explicit startup model validation", () => {
       expect(await invalidConfiguredPromptModel("custom/missing-model", {
         ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalPath,
         ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinPath
-      })).toContain("Provider Registry 中不存在 Model: custom/missing-model");
+      })).toContain("Unknown model: custom/missing-model");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -42,7 +42,7 @@ describe("explicit startup model validation", () => {
       expect(await invalidConfiguredPromptModel("missing/model", {
         ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalPath,
         ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinPath
-      })).toContain("Provider Registry 中不存在 Provider: missing");
+      })).toContain("Unknown model provider: missing");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -86,7 +86,7 @@ describe("explicit startup model validation", () => {
         USERPROFILE: directory,
         ZCODE_DATA_BASE_DIR: directory,
         ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: join(directory, "not-created-personal.json")
-      })).toContain("Provider Registry 中不存在 Provider: not-a-real-provider");
+      })).toContain("Unknown model provider: not-a-real-provider");
       expect(await invalidConfiguredPromptModel("account:zai-individual-coding-plan/GLM-5.3", {
         HOME: directory,
         USERPROFILE: directory,
