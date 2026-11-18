@@ -161,6 +161,27 @@ describe("launcher/runtime integration", () => {
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
+  test("shows an actionable error when an interactive model does not exist", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "zcode-launcher-invalid-model-"));
+    const fakeNode = join(directory, "fake-node");
+    await writeFile(fakeNode, [
+      "#!/bin/sh",
+      "printf '%s\\n' 'Error: Provider Registry 中不存在 Model: provider/missing' >&2",
+      "exit 1",
+      ""
+    ].join("\n"));
+    await chmod(fakeNode, 0o755);
+    try {
+      const result = await run(["--model", "provider/missing"], "", {
+        HOME: directory, USERPROFILE: directory, ZCODE_NODE: fakeNode,
+        ZCODE_TUI_RUNTIME_LOG: join(directory, "runtime.log")
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("Provider Registry 中不存在 Model: provider/missing");
+      expect(result.stderr).not.toContain("exited with status 1");
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   test("adds a local marketplace and installs its Plugin end to end", async () => {
     const marketplace = join(home, "fixture-marketplace");
     const plugin = join(marketplace, "plugin");

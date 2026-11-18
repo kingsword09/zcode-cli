@@ -350,6 +350,7 @@ interface TuiRuntimeDiagnosticState {
   writeFailed: boolean;
   pendingLine?: string;
   sessionError?: string;
+  startupError?: string;
 }
 
 function appendTuiRuntimeDiagnostic(chunk: Buffer | string, state: TuiRuntimeDiagnosticState): void {
@@ -358,6 +359,9 @@ function appendTuiRuntimeDiagnostic(chunk: Buffer | string, state: TuiRuntimeDia
   for (const line of lines) {
     const missing = /^Error: Session not found: ([A-Za-z0-9_-]{1,512})$/u.exec(line);
     if (missing) state.sessionError = `Session not found: ${missing[1]}`;
+    if (/^Error: (?:Provider Registry 中不存在 (?:Provider|Model): |Unsupported reasoning effort: |Model .+ does not support reasoning effort\.|Reasoning effort .+ is not supported by |Cannot apply --effort without a current model\.|Invalid prompt model selection\.)/u.test(line)) {
+      state.startupError = line.slice("Error: ".length).replace(/[\u001B\u007F-\u009F]/gu, "").slice(0, 512);
+    }
   }
   if (state.bytes >= tuiRuntimeLogLimitBytes) return;
   const text = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -392,7 +396,7 @@ function tuiRuntimeFailureMessage(code: number, state: TuiRuntimeDiagnosticState
   const diagnostic = state.path && !state.writeFailed
     ? ` Diagnostics: ${state.path}`
     : " Runtime diagnostics could not be written.";
-  const message = state.sessionError ?? `ZCode runtime exited with status ${code}`;
+  const message = state.sessionError ?? state.startupError ?? `ZCode runtime exited with status ${code}`;
   return `Error: ${message}.${diagnostic}\n`;
 }
 
@@ -588,8 +592,8 @@ export async function main(args: string[]): Promise<number> {
       ? await runTuiWithHerdrStatus(startRuntime)
       : await startRuntime();
     if (code === 0 && (args.includes("--help") || args.includes("-h"))) {
-      console.log("\n  --model <provider/model>  Select a model for this --prompt run without changing the saved default.");
-      console.log("  --effort <level>          Select the model reasoning effort for this --prompt run; auto keeps the default.");
+      console.log("\n  --model <provider/model>  Select a model for this session without changing the saved default.");
+      console.log("  --effort <level>          Select the model reasoning effort for this session; auto keeps the default.");
     }
     return code;
   } catch (error) {
