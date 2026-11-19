@@ -1,6 +1,6 @@
 {
   "name": "zcode-app-cli",
-  "version": "3.18.2-47",
+  "version": "3.18.2-48",
   "description": "Unofficial terminal client for the ZCode agent runtime",
   "keywords": [
     "agent",
