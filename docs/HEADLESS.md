@@ -38,6 +38,29 @@ Record the PID and exit status in your supervisor if you need reliable
 cancellation and completion tracking. Configure permissions deliberately;
 headless execution does not provide the TUI's interactive approval experience.
 
+## Credentials without an OS store
+
+For a first login on a server or container without an accessible credential store,
+run `zcode login` in an interactive terminal. Accept the offer to use local
+encrypted storage and the same login continues automatically. No separate setup
+command is needed. Non-interactive runs never prompt or change the storage source;
+configure `ZCODE_CREDENTIAL_SECRET` or `ZCODE_CREDENTIAL_SECRET_FILE` in advance
+if an interactive first login is not possible.
+
+The runtime automatically reads the generated `credential-secret` next to the
+credentials file, including for later `-p` runs. Keep it private and stable;
+deleting or regenerating it makes those credentials undecryptable. This is not
+OS-keychain protection. Recovery uses the runtime's credential lock, never rotates
+an existing secret, and refuses to replace existing OS-backed storage or
+credentials whose original secret is unavailable. Environment-managed secrets
+remain supported; do not mix secret sources. See the
+[credential configuration](CONFIGURATION.md) for permissions and data-directory
+isolation.
+
+On Linux, the default backend requires an unlocked Secret Service keyring and
+access to its user D-Bus session; a desktop user's working keyring does not mean
+an SSH session or container can access it.
+
 ## macOS keychain over SSH
 
 Headless mode does not require a separate credential secret when the macOS

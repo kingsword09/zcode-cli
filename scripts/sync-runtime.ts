@@ -18,6 +18,8 @@ import { hasRuntimeHeadlessLifecycle, patchRuntimeHeadlessLifecycle } from "./ru
 export { hasRuntimeHeadlessLifecycle, patchRuntimeHeadlessLifecycle } from "./runtime-headless-patches.ts";
 import { hasRuntimeKeychainRecovery, patchRuntimeKeychainRecovery } from "./runtime-keychain-patches.ts";
 export { hasRuntimeKeychainRecovery, patchRuntimeKeychainRecovery } from "./runtime-keychain-patches.ts";
+import { hasRuntimeManagedCredentialSetup, patchRuntimeManagedCredentialSetup } from "./runtime-credential-setup-patches.ts";
+export { hasRuntimeManagedCredentialSetup, patchRuntimeManagedCredentialSetup } from "./runtime-credential-setup-patches.ts";
 import { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 export { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 import { hasRuntimeBigmodelOAuth, hasRuntimeNativePollingOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
@@ -2033,6 +2035,10 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
   {
     id: "terminal-keychain-recovery", requirement: "required", apply: patchRuntimeKeychainRecovery,
     verify: hasRuntimeKeychainRecovery
+  },
+  {
+    id: "managed-credential-setup", requirement: "required", apply: patchRuntimeManagedCredentialSetup,
+    verify: hasRuntimeManagedCredentialSetup
   },
   {
     id: "start-plan-standalone", requirement: "optional", apply: patchRuntimeStartPlan,

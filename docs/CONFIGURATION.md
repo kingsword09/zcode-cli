@@ -342,11 +342,33 @@ Z.AI credentials use Desktop's business-token format. Older CLI OAuth credential
 are converted after successful validation on their first request; failed
 validation or a concurrent login never overwrites the newer shared session.
 
-The runtime protects credentials with the OS credential store. Headless
-environments without an available system store must configure either
+The runtime prefers the OS credential store. Unattended environments without an
+available system store or a local key created during interactive login need either
 `ZCODE_CREDENTIAL_SECRET` or a readable `ZCODE_CREDENTIAL_SECRET_FILE` containing
 32–4096 bytes; do not set both. Keep the same secret source for login and later
 requests so existing credentials remain decryptable.
+
+Use `/login` or `zcode login` as usual. If the OS credential store is unavailable
+during a first login, ZCode asks whether to use local encrypted storage. Accepting
+creates a private key and continues the same login; no extra command or restart
+is needed. Cancelling creates no file. The random `credential-secret` lives in
+the actual credentials directory (`~/.zcode/v2/` by default); later operations,
+including unattended requests, read it automatically. New files have mode `0600`
+on macOS/Linux; on Windows, restrict the directory ACL to your user. This is an
+explicit choice of file-based encryption, not OS-keychain protection. Keep the
+file private and retain it; never share or regenerate it.
+
+Recovery uses the runtime's credential file lock and retries only key acquisition.
+It does not offer a replacement key when existing credentials lack their
+original secret, an OS-source marker exists, or the secret file is invalid. If a
+secret is configured through the environment, continue using that source. To
+preserve the old login while configuring a new one, use a new `ZCODE_DATA_BASE_DIR`
+and keep using that directory for subsequent invocations. This does not migrate
+old credentials or retain shared Desktop login.
+
+Linux requires an accessible, unlocked Secret Service keyring and a user D-Bus
+session by default. SSH sessions, containers and servers without a desktop may
+lack these services; macOS keychain unlock commands do not apply to Linux.
 
 On macOS over SSH, a locked keychain can be unlocked without restarting the CLI.
 When credential access requires interaction and a controlling terminal is

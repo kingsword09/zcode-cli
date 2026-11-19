@@ -23,6 +23,7 @@ import {
   hasRuntimeHttpNoContentGuard,
   hasRuntimeHeadlessLifecycle,
   hasRuntimeKeychainRecovery,
+  hasRuntimeManagedCredentialSetup,
   hasRuntimeNetworkRetryGuard,
   hasRuntimeResolvedContextWindow,
   hasRuntimeRecursiveWorkspacePaths,
@@ -106,6 +107,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || patchRuntimeHeadlessLifecycle(runtimeSource) !== runtimeSource
   || !hasRuntimeHeadlessLifecycle(runtimeSource)
   || !hasRuntimeKeychainRecovery(runtimeSource)
+  || !hasRuntimeManagedCredentialSetup(runtimeSource)
   || patchRuntimeNetworkRetryClassification(runtimeSource) !== runtimeSource
   || !hasRuntimeNetworkRetryGuard(runtimeSource)
   || patchRuntimeSqliteBusyTimeout(runtimeSource) !== runtimeSource

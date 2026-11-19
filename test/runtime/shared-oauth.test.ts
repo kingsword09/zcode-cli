@@ -7,7 +7,7 @@ import { runtimeTestEnv } from "../fixtures/runtime-env.ts";
 const root = join(import.meta.dir, "../..");
 
 /** Run native login, encryption, account projection and request signing; only HTTP is simulated. */
-async function probe(body: string) {
+async function probe(body: string, withoutKeyring = false) {
   const directory = await mkdtemp(join(tmpdir(), "zcode-shared-oauth-"));
   try {
     const file = join(root, "vendor/zcode.cjs");
@@ -28,10 +28,16 @@ async function probe(body: string) {
     const script = `const fs=require("node:fs"),Module=require("node:module"),path=require("node:path");
       const file=${JSON.stringify(file)},runtime=new Module(file,module);
       runtime.filename=file;runtime.paths=Module._nodeModulePaths(path.dirname(file));
+      ${withoutKeyring ? `
+      const nativeRequire=runtime.require.bind(runtime),helperPath=path.join(path.dirname(file),"cli-config.cjs"),helper=nativeRequire(helperPath);
+      const recover=helper.createKeychainRecovery({platform:"linux"});
+      runtime.require=id=>id===helperPath?{...helper,createRecoverableSystemKeyStore:(_entry,unavailable)=>helper.createRecoverableSystemKeyStore(
+        async()=>({getSecret:async()=>{throw new Error("Secret Service unavailable")},setPassword:async()=>{throw new Error("Secret Service unavailable")}}),unavailable,recover
+      )}:nativeRequire(id);` : ""}
       runtime._compile(fs.readFileSync(file,"utf8").replace(${JSON.stringify(main[0])},${JSON.stringify(main[0] + injected)}),file);`;
     const child = Bun.spawn([Bun.which("node")!, "--eval", script], {
       cwd: directory,
-      env: { ...runtimeTestEnv(directory), ZCODE_CREDENTIAL_SECRET: "shared-oauth-test-secret" },
+      env: { ...runtimeTestEnv(directory), ZCODE_CREDENTIAL_SECRET: withoutKeyring ? "" : "shared-oauth-test-secret" },
       stdin: "ignore",
       stdout: "pipe", stderr: "pipe"
     });
@@ -100,6 +106,36 @@ test("one native polling Z.AI login authorizes Coding Plan and Start Plan", asyn
     }
     assert.ok(!calls.includes("/api/auth/z/login"));
   `);
+}, 15_000);
+
+test("a first login recovers before OAuth and saves credentials without a restart or repeated authorization", async () => {
+  await probe(`
+    let prompts=0;
+    const confirmCredentialStorage=async()=>{prompts++;assert.deepEqual(calls,[]);return true};
+    await loginZCodeCli({env,noBrowser:true,httpClient,confirmCredentialStorage});
+    assert.equal(prompts,1);
+    assert.equal(calls.filter(value=>value==="/api/v1/oauth/cli/init").length,1);
+    assert.equal(await store.load("oauth:zai:access_token"),businessToken);
+    const secretPath=require("node:path").join(require("node:path").dirname(store.filePath),"credential-secret");
+    const original=await fs.readFile(secretPath,"utf8");
+    assert.equal(Buffer.from(original,"base64url").length,32);
+    assert.ok((await fs.readFile(store.filePath,"utf8")).includes("enc:v2:env:"));
+    calls.length=0;
+    await loginZCodeCli({env,noBrowser:true,httpClient,confirmCredentialStorage});
+    assert.equal(prompts,1);
+    assert.equal(await fs.readFile(secretPath,"utf8"),original);
+  `, true);
+}, 15_000);
+
+test("declining login recovery creates no key and never starts OAuth", async () => {
+  await probe(`
+    let prompts=0;
+    await assert.rejects(loginZCodeCli({env,noBrowser:true,httpClient,confirmCredentialStorage:async()=>{prompts++;return false}}),
+      error=>error.code==="CREDENTIAL_SECURE_STORAGE_UNAVAILABLE");
+    assert.equal(prompts,1);
+    assert.deepEqual(calls,[]);
+    assert.deepEqual(await fs.readdir(require("node:path").dirname(store.filePath)),[]);
+  `, true);
 }, 15_000);
 
 test("a Desktop-only session authorizes CLI requests without a second login", async () => {

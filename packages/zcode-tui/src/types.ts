@@ -22,6 +22,7 @@ export interface PromptCallOptions {
   queryId?: string;
   onEvent?: (event: unknown) => void | Promise<void>;
   requestPermission?: (request: unknown, context?: unknown) => Promise<unknown>;
+  confirmCredentialStorage?: (options: { signal?: AbortSignal }) => Promise<boolean>;
 }
 
 export type PermissionRequester = (request: unknown, context?: unknown) => Promise<unknown>;
