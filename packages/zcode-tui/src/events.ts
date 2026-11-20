@@ -1,4 +1,5 @@
 import { asString, isRecord, type UnknownRecord } from "./types.ts";
+import { describeError } from "./error-details.ts";
 import type { ToolProgressData } from "./tool-renderers.ts";
 
 export interface StreamEvent {
@@ -31,6 +32,7 @@ export interface StreamEvent {
   input?: unknown;
   result?: unknown;
   error?: unknown;
+  errorDetail?: string;
   errorCode?: string;
   errorPhase?: string;
   exceptionType?: string;
@@ -92,6 +94,10 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
   const part = normalizeRestoredPart(partValue);
   const error = body.error;
   const errorRecord = isRecord(error) ? error : undefined;
+  const failure = error !== undefined || type === "turn.failed" || type === "turn_error"
+    || (type && modelNetworkEventTypes.has(type) && type !== "model_request_started" && type !== "model_request_completed")
+    ? describeError(body)
+    : undefined;
   const originMeta = nestedRecord(body, "originMeta");
   const subagentMessage = nestedRecord(body, "subagentMessage");
   const streamRecovery = nestedRecord(body, "streamRecovery");
@@ -170,10 +176,11 @@ export function normalizeEvent(value: unknown): StreamEvent | null {
     input: body.input ?? toolCall?.input ?? (part?.type === "tool" ? part.input : undefined),
     result: body.result ?? body.output ?? (part?.type === "tool" ? part.output : undefined),
     error: error ?? (part?.type === "tool" ? part.error : undefined),
+    errorDetail: failure?.detail,
     errorCode: asString(body.errorCode),
     errorPhase: asString(body.errorPhase),
     exceptionType: asString(body.exceptionType),
-    message: asString(body.message)
+    message: failure?.message ?? asString(body.message)
       ?? asString(body.summaryText)
       ?? (type === "subagent_message" ? asString(body.text) : undefined)
       ?? asString(error)
