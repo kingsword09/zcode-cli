@@ -42,6 +42,7 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 | --- | --- |
 | `config-bootstrap.test.ts` | Startup overwrites user settings, creates public settings, races another startup, or ignores a host-selected file. |
 | `app-server-client.test.ts` | A response goes to the wrong request, protocol errors disappear, or cancellation leaves a process running. |
+| `error-details.test.ts` | Runtime error causes or diagnostics disappear behind generic wrappers, or error rendering hides the reason for failure. |
 | `app-server-auth.test.ts` | Local credentials are used in host mode, or an invalid mode silently selects an account. |
 | `shared-oauth.test.ts` | Logout/account switching reuses stale identity, or a login publishes the wrong token kind. |
 | `prompt-preflight.test.ts` | A keyless prompt starts work, an explicit model is ignored, or a malformed config is silently replaced. |
@@ -99,6 +100,7 @@ large process-count stress runs are not part of this baseline.
 | `skills.test.ts` | Slash skill selection fails to complete or dispatch through the native skill route. |
 | `permission-request-queue.test.ts` | The actual TUI cannot answer concurrent permissions in order. |
 | `startup.test.ts` | Input submits before initialization, cancelled startup reopens the UI, or a failure leaves raw mode enabled. |
+| `turn-errors.test.ts` | Turn failures hide their cause, duplicate the same failure, or reuse diagnostics from a recovered request. |
 | `terminal-exit.test.ts` | Regular/fullscreen exit or cancellation leaks input into the parent shell or returns the wrong status. |
 | `write-and-diff.test.ts` | A tool's workspace write cannot be inspected through the TUI and real Git diff. |
 

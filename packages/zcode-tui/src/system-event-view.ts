@@ -3,7 +3,7 @@ import {
   type Component
 } from "@earendil-works/pi-tui";
 
-import { sanitizeTerminalText } from "./terminal-text.ts";
+import { sanitizeTerminalText, truncateGraphemes } from "./terminal-text.ts";
 import type { ZCodeTheme } from "./theme.ts";
 
 export interface SystemEventData {
@@ -15,11 +15,21 @@ export interface SystemEventData {
 
 export class SystemEventView implements Component {
   private expanded = false;
+  private readonly detailText?: string;
+  private readonly previewText?: string;
 
   constructor(
     private readonly theme: ZCodeTheme,
     private readonly event: SystemEventData
-  ) {}
+  ) {
+    this.detailText = event.detail
+      ? sanitizeTerminalText(event.detail, { preserveSgr: false }).trim() || undefined
+      : undefined;
+    if (event.tone === "error") {
+      const firstLine = this.detailText?.split("\n").find(line => line.trim())?.trim();
+      this.previewText = firstLine ? truncateGraphemes(firstLine, 240) : undefined;
+    }
+  }
 
   setExpanded(expanded: boolean): void {
     this.expanded = expanded;
@@ -30,7 +40,7 @@ export class SystemEventView implements Component {
   }
 
   hasHiddenContent(): boolean {
-    return Boolean(this.event.detail) && !this.expanded;
+    return Boolean(this.detailText && this.detailText !== this.previewText) && !this.expanded;
   }
 
   getSearchText(): string {
@@ -47,13 +57,12 @@ export class SystemEventView implements Component {
     const summary = this.event.summary
       ? sanitizeTerminalText(this.event.summary, { preserveSgr: false })
       : undefined;
-    const detail = this.event.detail
-      ? sanitizeTerminalText(this.event.detail, { preserveSgr: false })
-      : undefined;
-    const hint = detail && !this.expanded ? this.theme.muted(" · Ctrl+O to expand") : "";
+    const detail = this.detailText;
+    const preview = this.previewText;
+    const hint = this.hasHiddenContent() ? this.theme.muted(" · Ctrl+O to expand") : "";
     const lines = [
       `${icon} ${this.theme.bold(title)}${summary ? ` ${this.theme.muted(`· ${summary}`)}` : ""}${hint}`,
-      ...(detail && this.expanded ? [detail] : [])
+      ...(this.expanded && detail ? [detail] : preview ? [preview] : [])
     ];
     const background = this.event.tone === "error" ? this.theme.toolErrorBackground : undefined;
     return new Text(lines.join("\n"), 1, 0, background).render(width);
