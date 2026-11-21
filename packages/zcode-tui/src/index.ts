@@ -245,6 +245,7 @@ import {
 } from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
+import { readQuotaStatusline } from "./quota-statusline.ts";
 import { QuotaView } from "./quota-view.ts";
 import { loadCurrentQuotaOverview } from "../../../src/quota.ts";
 import { SystemEventView, type SystemEventData } from "./system-event-view.ts";
@@ -710,6 +711,7 @@ class ZCodeTui {
   private terminalFocus: TerminalFocusState = "unknown";
   private copyOnSelect = true;
   private toolCallStyle: ToolCallStyle = "regular";
+  private quotaStatusPercent: number | undefined = undefined;
   private thoughtLevel?: string;
   private showReasoning: boolean;
   private modelOptions: unknown[];
@@ -5891,6 +5893,12 @@ class ZCodeTui {
     return this.sessionModelRecovery;
   }
 
+  /** Background quota refresh (ui.quotaStatusline) updates the statusline through this setter. */
+  setQuotaStatusPercent(percent: number | undefined): void {
+    this.quotaStatusPercent = percent;
+    this.updateMetadata();
+  }
+
   private updateMetadata(): void {
     this.editor.planEnabled = this.planEnabled;
     const fields: StatusLineField[] = [
@@ -5951,6 +5959,19 @@ class ZCodeTui {
         text: style(`cache ${cacheRate}% hit`),
         compactText: style(`cache ${cacheRate}%`),
         priority: 85
+      });
+    }
+    if (this.quotaStatusPercent !== undefined) {
+      const percent = Math.round(this.quotaStatusPercent);
+      const style = percent <= 0
+        ? this.theme.error
+        : percent <= 20
+          ? this.theme.warning
+          : this.theme.muted;
+      fields.push({
+        text: style(`quota ${percent}%`),
+        compactText: style(`quota ${percent}%`),
+        priority: 70
       });
     }
     if (this.sessionMetrics.totalTokens !== undefined) {
@@ -6455,8 +6476,37 @@ class ZCodeTui {
   }
 }
 
+async function refreshQuotaStatusline(tui: ZCodeTui): Promise<void> {
+  try {
+    const result = await loadCurrentQuotaOverview();
+    if (!result.ok) {
+      tui.setQuotaStatusPercent(undefined);
+      return;
+    }
+    const percents = result.overview.balances
+      .map(balance => balance.percentLeft)
+      .filter((percent): percent is number => percent !== undefined);
+    tui.setQuotaStatusPercent(percents.length ? Math.min(...percents) : undefined);
+  } catch {
+    // background refresh must never surface into the statusline
+  }
+}
+
+async function startQuotaStatuslineLoop(tui: ZCodeTui): Promise<void> {
+  if (!(await readQuotaStatusline())) return;
+  const refresh = (): void => {
+    void refreshQuotaStatusline(tui);
+  };
+  refresh();
+  const timer = setInterval(refresh, 300_000);
+  timer.unref?.();
+}
+
 export async function runTui(options: TuiOptions): Promise<void> {
   suppressTuiAiSdkWarnings();
   const readyOptions = await loadTuiStartupOptions(options);
-  if (readyOptions) await new ZCodeTui(readyOptions).run();
+  if (!readyOptions) return;
+  const tui = new ZCodeTui(readyOptions);
+  startQuotaStatuslineLoop(tui);
+  await tui.run();
 }
