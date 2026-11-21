@@ -5323,7 +5323,7 @@ class ZCodeTui {
    * `/help <command>` still forwards to the runtime, which owns per-command details.
    */
   private async showHelpSummary(): Promise<void> {
-    const commands = this.autocompleteCommands();
+    const commands = this.autocompleteCommands().slice().sort((a, b) => a.name.localeCompare(b.name));
     const lines = commands.map(command => {
       const rawHint = command.argumentHint?.trim() ?? "";
       const hint = rawHint ? ` ${rawHint.startsWith("[") ? rawHint : `[${rawHint}]`}` : "";
