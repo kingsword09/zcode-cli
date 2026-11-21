@@ -60,6 +60,10 @@ export function explicitModelRequest(input: string): string | undefined {
   return argument;
 }
 
+export function isModelDefaultRequest(input: string): boolean {
+  return /^\/model\s+default$/iu.test(input.trim());
+}
+
 export function isEffortPickerRequest(input: string): boolean {
   return pickerRequest(input, new Set(["effort", "variant"]));
 }

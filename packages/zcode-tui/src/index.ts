@@ -162,6 +162,7 @@ import {
   explicitModelRequest,
   isEffortPickerRequest,
   isModePickerRequest,
+  isModelDefaultRequest,
   isModelPickerRequest,
   modePicker,
   modelPicker,
@@ -1899,6 +1900,13 @@ class ZCodeTui {
       } else {
         await this.switchPlan(argument === "on" ? true : argument === "off" ? false : undefined);
       }
+      return;
+    }
+    // `/model default` opens the default-model picker: it persists the shared
+    // default (used by new sessions) via the runtime's saveConfiguredDefault.
+    if (isModelDefaultRequest(input)) {
+      this.addUserMessage(submission.displayInput);
+      await this.showModelProviderSettings();
       return;
     }
     // Explicit `/model <provider/model>` is also a session-only switch — the
@@ -4302,7 +4310,7 @@ class ZCodeTui {
       await this.handleResult(result, false);
       const status = !recovering && this.model === previousModel ? "already active" : "now";
       this.addNotice(
-        `Session model ${status}: ${this.model} · saved defaults unchanged.`,
+        `Session model ${status}: ${this.model} · saved defaults unchanged · /model default saves it for new sessions.`,
         "muted"
       );
     } catch (error) {
