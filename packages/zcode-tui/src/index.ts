@@ -5325,7 +5325,8 @@ class ZCodeTui {
   private async showHelpSummary(): Promise<void> {
     const commands = this.autocompleteCommands();
     const lines = commands.map(command => {
-      const hint = command.argumentHint ? ` [${command.argumentHint}]` : "";
+      const rawHint = command.argumentHint?.trim() ?? "";
+      const hint = rawHint ? ` ${rawHint.startsWith("[") ? rawHint : `[${rawHint}]`}` : "";
       return `- /${command.name}${hint}: ${command.description}`;
     });
     await this.showChoice({
