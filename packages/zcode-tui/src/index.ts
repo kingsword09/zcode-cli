@@ -245,6 +245,8 @@ import {
 } from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
+import { QuotaView } from "./quota-view.ts";
+import { loadCurrentQuotaOverview } from "../../../src/quota.ts";
 import { SystemEventView, type SystemEventData } from "./system-event-view.ts";
 import { sanitizeTerminalText, stripCaretHighlight } from "./terminal-text.ts";
 import { ThinkingView } from "./thinking-view.ts";
@@ -1528,6 +1530,7 @@ class ZCodeTui {
       { name: "sessions", description: "Browse and resume past sessions (desktop and CLI)" },
       { name: "context", description: "Inspect context usage and prompt composition" },
       { name: "status", description: "Inspect detailed runtime and session status" },
+      { name: "quota", description: "Inspect plan quota and balances for the signed-in account" },
       { name: "rename", description: "Rename the current session", argumentHint: "<title>" },
       { name: "config", description: "Configure ZCode TUI settings" },
       { name: "settings", description: "Configure ZCode TUI settings" },
@@ -1843,6 +1846,11 @@ class ZCodeTui {
     }
     if (input === "/status") {
       await this.showStatusDetails();
+      return;
+    }
+
+    if (input === "/quota") {
+      await this.showQuotaDetails();
       return;
     }
     const renameRequest = sessionRenameRequest(input);
@@ -5298,6 +5306,31 @@ class ZCodeTui {
         openTodos: this.todos.filter((todo) => todo.status !== "completed").length,
         mcpSummary
       }),
+      items: [{ value: "close", label: "Close" }]
+    });
+  }
+
+  private async showQuotaDetails(): Promise<void> {
+    const result = await loadCurrentQuotaOverview();
+    if (!result.ok) {
+      if (result.reason === "no-oauth-session") {
+        this.addNotice("No shared OAuth session for quota — sign in with /login first.", "warning");
+      } else if (result.reason === "secure-storage-unavailable") {
+        this.addNotice("Secure credential storage is unavailable; configure ZCODE_CREDENTIAL_SECRET or ZCODE_CREDENTIAL_SECRET_FILE to read quota.", "warning");
+      } else {
+        this.addNotice(`Quota request failed: ${result.detail ?? "unknown error"}`, "warning");
+      }
+      return;
+    }
+    const overview = result.overview;
+    if (overview.plans.length === 0 && overview.balances.length === 0) {
+      this.addNotice("No plan balances on this account for the signed-in session.", "warning");
+      return;
+    }
+    await this.showChoice({
+      title: "Quota",
+      prompt: "Live plan balances for the signed-in account. The compact statusline stays minimal.",
+      content: new QuotaView(this.theme, overview, new Date().toLocaleTimeString("en-US")),
       items: [{ value: "close", label: "Close" }]
     });
   }
