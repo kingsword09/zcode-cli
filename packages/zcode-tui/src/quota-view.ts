@@ -49,7 +49,7 @@ export class QuotaView implements Component {
       lines.push(this.theme.accent(`${plan.name}${status}`));
     }
     const expiry = formatExpiry(plan?.endsAt);
-    if (expiry) lines.push(this.theme.muted(`Expires ${expiry} · server clock`));
+    if (expiry) lines.push(this.theme.muted(`Expires ${expiry}`));
     if (plan?.name || expiry) lines.push("");
 
     const slots = this.overview.balances.slice(0, MAX_RENDERED_SLOTS);
@@ -87,14 +87,15 @@ export class QuotaView implements Component {
   private slotTitle(slot: QuotaSlot, safeWidth: number): string {
     const name = slot.name ?? "model";
     const tint = this.slotTint(slot);
+    // Bare percent (the detail line carries used/total and "exhausted"), placed
+    // beside the name with a bounded, comfortable gap — wide terminals never
+    // push it to the far edge, and it shrinks before getting cut on narrow ones.
     const percent = slot.percentLeft === undefined
       ? undefined
-      : slot.percentLeft <= 0
-        ? "exhausted"
-        : `${Math.round(slot.percentLeft)}% left`;
+      : `${Math.round(slot.percentLeft)}%`;
     if (percent === undefined) return truncateToWidth(name, safeWidth, "…");
-    const gap = Math.max(1, safeWidth - visibleWidth(name) - visibleWidth(percent) - 1);
-    const padded = name + " ".repeat(Math.min(gap, 64)) + tint(percent);
+    const gap = Math.max(2, Math.min(6, safeWidth - visibleWidth(name) - visibleWidth(percent) - 1));
+    const padded = name + " ".repeat(gap) + tint(percent);
     return truncateToWidth(padded, safeWidth, "…");
   }
 
