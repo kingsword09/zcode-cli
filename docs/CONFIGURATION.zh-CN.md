@@ -513,6 +513,18 @@ ZCODE_TUI_RUNTIME_LOG=/tmp/zcode-tui-runtime.log zcode
   }
 }
 ```
+```
+
+## 计划额度状态栏
+
+在用户配置中将 `ui.quotaStatusline` 设为 `true`，紧凑状态栏会追加
+`quota <percent>%` 段：显示登录账号所有计划槽位中剩余最少的一项，
+低于 20% 时以警告色显示，耗尽时以错误色显示，后台每五分钟刷新一次。
+该功能仅适用于 OAuth 会话（Start Plan / Coding Plan）；手动 API-key
+提供商没有可读取的 zcode-plan 余额。`/quota` 可随时打开完整余额卡片
+并立即刷新。
+
+
 
 正常退出或处理 `SIGINT`、`SIGTERM`、`SIGHUP` 时会恢复终端状态。
 任何终端程序都无法拦截强制的 `SIGKILL`。

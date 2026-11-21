@@ -637,6 +637,16 @@ user config: `~/.zcode/cli/setting.json` on macOS/Linux or
 takes priority over terminal probing. `auto` queries the terminal background
 color and color scheme at startup and re-applies the matching palette.
 
+## Plan quota statusline
+
+Set `ui.quotaStatusline` to `true` in the user config to add a `quota <percent>%`
+segment to the compact statusline. It shows the lowest remaining balance across
+the signed-in account's plan slots, warning-tinted below 20% and error-tinted
+when exhausted, refreshed in the background every five minutes. It renders only
+for OAuth sessions (Start Plan / Coding Plan); manual API-key providers have no
+zcode-plan balance to read. `/quota` opens the full balance card on demand and
+refreshes immediately.
+
 ## Turn completion notifications
 
 Notifications are enabled by default and emitted after a normal agent turn
