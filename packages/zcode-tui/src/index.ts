@@ -246,6 +246,7 @@ import {
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
 import { readQuotaStatusline } from "./quota-statusline.ts";
+import { HelpSummaryView } from "./help-summary-view.ts";
 import { QuotaView } from "./quota-view.ts";
 import { loadCurrentQuotaOverview } from "../../../src/quota.ts";
 import { SystemEventView, type SystemEventData } from "./system-event-view.ts";
@@ -1848,6 +1849,11 @@ class ZCodeTui {
     }
     if (input === "/status") {
       await this.showStatusDetails();
+      return;
+    }
+
+    if (input === "/help") {
+      await this.showHelpSummary();
       return;
     }
 
@@ -5308,6 +5314,24 @@ class ZCodeTui {
         openTodos: this.todos.filter((todo) => todo.status !== "completed").length,
         mcpSummary
       }),
+      items: [{ value: "close", label: "Close" }]
+    });
+  }
+
+  /**
+   * Bare `/help` renders the merged command list (runtime-provided + TUI-local).
+   * `/help <command>` still forwards to the runtime, which owns per-command details.
+   */
+  private async showHelpSummary(): Promise<void> {
+    const commands = this.autocompleteCommands();
+    const lines = commands.map(command => {
+      const hint = command.argumentHint ? ` [${command.argumentHint}]` : "";
+      return `- /${command.name}${hint}: ${command.description}`;
+    });
+    await this.showChoice({
+      title: "Help",
+      prompt: "All slash commands — runtime-provided and TUI-local.",
+      content: new HelpSummaryView(this.theme, lines, "Use /help <command> for runtime command details. Custom plugin commands live under /plugins."),
       items: [{ value: "close", label: "Close" }]
     });
   }
