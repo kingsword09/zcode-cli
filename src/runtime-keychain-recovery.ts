@@ -5,8 +5,7 @@ import { isatty } from "node:tty";
 type Recovery = <Result>(operation: () => Promise<Result>) => Promise<Result>;
 
 interface KeyringEntry {
-  getPassword?(): Promise<string | null>;
-  getSecret?(): Promise<number[] | null>;
+  getPassword(): Promise<string | null>;
   setPassword(value: string): Promise<void>;
 }
 
@@ -117,8 +116,7 @@ const recoverKeychain = createKeychainRecovery();
 export function createRecoverableSystemKeyStore(
   entry: () => Promise<KeyringEntry>,
   unavailable: () => Error,
-  recover: Recovery = recoverKeychain,
-  platform: NodeJS.Platform = process.platform
+  recover: Recovery = recoverKeychain
 ): { get(): Promise<string | null>; set(value: string): Promise<void> } {
   const attempt = async <Result>(operation: () => Promise<Result>): Promise<Result> => {
     try {
@@ -131,24 +129,7 @@ export function createRecoverableSystemKeyStore(
     }
   };
   return {
-    get: () => attempt(async () => {
-      const keyringEntry = await entry();
-      if (keyringEntry.getPassword) return await keyringEntry.getPassword();
-      const secret = await keyringEntry.getSecret?.();
-      // Match setPassword: Windows stores UTF-16LE; the other backends store UTF-8.
-      return secret === null || secret === undefined
-        ? null
-        : new TextDecoder(platform === "win32" ? "utf-16le" : "utf-8", { fatal: true }).decode(Uint8Array.from(secret));
-    }),
+    get: () => attempt(async () => await (await entry()).getPassword()),
     set: value => attempt(async () => { await (await entry()).setPassword(value); })
   };
-}
-
-export function cacheCredentialKey<Result>(cache: Map<string, Promise<Result>>, path: string, pending: Promise<Result>): Promise<Result> {
-  const tracked = pending.catch(error => {
-    if (cache.get(path) === tracked) cache.delete(path);
-    throw error;
-  });
-  cache.set(path, tracked);
-  return tracked;
 }

@@ -1514,19 +1514,14 @@ export function patchRuntimePromptModel(runtime: string): string {
     const options = switchAnchor[2] ?? switchAnchor[3];
     patched = patched.replace(switchAnchor[0], `${context}.cliDefaultSelection&&(${options}?.cliDefault&&await ${context}.prepareResume(),!${options}?.transient||${options}?.cliDefault)?`);
   }
-  const tuiAnchor = /if\(qe&&j\.set\(ut,qe\),P\)throw await q\(ut\),new Error\("TUI prompt handler is closed"\)/u;
-  if (tuiAnchor.test(patched)) {
-    patched = patched.replace(tuiAnchor, `let ${tuiPromptOverrideMarker}=true;${promptOverrideInsertion("ut")}if(qe&&j.set(ut,qe),P)throw await q(ut),new Error("TUI prompt handler is closed")`);
-  } else {
-    const closedHandler = patched.indexOf('if(N)throw new Error("TUI prompt handler is closed")');
-    const appReturns = [...patched.matchAll(/return ([A-Za-z_$][\w$]*)\},"createApp"\)/gu)];
-    const appReturn = appReturns.find(match => match.index! > closedHandler && match.index! < closedHandler + 10_000);
-    if (closedHandler < 0 || !appReturn) {
-      throw new Error("ZCode runtime is incompatible with the prompt model patch (TUI app anchor missing).");
-    }
-    const app = appReturn[1]!;
-    patched = patched.replace(appReturn[0], `let ${tuiPromptOverrideMarker}=true;${promptOverrideInsertion(app)}${appReturn[0]}`);
+  const closedHandler = patched.indexOf('if(N)throw new Error("TUI prompt handler is closed")');
+  const appReturns = [...patched.matchAll(/return ([A-Za-z_$][\w$]*)\},"createApp"\)/gu)];
+  const appReturn = appReturns.find(match => match.index! > closedHandler && match.index! < closedHandler + 10_000);
+  if (closedHandler < 0 || !appReturn) {
+    throw new Error("ZCode runtime is incompatible with the 3.19 TUI prompt handler.");
   }
+  const app = appReturn[1]!;
+  patched = patched.replace(appReturn[0], `let ${tuiPromptOverrideMarker}=true;${promptOverrideInsertion(app)}${appReturn[0]}`);
   return patched;
 }
 
