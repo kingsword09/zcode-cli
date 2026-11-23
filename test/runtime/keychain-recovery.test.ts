@@ -5,7 +5,7 @@ import { hasRuntimeKeychainRecovery, patchRuntimeKeychainRecovery } from "../../
 
 const runtime319 = `
 function nativeStore(file){let entry, getEntry=async()=>keyring;return{async get(){return await(await getEntry()).getPassword()},async set(value){await(await getEntry()).setPassword(value)}}}
-function nativeCipher(file){let c=new Map;async function getKey(){let started=!1,i=file,S=Promise.resolve({generation:await readGeneration()});return S.generation===await readGeneration()?S:(c.set(i,S),S.catch(k=>{!started&&c.get(i)===S&&c.delete(i)}),S)}return{getKey}}
+function nativeCipher(file){let c=new Map,v=!1,i=file;async function getKey(){let S=Promise.resolve({generation:await readGeneration()});return S.generation===await readGeneration()?S:(c.set(i,S),S.catch(k=>{!v&&c.get(i)===S&&c.delete(i)}),S)}return{getKey}}
 label(nativeStore,"systemKeyStore");label(nativeCipher,"createSystemCredentialCipher");
 const message="Unlock the OS credential store and restart to retry";
 `;
@@ -15,6 +15,7 @@ test("3.19 keyring and cipher boundaries gain terminal recovery", () => {
   expect(hasRuntimeKeychainRecovery(patched)).toBe(true);
   expect(patchRuntimeKeychainRecovery(patched)).toBe(patched);
   expect(patched).toContain(".createRecoverableSystemKeyStore(getEntry,");
+  expect(patched).toContain("S.catch(k=>{c.get(i)===S&&c.delete(i)}");
   expect(patched).toContain('const message="Unlock the OS credential store and retry";');
   expect(() => parse(patched, { ecmaVersion: "latest" })).not.toThrow();
 });
@@ -30,7 +31,7 @@ test("the current runtime supports an idempotent, verified keychain recovery pat
 test("changed 3.19 keyring APIs and partially patched runtimes fail closed", async () => {
   const changedApi = runtime319.replace("getPassword()", "getSecret()");
   expect(() => patchRuntimeKeychainRecovery(changedApi)).toThrow("3.19 system keyring API changed");
-  const changedCache = runtime319.replace("generation===await", "generation!==await");
+  const changedCache = runtime319.replace("!v&&c.get(i)===S&&c.delete(i)", "v&&c.get(i)===S&&c.delete(i)");
   expect(() => patchRuntimeKeychainRecovery(changedCache)).toThrow("3.19 credential cache recovery changed");
 
   const runtime = await readFile(new URL("../../vendor/zcode.cjs", import.meta.url), "utf8");

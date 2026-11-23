@@ -22,8 +22,12 @@ function modernStoreGetter(source: string): string | undefined {
   return new RegExp(`async get\\(\\)\\{return await\\(await (${identifier})\\(\\)\\)\\.getPassword\\(\\)\\}`, "u").exec(source)?.[1];
 }
 
+const failedKeyLookupMarker = "!v&&c.get(i)===S&&c.delete(i)";
+const recoveredKeyLookupMarker = "c.get(i)===S&&c.delete(i)";
+
 function hasNativeCacheRecovery(source: string): boolean {
-  return source.includes("generation===await") && source.includes("S.catch(") && source.includes("c.delete(i)");
+  return source.includes("generation===await") && source.includes("S.catch(")
+    && source.includes(recoveredKeyLookupMarker) && !source.includes(failedKeyLookupMarker);
 }
 
 export function hasRuntimeKeychainRecovery(runtime: string): boolean {
@@ -51,14 +55,20 @@ export function patchRuntimeKeychainRecovery(runtime: string): string {
   if (storeReturn?.type !== "ReturnStatement" || !getter || !setter) {
     incompatible("3.19 system keyring API changed");
   }
-  if (!hasNativeCacheRecovery(runtime.slice(cipher.start, cipher.end))) {
+  const cipherSource = runtime.slice(cipher.start, cipher.end);
+  if (!cipherSource.includes("generation===await") || !cipherSource.includes("S.catch(")
+    || cipherSource.split(failedKeyLookupMarker).length !== 2) {
     incompatible("3.19 credential cache recovery changed");
   }
 
   const unavailable = '()=>Object.assign(new Error("System credential storage is unavailable."),{code:"CREDENTIAL_SECURE_STORAGE_UNAVAILABLE"})';
-  let patched = runtime.slice(0, storeReturn.start)
+  let patched = runtime.replace(failedKeyLookupMarker, recoveredKeyLookupMarker);
+  const patchedStore = namedFunction(patched, "systemKeyStore");
+  const patchedReturn = patchedStore.body.body.at(-1);
+  if (patchedReturn?.type !== "ReturnStatement") incompatible("3.19 system keyring API changed");
+  patched = patched.slice(0, patchedReturn.start)
     + `return ${helper}.createRecoverableSystemKeyStore(${getter},${unavailable})`
-    + runtime.slice(storeReturn.end);
+    + patched.slice(patchedReturn.end);
   patched = patched.replace("Unlock the OS credential store and restart to retry", "Unlock the OS credential store and retry");
   if (!hasRuntimeKeychainRecovery(patched)) incompatible("postcondition failed");
   return patched;
