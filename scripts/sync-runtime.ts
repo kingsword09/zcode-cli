@@ -1514,13 +1514,13 @@ export function patchRuntimePromptModel(runtime: string): string {
     const options = switchAnchor[2] ?? switchAnchor[3];
     patched = patched.replace(switchAnchor[0], `${context}.cliDefaultSelection&&(${options}?.cliDefault&&await ${context}.prepareResume(),!${options}?.transient||${options}?.cliDefault)?`);
   }
-  const closedHandler = patched.indexOf('if(N)throw new Error("TUI prompt handler is closed")');
-  const appReturns = [...patched.matchAll(/return ([A-Za-z_$][\w$]*)\},"createApp"\)/gu)];
+  const closedHandler = patched.indexOf("TUI prompt handler is closed");
+  const appReturns = [...patched.matchAll(/return (?:[A-Za-z_$][\w$]*\.current=[A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\),)?([A-Za-z_$][\w$]*)\},"createApp"\)/gu)];
   const appReturn = appReturns.find(match => match.index! > closedHandler && match.index! < closedHandler + 10_000);
   if (closedHandler < 0 || !appReturn) {
-    throw new Error("ZCode runtime is incompatible with the 3.19 TUI prompt handler.");
+    throw new Error("ZCode runtime is incompatible with the 4.0 TUI prompt handler.");
   }
-  const app = appReturn[1]!;
+  const app = appReturn[2]!;
   patched = patched.replace(appReturn[0], `let ${tuiPromptOverrideMarker}=true;${promptOverrideInsertion(app)}${appReturn[0]}`);
   return patched;
 }
@@ -1682,20 +1682,26 @@ export function patchRuntimeBigmodelSessionReuse(runtime: string): string {
     const accountIdentity = nativeSymbol("createStandaloneAccountIdentityFromSecret");
     const credentialStore = new RegExp(`e\\.credentialStore\\?\\?(${name})\\(\\{env:${name}\\}\\)`, "u").exec(shared)?.[1];
     const credentialKeys = new RegExp(`\\[(${name})\\.bigmodelAccessToken\\]`, "u").exec(shared)?.[1];
-    const configWriter = new RegExp(`await (${name})\\(\\{accountIdentity:${name},authSource:"oauth",credentialStore:${name},env:${name},personalProviderConfigPath:e\\.personalProviderConfigPath,providerId:${name}\\}\\)`, "u").exec(shared)?.[1];
+    const guardedConfigWriter = new RegExp(`await ${name}\\.run\\(\\(\\)=>(${name})\\(\\{accountIdentity:${name},authSource:"oauth",commitGuard:${name}\\.commit,credentialStore:${name},env:${name},personalProviderConfigPath:e\\.personalProviderConfigPath,providerId:${name}\\}\\)\\)`, "u").exec(shared)?.[1];
+    const configWriter = guardedConfigWriter ?? new RegExp(`await (${name})\\(\\{accountIdentity:${name},authSource:"oauth",credentialStore:${name},env:${name},personalProviderConfigPath:e\\.personalProviderConfigPath,providerId:${name}\\}\\)`, "u").exec(shared)?.[1];
     const prefix = new RegExp(`^async function ${escapeRegExpName(label)}\\(e=\\{\\}\\)\\{`, "u").exec(login);
     if (sharedStart < 0 || sharedEnd < 0 || !prefix || !abortHelper || !materialResolver
       || !httpClientFactory || !accountIdentity || !credentialStore || !credentialKeys || !configWriter) {
       throw new Error("ZCode runtime is incompatible with BigModel session reuse (polling dependency anchor missing).");
     }
+    const hasCredentialSnapshotGuard = !!guardedConfigWriter && shared.includes("loadOAuthSessionSnapshot()");
     const reuse = [
       `if((e.env??process.env).${bigmodelSessionReuseMarker}!=="0"){`,
-      `let $bEnv=e.env??process.env,$bStore=e.credentialStore??${credentialStore}({env:$bEnv}),$bToken,$bMaterial;`,
+      `let $bEnv=e.env??process.env,$bStore=e.credentialStore??${credentialStore}({env:$bEnv}),$bToken,$bMaterial${hasCredentialSnapshotGuard ? ",$bGuard,$bSnapshot" : ""};`,
       `${abortHelper}(e.abortSignal);`,
-      `try{$bToken=(await $bStore.load(${credentialKeys}.bigmodelAccessToken))?.trim()}catch{}`,
+      hasCredentialSnapshotGuard
+        ? `try{$bGuard=await $bStore.captureRecoveryGuard();$bSnapshot=await $bStore.loadOAuthSessionSnapshot();$bToken=$bSnapshot[${credentialKeys}.bigmodelAccessToken]?.trim()}catch{}`
+        : `try{$bToken=(await $bStore.load(${credentialKeys}.bigmodelAccessToken))?.trim()}catch{}`,
       `if($bToken)try{$bMaterial=await ${materialResolver}({accessToken:$bToken,env:$bEnv,httpClient:e.httpClient??${httpClientFactory}($bEnv),family:"bigmodel",resolver:e.apiKeyResolver,signal:e.abortSignal})}catch{}`,
       `if($bMaterial){${abortHelper}(e.abortSignal);`,
-      `let $bConfig=await ${configWriter}({accountIdentity:${accountIdentity}(JSON.stringify([$bMaterial.organizationId,$bMaterial.projectId])),authSource:"oauth",credentialStore:$bStore,env:$bEnv,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"bigmodel"});`,
+      hasCredentialSnapshotGuard
+        ? `let $bConfig=await $bGuard.run(()=>${configWriter}({accountIdentity:${accountIdentity}(JSON.stringify([$bMaterial.organizationId,$bMaterial.projectId])),authSource:"oauth",commitGuard:$bGuard.commit,credentialStore:$bStore,env:$bEnv,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"bigmodel"}));`
+        : `let $bConfig=await ${configWriter}({accountIdentity:${accountIdentity}(JSON.stringify([$bMaterial.organizationId,$bMaterial.projectId])),authSource:"oauth",credentialStore:$bStore,env:$bEnv,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"bigmodel"});`,
       'return{configPath:$bConfig.path,credentialsPath:$bStore.filePath,model:$bConfig.mainModel,providerId:"bigmodel"}}',
       "}"
     ].join("");
