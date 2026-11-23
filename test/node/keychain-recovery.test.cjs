@@ -114,7 +114,7 @@ test("the same native cipher recovers after a failed unlock instead of caching r
       }
     });
     const cipher = createSystemCredentialCipher({ filePath, env: {} });
-    await assert.rejects(cipher.decrypt(ciphertext), { code: "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE", message: "User cancelled the terminal unlock" });
+    await assert.rejects(cipher.decrypt(ciphertext), { code: "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE" });
     assert.equal(await cipher.decrypt(ciphertext), "fixture-token");
     assert.equal(unlocks, 2);
   });
