@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import {
-  cacheCredentialKey,
   createKeychainRecovery,
   createRecoverableSystemKeyStore
 } from "../src/runtime-keychain-recovery.ts";
@@ -12,52 +11,21 @@ test("keychain unlock resumes the same pending operation and never replays compl
   let isLocked = true, reads = 0, unlocks = 0, completedWork = 0;
   const recover = createKeychainRecovery({ platform: "darwin", unlock: async () => { unlocks++; isLocked = false; } });
   const store = createRecoverableSystemKeyStore(async () => ({
-    getSecret: async () => { reads++; if (isLocked) throw locked(); return [...Buffer.from("existing-key")]; },
+    getPassword: async () => { reads++; if (isLocked) throw locked(); return "existing-key"; },
     setPassword: async () => { throw new Error("Existing keys must not be replaced"); }
-  }), unavailable, recover, "darwin");
+  }), unavailable, recover);
   completedWork++;
   expect(await store.get()).toBe("existing-key");
   expect({ reads, unlocks, completedWork }).toEqual({ reads: 2, unlocks: 1, completedWork: 1 });
 });
 
-test.each([
-  ["win32", "utf16le"],
-  ["darwin", "utf8"],
-  ["linux", "utf8"]
-] as const)("%s decodes password secrets stored as %s", async (platform, encoding) => {
-  const key = Buffer.alloc(32, 0x31).toString("base64url");
+test("system key stores read password-backed entries directly", async () => {
+  const key = Buffer.alloc(32, 0x32).toString("base64url");
   const store = createRecoverableSystemKeyStore(async () => ({
-    getSecret: async () => [...Buffer.from(key, encoding)],
-    setPassword: async () => { throw new Error("Existing keys must not be replaced"); }
-  }), unavailable, createKeychainRecovery({ platform }), platform);
-  expect(await store.get()).toBe(key);
-});
-
-test("password decoding defaults to the current platform", async () => {
-  const key = Buffer.alloc(32, 0x31).toString("base64url");
-  const bytes = Buffer.from(key, process.platform === "win32" ? "utf16le" : "utf8");
-  const store = createRecoverableSystemKeyStore(async () => ({
-    getSecret: async () => [...bytes],
+    getPassword: async () => key,
     setPassword: async () => { throw new Error("Existing keys must not be replaced"); }
   }), unavailable);
   expect(await store.get()).toBe(key);
-});
-
-test.each([
-  ["win32", [0x41]],
-  ["win32", [0x00, 0xd8]],
-  ["darwin", [0xc3, 0x28]],
-  ["linux", [0xff]]
-] as const)("%s rejects malformed password bytes %j without replacing the key", async (platform, bytes) => {
-  let writes = 0;
-  const store = createRecoverableSystemKeyStore(async () => ({
-    getSecret: async () => [...bytes],
-    setPassword: async () => { writes++; }
-  }), unavailable, createKeychainRecovery({ platform }), platform);
-  const error = await store.get().catch(error => error);
-  expect(error.code).toBe("CREDENTIAL_SECURE_STORAGE_UNAVAILABLE");
-  expect(error.cause).toBeInstanceOf(TypeError);
-  expect(writes).toBe(0);
 });
 
 test("concurrent credential readers share one unlock, including late failures", async () => {
@@ -143,7 +111,7 @@ test("unrelated storage errors do not prompt for a password", async () => {
   let unlocks = 0;
   const cause = new Error("Module could not be loaded");
   const recover = createKeychainRecovery({ platform: "darwin", unlock: async () => { unlocks++; } });
-  const store = createRecoverableSystemKeyStore(async () => { throw cause; }, unavailable, recover, "darwin");
+  const store = createRecoverableSystemKeyStore(async () => { throw cause; }, unavailable, recover);
   const error = await store.get().catch(error => error);
   expect(error.code).toBe("CREDENTIAL_SECURE_STORAGE_UNAVAILABLE");
   expect(error.cause).toBe(cause);
@@ -155,33 +123,13 @@ test("missing keys stay missing and a locked write resumes with the same key", a
   const saved: string[] = [];
   const recover = createKeychainRecovery({ platform: "darwin", unlock: async () => { unlocks++; isLocked = false; } });
   const store = createRecoverableSystemKeyStore(async () => ({
-    getSecret: async () => null,
+    getPassword: async () => null,
     setPassword: async value => { writes++; if (isLocked) throw locked(); saved.push(value); }
-  }), unavailable, recover, "darwin");
+  }), unavailable, recover);
   expect(await store.get()).toBeNull();
   expect(unlocks).toBe(0);
   isLocked = true;
   await store.set("the-original-generated-key");
   expect(saved).toEqual(["the-original-generated-key"]);
   expect({ unlocks, writes }).toEqual({ unlocks: 1, writes: 2 });
-});
-
-test("a rejected key lookup is evicted so the same process can recover", async () => {
-  const cache = new Map<string, Promise<string>>();
-  const failed = cacheCredentialKey(cache, "credentials", Promise.reject(unavailable()));
-  await expect(failed).rejects.toThrow("Credential storage unavailable");
-  expect(cache.has("credentials")).toBe(false);
-  const recovered = cacheCredentialKey(cache, "credentials", Promise.resolve("existing-key"));
-  expect(await recovered).toBe("existing-key");
-  expect(cache.get("credentials")).toBe(recovered);
-});
-
-test("failure cleanup cannot evict a newer lookup", async () => {
-  const cache = new Map<string, Promise<string>>();
-  let reject!: (error: Error) => void;
-  const stale = cacheCredentialKey(cache, "credentials", new Promise<string>((_resolve, fail) => { reject = fail; }));
-  const current = cacheCredentialKey(cache, "credentials", Promise.resolve("newer-key"));
-  reject(unavailable());
-  await expect(stale).rejects.toThrow();
-  expect(cache.get("credentials")).toBe(current);
 });

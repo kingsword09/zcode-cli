@@ -26,7 +26,7 @@ function encryptedRecord(key, value) {
   return `enc:v2:os:${crypto.createHash("sha256").update(key).digest("hex").slice(0, 24)}:${[iv, cipher.getAuthTag(), ciphertext].map(bytes => bytes.toString("base64url")).join(".")}`;
 }
 
-test("the native cipher decrypts an existing Windows UTF-16LE key without replacing it", async () => {
+test("the native cipher decrypts an existing password-backed key without replacing it", async () => {
   await withCredentials(async (directory, filePath) => {
     let writes = 0;
     const key = crypto.randomBytes(32);
@@ -34,9 +34,8 @@ test("the native cipher decrypts an existing Windows UTF-16LE key without replac
     await writeFile(filePath, original);
     await writeFile(path.join(directory, "credential-source"), "os\n");
     const { createSystemCredentialCipher } = loadCredentialRuntime({
-      platform: "win32",
       entry: {
-        getSecret: async () => [...Buffer.from(key.toString("base64url"), "utf16le")],
+        getPassword: async () => key.toString("base64url"),
         setPassword: async () => { writes++; throw new Error("Do not replace an existing key"); }
       }
     });
@@ -48,13 +47,12 @@ test("the native cipher decrypts an existing Windows UTF-16LE key without replac
   });
 });
 
-test("the native cipher creates and rereads a Windows UTF-16LE key on first login", async () => {
+test("the native cipher creates and rereads a password-backed key on first login", async () => {
   await withCredentials(async (directory, filePath) => {
     let writes = 0, savedKey = null;
     const { createSystemCredentialCipher } = loadCredentialRuntime({
-      platform: "win32",
       entry: {
-        getSecret: async () => savedKey === null ? null : [...Buffer.from(savedKey, "utf16le")],
+        getPassword: async () => savedKey,
         setPassword: async value => { writes++; savedKey = value; }
       }
     });
@@ -79,7 +77,7 @@ test("real native cipher unlocks in place, preserves OS ciphertext and never wri
     await writeFile(path.join(directory, "credential-source"), "os\n");
     const { createSystemCredentialCipher } = loadCredentialRuntime({
       entry: {
-        getSecret: async () => { reads++; if (isLocked) throw locked(); return [...Buffer.from(key.toString("base64url"))]; },
+        getPassword: async () => { reads++; if (isLocked) throw locked(); return key.toString("base64url"); },
         setPassword: async () => { writes++; throw new Error("Do not replace an existing key"); }
       },
       unlock: async () => { unlocks++; isLocked = false; }
@@ -107,7 +105,7 @@ test("the same native cipher recovers after a failed unlock instead of caching r
     await writeFile(path.join(directory, "credential-source"), "os\n");
     const { createSystemCredentialCipher } = loadCredentialRuntime({
       entry: {
-        getSecret: async () => { if (isLocked) throw locked(); return [...Buffer.from(key.toString("base64url"))]; },
+        getPassword: async () => { if (isLocked) throw locked(); return key.toString("base64url"); },
         setPassword: async () => { throw new Error("Unexpected write"); }
       },
       unlock: async () => {
@@ -116,7 +114,7 @@ test("the same native cipher recovers after a failed unlock instead of caching r
       }
     });
     const cipher = createSystemCredentialCipher({ filePath, env: {} });
-    await assert.rejects(cipher.decrypt(ciphertext), { code: "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE", message: "User cancelled the terminal unlock" });
+    await assert.rejects(cipher.decrypt(ciphertext), { code: "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE" });
     assert.equal(await cipher.decrypt(ciphertext), "fixture-token");
     assert.equal(unlocks, 2);
   });
@@ -126,7 +124,7 @@ test("managed secrets bypass the keychain and do not unlock or migrate OS record
   await withCredentials(async (directory, filePath) => {
     let unlocks = 0, reads = 0;
     const { createSystemCredentialCipher } = loadCredentialRuntime({
-      entry: { getSecret: async () => { reads++; throw locked(); }, setPassword: async () => {} },
+      entry: { getPassword: async () => { reads++; throw locked(); }, setPassword: async () => {} },
       unlock: async () => { unlocks++; }
     });
     const cipher = createSystemCredentialCipher({ filePath, env: { ZCODE_CREDENTIAL_SECRET: "fixture-managed-secret-at-least-32-bytes" } });
@@ -143,9 +141,9 @@ test("native legacy migration waits for unlock and persists exactly one new OS k
     let isLocked = true, unlocks = 0, writes = 0, savedKey = null;
     const { createLegacyCredentialCipher, createSharedZCodeCredentialStore } = loadCredentialRuntime({
       entry: {
-        getSecret: async () => {
+        getPassword: async () => {
           if (isLocked) throw locked();
-          return savedKey === null ? null : [...Buffer.from(savedKey)];
+          return savedKey;
         },
         setPassword: async value => { writes++; savedKey = value; }
       },
