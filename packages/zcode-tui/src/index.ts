@@ -5351,7 +5351,7 @@ class ZCodeTui {
       if (result.reason === "no-oauth-session") {
         this.addNotice("No shared OAuth session for quota — sign in with /login first.", "warning");
       } else if (result.reason === "secure-storage-unavailable") {
-        this.addNotice("Secure credential storage is unavailable; configure ZCODE_CREDENTIAL_SECRET or ZCODE_CREDENTIAL_SECRET_FILE to read quota.", "warning");
+        this.addNotice("Could not read the existing sign-in from secure credential storage. Check that the system keychain is available; signing in again is not required.", "warning");
       } else {
         this.addNotice(`Quota request failed: ${result.detail ?? "unknown error"}`, "warning");
       }
@@ -6509,30 +6509,42 @@ class ZCodeTui {
   }
 }
 
-async function refreshQuotaStatusline(tui: ZCodeTui): Promise<void> {
-  try {
-    const result = await loadCurrentQuotaOverview();
-    if (!result.ok) {
-      tui.setQuotaStatusPercent(undefined);
-      return;
+async function startQuotaStatuslineLoop(tui: ZCodeTui): Promise<() => void> {
+  if (!(await readQuotaStatusline())) return () => {};
+  let stopped = false;
+  let refreshInFlight = false;
+  let requestController: AbortController | undefined;
+  const refresh = async (): Promise<void> => {
+    if (stopped || refreshInFlight) return;
+    refreshInFlight = true;
+    const controller = new AbortController();
+    requestController = controller;
+    try {
+      const result = await loadCurrentQuotaOverview({ signal: controller.signal });
+      if (stopped) return;
+      if (!result.ok) {
+        tui.setQuotaStatusPercent(undefined);
+        return;
+      }
+      const percents = result.overview.balances
+        .map(balance => balance.percentLeft)
+        .filter((percent): percent is number => percent !== undefined);
+      tui.setQuotaStatusPercent(percents.length ? Math.min(...percents) : undefined);
+    } catch {
+      // Background refresh must not surface into the statusline.
+    } finally {
+      refreshInFlight = false;
+      if (requestController === controller) requestController = undefined;
     }
-    const percents = result.overview.balances
-      .map(balance => balance.percentLeft)
-      .filter((percent): percent is number => percent !== undefined);
-    tui.setQuotaStatusPercent(percents.length ? Math.min(...percents) : undefined);
-  } catch {
-    // background refresh must never surface into the statusline
-  }
-}
-
-async function startQuotaStatuslineLoop(tui: ZCodeTui): Promise<void> {
-  if (!(await readQuotaStatusline())) return;
-  const refresh = (): void => {
-    void refreshQuotaStatusline(tui);
   };
-  refresh();
-  const timer = setInterval(refresh, 300_000);
+  void refresh();
+  const timer = setInterval(() => { void refresh(); }, 300_000);
   timer.unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    requestController?.abort();
+  };
 }
 
 export async function runTui(options: TuiOptions): Promise<void> {
@@ -6540,6 +6552,10 @@ export async function runTui(options: TuiOptions): Promise<void> {
   const readyOptions = await loadTuiStartupOptions(options);
   if (!readyOptions) return;
   const tui = new ZCodeTui(readyOptions);
-  startQuotaStatuslineLoop(tui);
-  await tui.run();
+  const stopQuotaStatuslineLoop = await startQuotaStatuslineLoop(tui);
+  try {
+    await tui.run();
+  } finally {
+    stopQuotaStatuslineLoop();
+  }
 }

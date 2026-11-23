@@ -1,8 +1,9 @@
 import { createDecipheriv, createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir, release, userInfo } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { credentialsPath, sharedDataBaseDir } from "./config-paths.ts";
+import { createKeychainRecovery } from "./runtime-keychain-recovery.ts";
 import { readStartPlanSession } from "./start-plan.ts";
 
 /**
@@ -22,6 +23,8 @@ const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const SECRET_MIN_BYTES = 32;
 const SECRET_MAX_BYTES = 4096;
+const OS_KEYRING_SERVICE = "ZCode Credential Encryption";
+const BILLING_REQUEST_TIMEOUT_MS = 10_000;
 
 export interface QuotaSlot {
   name: string | undefined;
@@ -78,25 +81,30 @@ function isPrintableBase64Url(part: string): boolean {
   return /^[A-Za-z0-9_-]*$/.test(part);
 }
 
-/** `enc:v2:env:<keyFingerprint>:<iv>.<tag>.<ct>` — base64url, AES-256-GCM, no AAD. */
-function tryOpenV2Env(body: string, secretCandidates: string[]): string | undefined {
+function tryOpenV2Key(body: string, key: Buffer): string | undefined {
   const colon = body.indexOf(":");
   const fingerprint = colon >= 0 ? body.slice(0, colon) : undefined;
   const payload = colon >= 0 ? body.slice(colon + 1) : body;
   const parts = payload.split(".");
   if (parts.length !== 3 || parts.some(part => !isPrintableBase64Url(part))) return undefined;
   const [iv, tag, bytes] = parts.map(part => Buffer.from(part, "base64url"));
-  if (!iv || !tag || !bytes || iv.length !== IV_BYTES || tag.length !== TAG_BYTES) return undefined;
+  if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) return undefined;
+  if (fingerprint && fingerprint !== keyFingerprint(key)) return undefined;
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(bytes), decipher.final()]).toString("utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/** `enc:v2:env:<keyFingerprint>:<iv>.<tag>.<ct>` — base64url, AES-256-GCM, no AAD. */
+function tryOpenV2Env(body: string, secretCandidates: string[]): string | undefined {
   for (const candidate of secretCandidates) {
     const key = digest(candidate);
-    if (fingerprint && fingerprint !== keyFingerprint(key)) continue;
-    try {
-      const decipher = createDecipheriv("aes-256-gcm", key, iv);
-      decipher.setAuthTag(tag);
-      return Buffer.concat([decipher.update(bytes), decipher.final()]).toString("utf8");
-    } catch {
-      // try the next candidate
-    }
+    const opened = tryOpenV2Key(body, key);
+    if (opened !== undefined) return opened;
   }
   return undefined;
 }
@@ -162,8 +170,29 @@ function decryptRecord(value: string, env: NodeJS.ProcessEnv): string | null {
     return tryOpenV2Env(value.slice("enc:v2:env:".length), candidates) ?? null;
   }
   if (value.startsWith("enc:v1:")) return tryOpenLegacy(value, env) ?? null;
-  if (value.startsWith("enc:v2:os:")) return null; // keyring-protected: not readable outside the owning environment
   return value; // plaintext record
+}
+
+function secureStorageError(message = "System credential storage is unavailable."): Error {
+  return Object.assign(new Error(message), { code: "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE" });
+}
+
+async function readOsCredentialKey(filePath: string): Promise<Buffer> {
+  const { AsyncEntry } = await import("@napi-rs/keyring");
+  const account = digest(resolve(filePath)).toString("hex");
+  const entry = new AsyncEntry(OS_KEYRING_SERVICE, account, { linux: { store: "secret-service" } });
+  let encoded: string | null;
+  try {
+    encoded = await createKeychainRecovery()(async () => await entry.getPassword());
+  } catch (cause) {
+    throw Object.assign(secureStorageError(), { cause });
+  }
+  if (!encoded || !/^[A-Za-z0-9_-]{43}$/u.test(encoded)) {
+    throw secureStorageError("The system credential key for this account is unavailable.");
+  }
+  const key = Buffer.from(encoded, "base64url");
+  if (key.length !== 32) throw secureStorageError("The system credential key for this account is invalid.");
+  return key;
 }
 
 /**
@@ -171,7 +200,11 @@ function decryptRecord(value: string, env: NodeJS.ProcessEnv): string | null {
  * Follows the same path resolution as the runtime (config-paths helpers),
  * so an isolated `ZCODE_DATA_BASE_DIR` yields that account's records only.
  */
-export function createFileCredentialReader(env: NodeJS.ProcessEnv = process.env): CredentialReader {
+export function createFileCredentialReader(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { readOsKey?: (filePath: string) => Promise<Buffer> } = {}
+): CredentialReader {
+  let osKeyPromise: Promise<Buffer> | undefined;
   return {
     async loadMany(keys: string[]): Promise<Record<string, string | null>> {
       let parsed: unknown;
@@ -184,9 +217,22 @@ export function createFileCredentialReader(env: NodeJS.ProcessEnv = process.env)
         return Object.fromEntries(keys.map(key => [key, null]));
       }
       const records = parsed as Record<string, unknown>;
+      const requestedValues = keys.map(key => records[key]);
+      const needsOsKey = requestedValues.some(value => typeof value === "string" && value.startsWith("enc:v2:os:"));
+      if (needsOsKey && !osKeyPromise) {
+        osKeyPromise = (options.readOsKey ?? readOsCredentialKey)(credentialsPath(env));
+      }
+      const osKey = needsOsKey ? await osKeyPromise : undefined;
       return Object.fromEntries(keys.map(key => {
         const value = records[key];
-        const plain = typeof value === "string" ? decryptRecord(value, env) : null;
+        let plain: string | null = null;
+        if (typeof value === "string") {
+          if (value.startsWith("enc:v2:os:")) {
+            plain = tryOpenV2Key(value.slice("enc:v2:os:".length), osKey!) ?? null;
+          } else {
+            plain = decryptRecord(value, env);
+          }
+        }
         return [key, plain && plain.length > 0 ? plain : null];
       }));
     }
@@ -297,14 +343,17 @@ export async function fetchQuotaOverview(
     appVersion?: string;
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
+    timeoutMs?: number;
   } = {}
 ): Promise<QuotaOverview> {
   const doFetch = options.fetchImpl ?? fetch;
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? BILLING_REQUEST_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   let response: Response;
   try {
     response = await doFetch(BILLING_BALANCE_URL, {
       headers: billingHeaders(session, options),
-      signal: options.signal
+      signal
     });
   } catch (error) {
     throw new QuotaRequestError(error instanceof Error ? error.message : String(error));
@@ -336,19 +385,21 @@ export async function loadCurrentQuotaOverview(
   } = {}
 ): Promise<QuotaReadResult> {
   const env = options.env ?? process.env;
-  const session = await readStartPlanSession(createFileCredentialReader(env), options.signal);
-  if (!session) return { ok: false, reason: "no-oauth-session" };
   try {
+    const session = await readStartPlanSession(createFileCredentialReader(env), options.signal);
+    if (!session) return { ok: false, reason: "no-oauth-session" };
     const overview = await fetchQuotaOverview(session, {
       deviceMid: readDeviceMid(env),
-      appVersion: options.appVersion,
+      appVersion: options.appVersion ?? env.ZCODE_APP_VERSION,
       signal: options.signal,
       fetchImpl: options.fetchImpl
     });
     return { ok: true, overview };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    const reason = detail.includes("Secure credential storage") || detail.includes("CREDENTIAL_SECURE_STORAGE_UNAVAILABLE")
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const reason = code === "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE"
+      || detail.includes("Secure credential storage") || detail.includes("System credential storage")
       ? "secure-storage-unavailable"
       : "request-failed";
     return { ok: false, reason, detail };

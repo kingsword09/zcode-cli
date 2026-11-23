@@ -28,6 +28,15 @@ function sealV2Env(value: string, secret = SECRET): string {
   return `enc:v2:env:${fingerprint}:${payload}`;
 }
 
+function sealV2Os(value: string, key: Buffer): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const bytes = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  const fingerprint = createHash("sha256").update(key).digest("hex").slice(0, 24);
+  const payload = [iv, cipher.getAuthTag(), bytes].map(part => part.toString("base64url")).join(".");
+  return `enc:v2:os:${fingerprint}:${payload}`;
+}
+
 /** The real billing/balance shape captured from a Start Plan account (values adjusted). */
 function billingFixture(): unknown {
   return {
@@ -192,10 +201,48 @@ test("file credential reader decrypts enc:v2:env records from the isolated data 
   expect(values["missing"]).toBeNull();
 });
 
+test("file credential reader decrypts OS-keyring records without changing the login", async () => {
+  const key = randomBytes(32);
+  const { env } = isolatedEnv({
+    ".zcode/v2/credentials.json": JSON.stringify({
+      "oauth:active_provider": sealV2Os("zai", key),
+      "zcodejwttoken": sealV2Os(APP_JWT, key),
+      "oauth:zai:user_info": sealV2Os(JSON.stringify({ user_id: "desktop-user" }), key)
+    })
+  });
+  let keyReads = 0;
+  const store = createFileCredentialReader(env, {
+    readOsKey: async () => {
+      keyReads++;
+      return key;
+    }
+  });
+  const session = await readStartPlanSession(store);
+  expect(session).toMatchObject({ family: "zai", identity: "desktop-user", token: APP_JWT });
+  expect(keyReads).toBe(1);
+});
+
+test("file credential reader propagates unavailable OS credential storage", async () => {
+  const key = randomBytes(32);
+  const { env } = isolatedEnv({
+    ".zcode/v2/credentials.json": JSON.stringify({
+      "oauth:active_provider": sealV2Os("zai", key)
+    })
+  });
+  const store = createFileCredentialReader(env, {
+    readOsKey: async () => {
+      throw Object.assign(new Error("keychain is locked"), { code: "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE" });
+    }
+  });
+  await expect(store.loadMany(["oauth:active_provider"])).rejects.toMatchObject({
+    code: "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE"
+  });
+});
+
 test("file credential reader returns nulls for unreadable or keyring-protected records", async () => {
   const { env } = isolatedEnv({
     ".zcode/v2/credentials.json": JSON.stringify({
-      "zcodejwttoken": "enc:v2:os:deadbeef:aGVsbG8.AAAAAAAAAAAAAAAAAAAAAA.aGVsbG8",
+      "zcodejwttoken": "enc:v2:env:deadbeef:aGVsbG8.AAAAAAAAAAAAAAAAAAAAAA.aGVsbG8",
       "plain": "plain-value",
       "broken": "enc:v2:env:not-a-valid-record"
     })
@@ -244,6 +291,7 @@ test("loadCurrentQuotaOverview returns the parsed overview through a mocked tran
     }),
     ".zcode/v2/telemetry-state.json": JSON.stringify({ deviceMid: "device-mid-42" })
   });
+  env.ZCODE_APP_VERSION = "3.19.1";
   let capturedHeaders: Record<string, string> | undefined;
   const fetchImpl = (async (input: unknown, init?: { headers?: Record<string, string> }) => {
     capturedHeaders = init?.headers;
@@ -255,6 +303,7 @@ test("loadCurrentQuotaOverview returns the parsed overview through a mocked tran
   expect(result.overview.plans[0]?.name).toBe("ZCODE WEEKEND BUILD");
   expect(result.overview.balances[0]?.remainingUnits).toBe(499799821);
   expect(capturedHeaders?.["X-Device-Mid"]).toBe("device-mid-42");
+  expect(capturedHeaders?.["X-ZCode-App-Version"]).toBe("3.19.1");
   expect(capturedHeaders?.["Authorization"]).toBe(`Bearer ${APP_JWT}`);
 });
 
@@ -286,4 +335,14 @@ test("loadCurrentQuotaOverview surfaces endpoint rejections as request failures"
   if (result.ok) return;
   expect(result.reason).toBe("request-failed");
   expect(result.detail).toContain("Z.ai user information is invalid");
+});
+
+test("fetchQuotaOverview aborts requests that exceed the configured timeout", async () => {
+  const fetchImpl = ((_input: unknown, init?: { signal?: AbortSignal }) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+  })) as unknown as typeof fetch;
+  await expect(fetchQuotaOverview(
+    { family: "zai", identity: "user-1", token: APP_JWT },
+    { fetchImpl, timeoutMs: 5 }
+  )).rejects.toThrow(/timed out/iu);
 });
