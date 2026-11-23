@@ -5,7 +5,8 @@ import { isatty } from "node:tty";
 type Recovery = <Result>(operation: () => Promise<Result>) => Promise<Result>;
 
 interface KeyringEntry {
-  getSecret(): Promise<number[] | null>;
+  getPassword?(): Promise<string | null>;
+  getSecret?(): Promise<number[] | null>;
   setPassword(value: string): Promise<void>;
 }
 
@@ -131,9 +132,13 @@ export function createRecoverableSystemKeyStore(
   };
   return {
     get: () => attempt(async () => {
-      const secret = await (await entry()).getSecret();
+      const keyringEntry = await entry();
+      if (keyringEntry.getPassword) return await keyringEntry.getPassword();
+      const secret = await keyringEntry.getSecret?.();
       // Match setPassword: Windows stores UTF-16LE; the other backends store UTF-8.
-      return secret === null ? null : new TextDecoder(platform === "win32" ? "utf-16le" : "utf-8", { fatal: true }).decode(Uint8Array.from(secret));
+      return secret === null || secret === undefined
+        ? null
+        : new TextDecoder(platform === "win32" ? "utf-16le" : "utf-8", { fatal: true }).decode(Uint8Array.from(secret));
     }),
     set: value => attempt(async () => { await (await entry()).setPassword(value); })
   };

@@ -55,9 +55,14 @@ export function hasRuntimeKeychainRecovery(runtime: string): boolean {
   try {
     const store = namedFunction(runtime, "systemKeyStore");
     const cipher = namedFunction(runtime, "createSystemCredentialCipher");
-    return runtime.slice(store.start, store.end).includes(`${helper}.createRecoverableSystemKeyStore(`)
-      && runtime.slice(cipher.start, cipher.end).includes(`${helper}.cacheCredentialKey(`)
-      && runtime.slice(cipher.start, cipher.end).includes('catch($zCredentialError){if($zCredentialError?.code==="CREDENTIAL_SECURE_STORAGE_UNAVAILABLE")throw $zCredentialError;')
+    const storeSource = runtime.slice(store.start, store.end);
+    const cipherSource = runtime.slice(cipher.start, cipher.end);
+    const wrappedCache = cipherSource.includes(`${helper}.cacheCredentialKey(`)
+      && cipherSource.includes('catch($zCredentialError){if($zCredentialError?.code==="CREDENTIAL_SECURE_STORAGE_UNAVAILABLE")throw $zCredentialError;');
+    const nativeCacheRecovery = cipherSource.includes("generation===await")
+      && cipherSource.includes("S.catch(") && cipherSource.includes("c.delete(i)");
+    return storeSource.includes(`${helper}.createRecoverableSystemKeyStore(`)
+      && (wrappedCache || nativeCacheRecovery)
       && !runtime.includes("Unlock the OS credential store and restart to retry");
   } catch { return false; }
 }
@@ -70,7 +75,27 @@ export function patchRuntimeKeychainRecovery(runtime: string): string {
   const storeSource = runtime.slice(store.start, store.end);
   const storeReturn = store.body.body.at(-1);
   const methods = new RegExp(`return\\{async get\\(\\)\\{try\\{return await\\(await (${identifier})\\(\\)\\)\\.getPassword\\(\\)\\}catch\\{throw (${identifier})\\(\\)\\}\\},async set\\((${identifier})\\)\\{try\\{await\\(await \\1\\(\\)\\)\\.setPassword\\(\\3\\)\\}catch\\{throw \\2\\(\\)\\}\\}\\}$`, "u").exec(storeSource.slice(0, -1));
-  if (storeReturn?.type !== "ReturnStatement" || !methods) incompatible("native keyring methods changed");
+  if (storeReturn?.type !== "ReturnStatement") incompatible("native keyring methods changed");
+  if (!methods) {
+    const modernGet = new RegExp(`async get\\(\\)\\{return await\\(await (${identifier})\\(\\)\\)\\.getPassword\\(\\)\\}`, "u").exec(storeSource);
+    const modernSet = modernGet && new RegExp(`async set\\((${identifier})\\)\\{await\\(await ${modernGet[1]}\\(\\)\\)\\.setPassword\\(\\1\\)\\}`, "u").exec(storeSource);
+    const cipherSource = runtime.slice(cipher.start, cipher.end);
+    if (!modernGet || !modernSet || !cipherSource.includes("generation===await")
+      || !cipherSource.includes("S.catch(") || !cipherSource.includes("c.delete(i)")) {
+      incompatible("native keyring methods changed");
+    }
+    const unavailable = '()=>Object.assign(new Error("System credential storage is unavailable."),{code:"CREDENTIAL_SECURE_STORAGE_UNAVAILABLE"})';
+    const edits = [{
+      start: storeReturn.start,
+      end: storeReturn.end,
+      value: `return ${helper}.createRecoverableSystemKeyStore(${modernGet[1]},${unavailable})`
+    }];
+    let patched = runtime;
+    for (const edit of edits) patched = patched.slice(0, edit.start) + edit.value + patched.slice(edit.end);
+    patched = patched.replace("Unlock the OS credential store and restart to retry", "Unlock the OS credential store and retry");
+    if (!hasRuntimeKeychainRecovery(patched)) incompatible("postcondition failed");
+    return patched;
+  }
   const cipherSource = runtime.slice(cipher.start, cipher.end);
   const cachePattern = new RegExp(`return (${identifier})\\.set\\((${identifier}),(${identifier})\\),\\3\\.catch\\(\\(\\)=>\\{!${identifier}&&\\1\\.get\\(\\2\\)===\\3&&\\1\\.delete\\(\\2\\)\\}\\),\\3`, "gu");
   const caches = [...cipherSource.matchAll(cachePattern)];

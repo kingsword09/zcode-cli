@@ -43,6 +43,15 @@ test("password decoding defaults to the current platform", async () => {
   expect(await store.get()).toBe(key);
 });
 
+test("system key stores read password-backed entries directly", async () => {
+  const key = Buffer.alloc(32, 0x32).toString("base64url");
+  const store = createRecoverableSystemKeyStore(async () => ({
+    getPassword: async () => key,
+    setPassword: async () => { throw new Error("Existing keys must not be replaced"); }
+  }), unavailable);
+  expect(await store.get()).toBe(key);
+});
+
 test.each([
   ["win32", [0x41]],
   ["win32", [0x00, 0xd8]],

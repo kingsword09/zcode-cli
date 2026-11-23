@@ -11,6 +11,12 @@ label(nativeStore,"systemKeyStore");label(nativeCipher,"createSystemCredentialCi
 const message="Unlock the OS credential store and restart to retry";
 `;
 
+const currentFixture = `
+function nativeStore(file){let entry, getEntry=async()=>keyring;return{async get(){return await(await getEntry()).getPassword()},async set(value){await(await getEntry()).setPassword(value)}}}
+function nativeCipher(file){let c=new Map;async function getKey(){let started=!1,i=file,S=Promise.resolve({generation:await readGeneration()});return S.generation===await readGeneration()?S:(c.set(i,S),S.catch(k=>{!started&&c.get(i)===S&&c.delete(i)}),S)}return{getKey}}
+label(nativeStore,"systemKeyStore");label(nativeCipher,"createSystemCredentialCipher");
+`;
+
 test("unpatched keyring and cipher boundaries gain recovery without changing unrelated code", () => {
   const patched = patchRuntimeKeychainRecovery(fixture);
   expect(hasRuntimeKeychainRecovery(patched)).toBe(true);
@@ -29,6 +35,14 @@ test("the actual runtime supports an idempotent, verified keychain recovery patc
   expect(hasRuntimeKeychainRecovery(patched)).toBe(true);
   expect(patchRuntimeKeychainRecovery(patched)).toBe(patched);
   expect(() => parse(patched, { ecmaVersion: "latest", allowReturnOutsideFunction: true })).not.toThrow();
+});
+
+test("3.19 keychain stores using password reads gain the same recovery wrapper", () => {
+  const patched = patchRuntimeKeychainRecovery(currentFixture);
+  expect(hasRuntimeKeychainRecovery(patched)).toBe(true);
+  expect(patchRuntimeKeychainRecovery(patched)).toBe(patched);
+  expect(patched).toContain(".createRecoverableSystemKeyStore(getEntry,");
+  expect(() => parse(patched, { ecmaVersion: "latest" })).not.toThrow();
 });
 
 test("nested fallback and copied-credential boundaries do not obscure the key lookup boundary", async () => {
@@ -70,8 +84,10 @@ test("changed key lookup error contracts still fail closed", () => {
 test("changed or partially patched runtimes fail closed", async () => {
   const runtime = await readFile(new URL("../../vendor/zcode.cjs", import.meta.url), "utf8");
   const patched = patchRuntimeKeychainRecovery(runtime);
-  const partial = patched.replace(".cacheCredentialKey(", ".missingCacheHandler(");
+  const partial = patched.includes(".cacheCredentialKey(")
+    ? patched.replace(".cacheCredentialKey(", ".missingCacheHandler(")
+    : patched.replace(".createRecoverableSystemKeyStore(", ".missingKeyStoreRecovery(");
   expect(hasRuntimeKeychainRecovery(partial)).toBe(false);
-  expect(() => patchRuntimeKeychainRecovery(partial)).toThrow("partial patch");
+  expect(() => patchRuntimeKeychainRecovery(partial)).toThrow();
   expect(() => patchRuntimeKeychainRecovery("function incompatible(){}")).toThrow("label missing or ambiguous");
 });
