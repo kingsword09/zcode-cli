@@ -22,11 +22,11 @@ function modernStoreGetter(source: string): string | undefined {
   return new RegExp(`async get\\(\\)\\{return await\\(await (${identifier})\\(\\)\\)\\.getPassword\\(\\)\\}`, "u").exec(source)?.[1];
 }
 
-const failedKeyLookupMarker = "!v&&c.get(i)===S&&c.delete(i)";
-const recoveredKeyLookupMarker = "c.get(i)===S&&c.delete(i)";
+const failedKeyLookupMarker = "!v&&c.get(i)===b&&c.delete(i)";
+const recoveredKeyLookupMarker = "c.get(i)===b&&c.delete(i)";
 
 function hasNativeCacheRecovery(source: string): boolean {
-  return source.includes("generation===await") && source.includes("S.catch(")
+  return source.includes("generation===await") && source.includes("b.catch(")
     && source.includes(recoveredKeyLookupMarker) && !source.includes(failedKeyLookupMarker);
 }
 
@@ -53,19 +53,19 @@ export function patchRuntimeKeychainRecovery(runtime: string): string {
   const getter = modernStoreGetter(storeSource);
   const setter = getter && new RegExp(`async set\\((${identifier})\\)\\{await\\(await ${getter}\\(\\)\\)\\.setPassword\\(\\1\\)\\}`, "u").exec(storeSource);
   if (storeReturn?.type !== "ReturnStatement" || !getter || !setter) {
-    incompatible("3.19 system keyring API changed");
+    incompatible("4.0 system keyring API changed");
   }
   const cipherSource = runtime.slice(cipher.start, cipher.end);
-  if (!cipherSource.includes("generation===await") || !cipherSource.includes("S.catch(")
+  if (!cipherSource.includes("generation===await") || !cipherSource.includes("b.catch(")
     || cipherSource.split(failedKeyLookupMarker).length !== 2) {
-    incompatible("3.19 credential cache recovery changed");
+    incompatible("4.0 credential cache recovery changed");
   }
 
   const unavailable = '()=>Object.assign(new Error("System credential storage is unavailable."),{code:"CREDENTIAL_SECURE_STORAGE_UNAVAILABLE"})';
   let patched = runtime.replace(failedKeyLookupMarker, recoveredKeyLookupMarker);
   const patchedStore = namedFunction(patched, "systemKeyStore");
   const patchedReturn = patchedStore.body.body.at(-1);
-  if (patchedReturn?.type !== "ReturnStatement") incompatible("3.19 system keyring API changed");
+  if (patchedReturn?.type !== "ReturnStatement") incompatible("4.0 system keyring API changed");
   patched = patched.slice(0, patchedReturn.start)
     + `return ${helper}.createRecoverableSystemKeyStore(${getter},${unavailable})`
     + patched.slice(patchedReturn.end);
