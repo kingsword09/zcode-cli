@@ -399,6 +399,10 @@ selection it toggles all expandable content. During transcript search, `n` and
 `PageDown`) page through an oversized selected block without rendering the
 entire message at once. `Esc` leaves search or transcript navigation.
 
+Failed turns show the specific error below the failure heading by default.
+Use `Ctrl+O` to expand longer messages, underlying causes, and diagnostics such
+as the error code, HTTP status, provider, and request ID when supplied by the runtime.
+
 ## Plugin management
 
 Built-in Plugins such as Browser Use, Image Search and Skill Creator are seeded

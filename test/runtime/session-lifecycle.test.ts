@@ -188,7 +188,7 @@ test.skipIf(process.platform === "win32")("a failed first request still saves a 
   const tui = fixture.start();
   await tui.wait(text => text.includes("◈ custom/fixture"), runtimeStartupTimeoutMs);
   tui.terminal.write("First prompt should name this session\r");
-  await tui.wait(text => text.includes("Turn execution failed"));
+  await tui.wait(text => text.includes("Turn failed") && text.includes("Lifecycle request rejected"));
   const row = fixture.query<{ id: string; title: string; title_source: string }>("SELECT id,title,title_source FROM session");
   expect(row.title).toContain("First prompt should name this session");
   expect(row.title_source).not.toBe("custom");

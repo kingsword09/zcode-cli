@@ -52,6 +52,7 @@ import {
 } from "./attachments.ts";
 import { AttachmentBar } from "./attachment-bar.ts";
 import { AssistantStream } from "./assistant-stream.ts";
+import { describeError, type ErrorDetails } from "./error-details.ts";
 import { BackgroundTaskEventStore } from "./background-task-events.ts";
 import { deliveredBackgroundTaskIds } from "./background-task-notifications.ts";
 import { listRecentSessions, sessionChoiceItem } from "./session-picker.ts";
@@ -678,6 +679,8 @@ class ZCodeTui {
   private turnEpoch = 0;
   private activeTurnEpoch?: number;
   private modelStatusBlockId?: string;
+  private modelFailure?: ErrorDetails;
+  private turnFailure?: ErrorDetails;
   private pendingSteerInterrupt?: PendingSteerInterrupt;
   private recentSteerCommit?: { at: number; turnEpoch: number };
   private currentThinking?: ThinkingView;
@@ -2081,8 +2084,8 @@ class ZCodeTui {
       } else {
         unfinishedToolState = "failed";
         if (!steering) this.inputQueue.autoSend = false;
-        const message = error instanceof Error ? error.message : String(error);
-        const detail = redactSecrets(message, submission.secrets);
+        const failure = describeError(error, steering ? undefined : this.turnFailure ?? this.modelFailure);
+        const detail = redactSecrets(failure.detail ?? failure.message ?? "No error details were provided.", submission.secrets);
         let steerRecoveryDetail: string | undefined;
         if (steering) {
           const retained = this.inputQueue.findSteer(pendingSteer?.inputId);
@@ -2100,10 +2103,12 @@ class ZCodeTui {
           this.pendingTurnNotification = "failed";
           this.pendingTurnNotificationDetail = detail;
         }
-        this.addNotice(
-          steering ? `${detail}\n${steerRecoveryDetail}` : detail,
-          steering ? "warning" : "error"
-        );
+        if (steering) {
+          this.addNotice(`${detail}\n${steerRecoveryDetail}`, "warning");
+        } else {
+          this.turnFailure = failure;
+          this.addSystemEvent({ tone: "error", title: "Turn failed", detail }, this.modelStatusBlockId);
+        }
       }
     } finally {
       if (steering) this.steerAbortControllers.delete(abortController);
@@ -2539,7 +2544,7 @@ class ZCodeTui {
       this.addSystemEvent({
         tone: "error",
         title: "Model stream failed",
-        detail: event.error instanceof Error ? event.error.message : asString(event.error) ?? event.message
+        detail: event.errorDetail ?? event.message
       });
     } else if (event.type === "model_request_started") {
       this.updateActivity(
@@ -2549,8 +2554,12 @@ class ZCodeTui {
         false
       );
     } else if (event.type === "turn.failed" || event.type === "turn_error") {
-      this.finalizeUnresolvedTools("failed", event.message ?? "Turn failed.");
-      this.addSystemEvent({ tone: "error", title: "Turn failed", detail: event.message });
+      const failure = describeError({ message: event.message, detail: event.errorDetail }, this.modelFailure);
+      this.turnFailure = failure;
+      this.finalizeUnresolvedTools("failed", failure.message ?? "Turn failed.");
+      this.addSystemEvent({
+        tone: "error", title: "Turn failed", detail: failure.detail ?? "No error details were provided."
+      }, this.modelStatusBlockId);
     } else if (event.type === "model_retry_scheduled" || event.type === "streamRecovery.updated") {
       const retry = modelRetryProgress(event, "scheduled");
       const delay = event.delayMs !== undefined ? `in ${Math.ceil(event.delayMs / 1_000)}s` : undefined;
@@ -2562,10 +2571,11 @@ class ZCodeTui {
         tone: "warning",
         title: event.type === "streamRecovery.updated" ? "Recovering model stream" : "Retrying model request",
         summary: [retry, delay].filter(Boolean).join(" · "),
-        detail: event.message
+        detail: event.errorDetail ?? event.message
       }, this.modelStatusBlockId);
     } else if (event.type === "model_request_failed") {
       if (!isModelCancellationEvent(event)) {
+        this.modelFailure = { message: event.message, detail: event.errorDetail };
         this.updateActivity(
           event.retryable === true ? "model request failed · waiting to retry…" : "model request failed…",
           false
@@ -2577,7 +2587,7 @@ class ZCodeTui {
           this.addSystemEvent({
             tone: "error",
             title: "Model request failed",
-            detail: event.message
+            detail: event.errorDetail ?? event.message
           }, this.modelStatusBlockId);
         }
       }
@@ -2588,7 +2598,7 @@ class ZCodeTui {
         tone: "warning",
         title: "Model stream stalled",
         summary: idle,
-        detail: event.message
+        detail: event.errorDetail ?? event.message
       }, this.modelStatusBlockId);
     } else if (event.type === "model_request_completed") {
       this.updateActivity("processing model response…", false);
@@ -3011,6 +3021,8 @@ class ZCodeTui {
     this.resetTurnReasoningVisibility();
     this.presentationRegistry.beginTurn();
     this.modelStatusBlockId = `${modelStatusBlockIdPrefix}_${this.turnEpoch}`;
+    this.modelFailure = undefined;
+    this.turnFailure = undefined;
     this.currentThinking = undefined;
     this.currentThinkingPartId = undefined;
     this.currentToolGroup = undefined;
@@ -3151,6 +3163,7 @@ class ZCodeTui {
    * A completed request proves the connection is back, so the row must not outlive it.
    */
   private clearModelStatus(): void {
+    this.modelFailure = undefined;
     if (!this.modelStatusBlockId || !this.transcript.removeBlock(this.modelStatusBlockId)) return;
     this.ui.requestRender();
   }
