@@ -153,6 +153,14 @@ with Ctrl+O, then press Enter to resume. Both pickers use the runtime's configur
 session database, including `storage.sessionDbPath` and `ZCODE_SESSION_DB_PATH` overrides.
 Cross-directory resumes update the displayed workspace and Git branch, file
 completion and `/diff` to follow the restored session's working directory.
+`/new` lets you start in the current checkout or create a detached Worktree at
+`.zcode/worktrees/<bucket>/<repository>` and start a fresh session there. The
+four-character hexadecimal bucket follows ZCode Desktop's managed Worktree
+layout. If the project does not already ignore `.zcode/worktrees/`, the CLI adds
+a repository-local rule to `.git/info/exclude`. The new Worktree starts at the
+current `HEAD`, maps a monorepo subdirectory to its matching path, and does not
+copy uncommitted or ignored files. `/worktree` lists managed Worktrees for the
+repository and opens a selected one in a new session.
 
 **Login and permissions.** `/login` setup choices with masked API-key entry,
 redacted transcript/history and OAuth waiting state; suspended Z.AI browser
@@ -331,6 +339,7 @@ picker to return to input selection, then `Esc` again to close rewind.
 /tasks message <id> <text>    send guidance to a running background agent
 /tasks resume <id> [text]     resume a stopped or failed background agent
 /tasks stop <id>              stop a running background task
+/worktree                     list and open managed Git Worktrees
 /search <text>                search retained transcript blocks
 /search next|prev|clear       navigate or close transcript search
 /transcript latest            select the latest transcript block

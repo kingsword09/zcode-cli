@@ -271,7 +271,7 @@ import {
 } from "./turn-status.ts";
 import { TurnPresentationRegistry } from "./turn-presentation-registry.ts";
 import { TurnWorkTracker } from "./turn-work-tracker.ts";
-import { asString, isRecord, type PromptCallOptions, type TuiOptions } from "./types.ts";
+import { asString, isRecord, type PromptCallOptions, type TuiManagedWorktree, type TuiOptions } from "./types.ts";
 import { UpdateAvailableView, updateCommand } from "./update-available-view.ts";
 import {
   FullscreenHeader,
@@ -702,6 +702,7 @@ class ZCodeTui {
   private currentToolGroupBlockId?: string;
   private currentToolGroupMessageId?: string;
   private pendingAttachments: PromptImageAttachment[] = [];
+  private pendingRestartDirectory?: string;
   private readonly editorHistory: string[] = [];
   private mode: string;
   private planEnabled = false;
@@ -1528,6 +1529,7 @@ class ZCodeTui {
         argumentHint: "[message|resume|stop <task-id>]"
       },
       { name: "diff", description: "Browse current and per-turn file changes" },
+      { name: "worktree", description: "Open a managed Git Worktree in a new session" },
       { name: "sessions", description: "Browse and resume past sessions (desktop and CLI)" },
       { name: "context", description: "Inspect context usage and prompt composition" },
       { name: "status", description: "Inspect detailed runtime and session status" },
@@ -1838,6 +1840,35 @@ class ZCodeTui {
     }
     if (input.startsWith("/") && this.activeSubmissions > 0) {
       this.addNotice("Wait for the active turn or press Ctrl+C before running a slash command.", "warning");
+      return;
+    }
+    if (input === "/new" && this.options.createManagedWorktree && this.options.restartTuiAtDirectory) {
+      const choice = await this.showChoice({
+        title: "Start a new session",
+        prompt: "Choose where the new session should run.",
+        help: "Up/Down choose · Enter confirm · Esc cancel",
+        items: [
+          { value: "checkout", label: "Current checkout", description: "Start in the current project directory" },
+          { value: "worktree", label: "New Worktree", description: "Create an isolated checkout from the current HEAD" }
+        ]
+      });
+      if (!choice) return false;
+      if (choice.value === "worktree") {
+        try {
+          this.addNotice("Creating a detached Worktree from the current HEAD…", "muted");
+          this.ui.requestRender(true);
+          const worktree = await this.options.createManagedWorktree(this.workspaceDirectory);
+          this.pendingRestartDirectory = worktree.cwd ?? worktree.path;
+          this.addNotice(`Starting a new session in Worktree ${worktree.bucket}.`, "muted");
+          this.stop();
+        } catch (error) {
+          this.addNotice(error instanceof Error ? error.message : String(error), "error");
+        }
+        return false;
+      }
+    }
+    if (input === "/worktree" || input === "/worktree list") {
+      await this.showManagedWorktrees();
       return;
     }
     if (input === "/context") {
@@ -5400,6 +5431,45 @@ class ZCodeTui {
     await this.submit(`/resume ${selected.value}`);
   }
 
+  private async showManagedWorktrees(): Promise<void> {
+    if (!this.options.listManagedWorktrees || !this.options.restartTuiAtDirectory) {
+      this.addNotice("Managed Worktrees are unavailable in this runtime.", "muted");
+      return;
+    }
+    let worktrees: TuiManagedWorktree[];
+    try {
+      worktrees = await this.options.listManagedWorktrees(this.workspaceDirectory);
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), "error");
+      return;
+    }
+    if (worktrees.length === 0) {
+      this.addNotice("No managed Worktrees in this repository. Use /new to create one.", "muted");
+      return;
+    }
+    const selected = await this.showChoice({
+      title: "Managed Worktrees",
+      prompt: "Select a Worktree to open in a new session.",
+      help: "Up/Down choose · Enter open · Esc cancel",
+      items: worktrees.map((worktree) => ({
+        value: worktree.bucket,
+        label: `Worktree ${worktree.bucket}`,
+        description: [
+          worktree.branch ?? `detached at ${worktree.head.slice(0, 7)}`,
+          worktree.dirty ? "uncommitted changes" : "clean"
+        ].join(" · "),
+        preview: new Text(worktree.path, 1, 0),
+        payload: worktree
+      }))
+    });
+    if (!selected) return;
+    const worktree = selected.payload as TuiManagedWorktree | undefined;
+    if (!worktree) return;
+    this.pendingRestartDirectory = worktree.cwd ?? worktree.path;
+    this.addNotice(`Starting a new session in Worktree ${worktree.bucket}.`, "muted");
+    this.stop();
+  }
+
   private async showBackgroundTasks(): Promise<void> {
     while (true) {
       await this.refreshRuntimeState();
@@ -6413,7 +6483,7 @@ class ZCodeTui {
         sessionId: resumeTarget,
         width: this.ui.terminal.columns
       });
-      const lines = [
+      const lines = this.pendingRestartDirectory ? [] : [
         summary.divider && this.theme.muted(summary.divider),
         summary.tokenUsage,
         summary.resumeCommand
@@ -6426,6 +6496,9 @@ class ZCodeTui {
         } catch {
           // Exit diagnostics must not prevent terminal cleanup.
         }
+      }
+      if (this.pendingRestartDirectory) {
+        this.options.restartTuiAtDirectory?.(this.pendingRestartDirectory);
       }
     } catch {
       // Exit diagnostics are supplementary; terminal cleanup is authoritative.

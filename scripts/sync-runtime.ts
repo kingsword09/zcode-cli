@@ -612,6 +612,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && runtime.includes(".readCustomSessionTitle=async()=>")
     && runtime.includes(".readSessionResumeTarget=async()=>")
     && runtime.includes(".readSessionDatabasePath=async()=>")
+    && runtime.includes(".createManagedWorktree=async $zDirectory=>")
+    && runtime.includes(".listManagedWorktrees=async $zDirectory=>")
+    && runtime.includes(".restartTuiAtDirectory=$zDirectory=>")
     && runtime.includes(interruptTurnMarker)
     && runtime.includes(interruptWaitForIdleMarker)
     && runtime.includes(".promoteQueuedInput=async(")
@@ -633,6 +636,9 @@ export function patchRuntimeTuiBridge(runtime: string): string {
     && /readCustomSessionTitle:[A-Za-z_$][\w$]*\.readCustomSessionTitle/u.test(runtime)
     && /readSessionResumeTarget:[A-Za-z_$][\w$]*\.readSessionResumeTarget/u.test(runtime)
     && /readSessionDatabasePath:[A-Za-z_$][\w$]*\.readSessionDatabasePath/u.test(runtime)
+    && /createManagedWorktree:[A-Za-z_$][\w$]*\.createManagedWorktree/u.test(runtime)
+    && /listManagedWorktrees:[A-Za-z_$][\w$]*\.listManagedWorktrees/u.test(runtime)
+    && /restartTuiAtDirectory:[A-Za-z_$][\w$]*\.restartTuiAtDirectory/u.test(runtime)
     && /interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(runtime)
     && /promoteQueuedInput:[A-Za-z_$][\w$]*\.promoteQueuedInput/u.test(runtime)
     && /readSessionUsage:[A-Za-z_$][\w$]*\.readSessionUsage/u.test(runtime)
@@ -775,6 +781,18 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   // so register tasks from the native session/subagent read model. Its candidate
   // selection handles the active branch and its reducer owns lifecycle state.
   const helper = 'require(require("node:path").join(__dirname,"cli-config.cjs"))';
+  const managedWorktreeMarker = ".createManagedWorktree=async $zDirectory=>";
+  const listManagedWorktreesMarker = ".listManagedWorktrees=async $zDirectory=>";
+  const restartTuiMarker = ".restartTuiAtDirectory=$zDirectory=>";
+  if (!patched.includes(managedWorktreeMarker)) {
+    assignments.push(`${bridge}${managedWorktreeMarker}await ${helper}.createManagedWorktree($zDirectory)`);
+  }
+  if (!patched.includes(listManagedWorktreesMarker)) {
+    assignments.push(`${bridge}${listManagedWorktreesMarker}await ${helper}.listManagedWorktrees($zDirectory)`);
+  }
+  if (!patched.includes(restartTuiMarker)) {
+    assignments.push(`${bridge}${restartTuiMarker}${helper}.restartTuiAtDirectory($zDirectory)`);
+  }
   const queries = runtimeSubagentQueryBridge(runtime);
   const guardedBackgroundRestoreAssignment = `${bridge}.$zRestorePersistedBackgroundTasks=async $zApp=>await ${helper}.restoreTuiBackgroundTasks($zApp,${queries})`;
   const projectionAssignment = `${bridge}.readRuntimeProjection=async()=>{let $zRuntimeProjectionBridge=await ${getApp}();return await ${helper}.readTuiRuntimeProjection($zRuntimeProjectionBridge,${bridge})}`;
@@ -993,6 +1011,15 @@ export function patchRuntimeTuiBridge(runtime: string): string {
   }
   if (!/readSessionDatabasePath:[A-Za-z_$][\w$]*\.readSessionDatabasePath/u.test(patched)) {
     optionFields.push(`readSessionDatabasePath:${submitBridge}.readSessionDatabasePath`);
+  }
+  if (!/createManagedWorktree:[A-Za-z_$][\w$]*\.createManagedWorktree/u.test(patched)) {
+    optionFields.push(`createManagedWorktree:${submitBridge}.createManagedWorktree`);
+  }
+  if (!/listManagedWorktrees:[A-Za-z_$][\w$]*\.listManagedWorktrees/u.test(patched)) {
+    optionFields.push(`listManagedWorktrees:${submitBridge}.listManagedWorktrees`);
+  }
+  if (!/restartTuiAtDirectory:[A-Za-z_$][\w$]*\.restartTuiAtDirectory/u.test(patched)) {
+    optionFields.push(`restartTuiAtDirectory:${submitBridge}.restartTuiAtDirectory`);
   }
   if (!/interruptTurn:[A-Za-z_$][\w$]*\.interruptTurn/u.test(patched)) {
     optionFields.push(`interruptTurn:${submitBridge}.interruptTurn`);

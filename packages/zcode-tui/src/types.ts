@@ -68,6 +68,15 @@ export interface SkillSuggestionResult {
   totalDiscovered?: number;
 }
 
+export interface TuiManagedWorktree {
+  bucket: string;
+  path: string;
+  cwd?: string;
+  branch?: string;
+  head: string;
+  dirty: boolean;
+}
+
 export type ListSkills = () => Promise<SkillSuggestionResult>;
 
 export type ListPluginReferences = () => Promise<unknown>;
@@ -129,6 +138,9 @@ export interface RuntimeAdapter {
   stopWorkflow?: (options: { runId: string }) => Promise<unknown>;
   subscribeWorkflowEvents?: (listener: (event: unknown) => void) => (() => void) | void;
   subscribeSessionEvents?: (listener: (event: unknown) => void | Promise<void>) => (() => void) | void;
+  createManagedWorktree?: (directory: string) => Promise<TuiManagedWorktree>;
+  listManagedWorktrees?: (directory: string) => Promise<TuiManagedWorktree[]>;
+  restartTuiAtDirectory?: (directory: string) => void;
 }
 
 export interface TuiOptions extends RuntimeAdapter {
