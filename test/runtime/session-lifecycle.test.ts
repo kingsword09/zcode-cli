@@ -315,6 +315,8 @@ test.skipIf(process.platform === "win32").each([
     await startup.wait(() => startup.screen.screenText().includes("/workflow-project"));
     expect(startup.screen.screenText()).not.toContain("resumed-branch");
     startup.terminal.write("/new\r");
+    await startup.wait(text => text.includes("Start a new session") && text.includes("Current checkout"));
+    startup.terminal.write("\r");
     await startup.wait(() => startup.screen.screenText().includes("/launch-project") && startup.screen.screenText().includes("launch-branch"));
     expect(startup.screen.screenText()).not.toContain("resumed-branch");
     expect(fixture.requests).toEqual([]);

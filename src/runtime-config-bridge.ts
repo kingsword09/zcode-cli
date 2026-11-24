@@ -7,6 +7,7 @@ import { cliSettingsPath, desktopSettingsPath, legacyCliConfigPath, providerConf
 export { assertSessionModelReady, readSessionModelState } from "./session-model-recovery.ts";
 export { assertResumableSession, ensureSessionForTitle, listSessionsForPicker, readSessionDatabasePath, readSessionResumeTarget } from "./runtime-session-lifecycle.ts";
 export { readTuiRuntimeProjection, sendTuiBackgroundTaskMessage } from "./runtime-tui-bridge.ts";
+export { createManagedWorktree, listManagedWorktrees, restartTuiAtDirectory } from "./runtime-worktrees.ts";
 export { createTuiWorkflowManagement, startTuiSavedWorkflow } from "./runtime-workflow-bridge.ts";
 export { restoreTuiBackgroundTasks } from "./runtime-background-restore.ts";
 export { withRecursiveWorkspacePathSuggestions } from "./runtime-workspace-paths.ts";
