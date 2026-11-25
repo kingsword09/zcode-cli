@@ -1,4 +1,5 @@
 import { spawn as spawnChild, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -30,6 +31,7 @@ import {
 } from "./zai-oauth.ts";
 import { requestAppServer } from "./app-server-client.ts";
 import { runPluginCommand } from "./plugin-cli.ts";
+import { pluginProtocolMethods } from "./plugin-protocol.ts";
 import { runTuiWithHerdrStatus } from "./herdr-status.mjs";
 import { missingCodingPlanKey } from "./prompt-preflight.ts";
 import { extractPromptOverrides } from "./prompt-model.ts";
@@ -50,6 +52,18 @@ const defaultBrowserUseArgument = "--browser-use=headless";
 const tuiRuntimeLogLimitBytes = 2 * 1024 * 1024;
 const versionArguments = new Set(["version", "--version", "-v"]);
 const runtimeVariadicOptions = new Set(["--disallowedTools", "--disallowed-tools"]);
+const cancellablePluginMethods = new Set<string>([
+  pluginProtocolMethods.marketplaceAdd, pluginProtocolMethods.marketplaceUpdate, pluginProtocolMethods.install
+]);
+
+function pluginRequestTimeoutMs(): number {
+  const value = process.env.ZCODE_PLUGIN_REQUEST_TIMEOUT_MS?.trim();
+  const timeout = value ? Number(value) : 60_000;
+  if (!Number.isInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647) {
+    throw new Error("ZCODE_PLUGIN_REQUEST_TIMEOUT_MS must be an integer between 1 and 2147483647.");
+  }
+  return timeout;
+}
 
 
 export function resolveModelRetryMaxRetries(env: NodeJS.ProcessEnv): string {
@@ -539,25 +553,32 @@ export async function main(args: string[]): Promise<number> {
   let pluginCommand: number | undefined;
   try {
     pluginCommand = await runPluginCommand(args, {
-      request: async ({ method, params, signal, workingDirectory }) => await requestAppServer({
-        method,
-        params,
-        onStderr: stderr => {
-          for (const line of stderr.split(/\r?\n/u)) {
-            if (!line.startsWith("ZCode Built-in: ignoring unavailable ZCODE_BUILTIN_PROVIDER_CONFIG_FILE ")
-              || builtinProviderWarnings.has(line)) continue;
-            builtinProviderWarnings.add(line);
-            process.stderr.write(`${line}\n`);
+      request: async ({ method, params, signal, workingDirectory }) => {
+        const operationId = cancellablePluginMethods.has(method) ? randomUUID() : undefined;
+        return await requestAppServer({
+          method,
+          params: operationId ? { ...params, operationId } : params,
+          ...(operationId ? { cancellation: {
+            method: "plugins/cancelOperation", params: { operationId }
+          } } : {}),
+          timeoutMs: pluginRequestTimeoutMs(),
+          onStderr: stderr => {
+            for (const line of stderr.split(/\r?\n/u)) {
+              if (!line.startsWith("ZCode Built-in: ignoring unavailable ZCODE_BUILTIN_PROVIDER_CONFIG_FILE ")
+                || builtinProviderWarnings.has(line)) continue;
+              builtinProviderWarnings.add(line);
+              process.stderr.write(`${line}\n`);
+            }
+          },
+          signal: signal ?? pluginAbortController.signal,
+          transport: {
+            args: [runtimePath, "app-server"],
+            command: node,
+            cwd: workingDirectory,
+            env: runtimeEnvironment()
           }
-        },
-        signal: signal ?? pluginAbortController.signal,
-        transport: {
-          args: [runtimePath, "app-server"],
-          command: node,
-          cwd: workingDirectory,
-          env: runtimeEnvironment()
-        }
-      }),
+        });
+      },
       signal: pluginAbortController.signal
     });
   } finally {

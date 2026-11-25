@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AppServerProcessError,
   AppServerRequestError,
+  AppServerTimeoutError,
   requestAppServer
 } from "../src/app-server-client.ts";
 
@@ -78,12 +79,13 @@ describe("app-server NDJSON client", () => {
     })).rejects.toMatchObject({ name: "AbortError" });
   });
 
-  test("finishes cancellation when the app-server ignores SIGTERM", async () => {
+  test.each([false, true])("finishes cancellation when the app-server ignores SIGTERM (cooperative: %s)", async cooperative => {
     const controller = new AbortController();
     const pending = requestAppServer({
       method: "plugins/list",
       params: {},
       signal: controller.signal,
+      ...(cooperative ? { cancellation: { method: "plugins/cancelOperation", params: { operationId: "fixture" } } } : {}),
       transport: transport(`
         process.on("SIGTERM", () => {});
         process.stdin.resume();
@@ -93,6 +95,17 @@ describe("app-server NDJSON client", () => {
     setTimeout(() => controller.abort(), 150);
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-  }, 3_000);
+  }, 6_000);
+
+  test.each([false, true])("times out a stalled request instead of waiting for process exit (reply: %s)", async reply => {
+    await expect(requestAppServer({
+      method: "plugins/overview", params: {}, timeoutMs: 100,
+      transport: transport(`
+        process.stdin.resume();
+        ${reply ? 'process.stdin.once("data", () => console.log(JSON.stringify({ id: 1, result: {} })));' : ""}
+        setInterval(() => {}, 1000);
+      `)
+    })).rejects.toBeInstanceOf(AppServerTimeoutError);
+  }, 2_000);
 
 });

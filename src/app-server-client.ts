@@ -5,6 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 
 const maximumOutputBytes = 16 * 1024 * 1024;
 const forceTerminationDelayMilliseconds = 500;
+const cooperativeCancellationDelayMilliseconds = 3_000;
 
 export interface AppServerTransport {
   args: string[];
@@ -14,10 +15,12 @@ export interface AppServerTransport {
 }
 
 export interface AppServerRequest {
+  cancellation?: { method: string; params: Record<string, unknown> };
   method: string;
   onStderr?: (stderr: string) => void;
   params: Record<string, unknown>;
   signal?: AbortSignal;
+  timeoutMs?: number;
   transport: AppServerTransport;
 }
 
@@ -53,6 +56,13 @@ export class AppServerCancellationError extends Error {
   constructor(public readonly exitCode: number) {
     super("App-server request cancelled.");
     this.name = "AbortError";
+  }
+}
+
+export class AppServerTimeoutError extends Error {
+  constructor(public readonly timeoutMs: number) {
+    super(`App-server request timed out after ${timeoutMs}ms.`);
+    this.name = "TimeoutError";
   }
 }
 
@@ -120,6 +130,10 @@ function responseEnvelope(stdout: string): AppServerEnvelope | undefined {
 
 export async function requestAppServer(request: AppServerRequest): Promise<unknown> {
   if (request.signal?.aborted) throw cancellationError(request.signal);
+  if (request.timeoutMs !== undefined && (!Number.isInteger(request.timeoutMs)
+    || request.timeoutMs <= 0 || request.timeoutMs > 2_147_483_647)) {
+    throw new Error("App-server timeoutMs must be an integer between 1 and 2147483647.");
+  }
 
   const child = spawn(request.transport.command, request.transport.args, {
     cwd: request.transport.cwd,
@@ -130,6 +144,9 @@ export async function requestAppServer(request: AppServerRequest): Promise<unkno
   let launchError: Error | undefined;
   let overflow = false;
   let forceTerminationTimer: NodeJS.Timeout | undefined;
+  let requestTimeoutTimer: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  let cancelling = false;
   const exited = new Promise<number>((resolve) => {
     let settled = false;
     const finish = (code: number) => {
@@ -147,7 +164,7 @@ export async function requestAppServer(request: AppServerRequest): Promise<unkno
     overflow = true;
     child.kill("SIGKILL");
   };
-  const onAbort = () => {
+  const terminate = () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
     child.kill(terminationSignal(request.signal));
     forceTerminationTimer = setTimeout(() => {
@@ -155,8 +172,19 @@ export async function requestAppServer(request: AppServerRequest): Promise<unkno
     }, forceTerminationDelayMilliseconds);
     forceTerminationTimer.unref();
   };
-  request.signal?.addEventListener("abort", onAbort, { once: true });
-  if (request.signal?.aborted) onAbort();
+  const onAbort = () => {
+    if (cancelling || child.exitCode !== null || child.signalCode !== null) return;
+    cancelling = true;
+    if (requestTimeoutTimer) clearTimeout(requestTimeoutTimer);
+    if (request.cancellation && !child.stdin.writableEnded && !child.stdin.destroyed) {
+      // Serial app-server handlers may not read the cancellation until the original
+      // request finishes. EOF also triggers client-disconnect cancellation so the
+      // runtime can abort downloads and unwind its storage-lock finally blocks.
+      child.stdin.end(`${JSON.stringify({ id: 2, ...request.cancellation })}\n`);
+      forceTerminationTimer = setTimeout(terminate, cooperativeCancellationDelayMilliseconds);
+      forceTerminationTimer.unref();
+    } else terminate();
+  };
 
   child.stdin.on("error", () => {});
   // 3.14 treats stdin EOF as client disconnection and cancels outstanding work.
@@ -173,6 +201,12 @@ export async function requestAppServer(request: AppServerRequest): Promise<unkno
     }
   });
   child.stdin.write(`${JSON.stringify({ id: 1, method: request.method, params: request.params })}\n`);
+  request.signal?.addEventListener("abort", onAbort, { once: true });
+  if (request.signal?.aborted) onAbort();
+  else if (request.timeoutMs !== undefined) {
+    requestTimeoutTimer = setTimeout(() => { timedOut = true; onAbort(); }, request.timeoutMs);
+    requestTimeoutTimer.unref();
+  }
 
   try {
     const [code, stdout, stderr] = await Promise.all([
@@ -180,6 +214,7 @@ export async function requestAppServer(request: AppServerRequest): Promise<unkno
       stdoutPromise,
       readBounded(child.stderr, terminateForOverflow)
     ]);
+    if (timedOut) throw new AppServerTimeoutError(request.timeoutMs!);
     if (request.signal?.aborted) throw cancellationError(request.signal);
     if (overflow) throw new Error(`App-server output exceeded ${maximumOutputBytes} bytes.`);
     if (launchError) throw launchError;
@@ -201,6 +236,7 @@ export async function requestAppServer(request: AppServerRequest): Promise<unkno
     if (stderr) request.onStderr?.(stderr);
     return envelope.result;
   } finally {
+    if (requestTimeoutTimer) clearTimeout(requestTimeoutTimer);
     if (forceTerminationTimer) clearTimeout(forceTerminationTimer);
     request.signal?.removeEventListener("abort", onAbort);
   }
