@@ -212,6 +212,42 @@ describe("launcher/runtime integration", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32").each([{ args: [] }, { args: ["-p", "Answer exactly: pong"] }])(
+    "forwards an account model missing from local catalogs to the runtime (%j)", async ({ args }) => {
+      const directory = await mkdtemp(join(tmpdir(), "zcode-launcher-account-model-"));
+      const fakeNode = join(directory, "fake-node");
+      const personalPath = join(directory, "personal.json");
+      const builtinPath = join(directory, "builtin.json");
+      const providerId = "account:zai-individual-coding-plan";
+      const model = `${providerId}/GLM-5.4`;
+      await writeFile(fakeNode, [
+        `#!${node}`,
+        "console.log(JSON.stringify({ model: process.env.ZCODE_CLI_PROMPT_MODEL, args: process.argv.slice(3) }));",
+        ""
+      ].join("\n"));
+      await chmod(fakeNode, 0o755);
+      await writeFile(personalPath, JSON.stringify(providerFixture({ providerId: "custom", modelId: "known" })));
+      await writeFile(builtinPath, JSON.stringify(providerFixture({ providerId, modelId: "GLM-5.3" })));
+      try {
+        const result = await run(["--model", model, ...args], "", {
+          HOME: directory,
+          USERPROFILE: directory,
+          ZCODE_NODE: fakeNode,
+          ZCODE_DATA_BASE_DIR: directory,
+          ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalPath,
+          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinPath
+        });
+        expect(result.code, result.stderr).toBe(0);
+        const forwarded = JSON.parse(result.stdout);
+        expect(forwarded.model).toBe(model);
+        expect(forwarded.args).not.toContain("--model");
+        for (const arg of args) expect(forwarded.args).toContain(arg);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  );
+
   test("adds a local marketplace and installs its Plugin end to end", async () => {
     const marketplace = join(home, "fixture-marketplace");
     const plugin = join(marketplace, "plugin");

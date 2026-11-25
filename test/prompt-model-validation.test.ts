@@ -53,9 +53,9 @@ describe("explicit startup model validation", () => {
     const personalPath = join(directory, "personal.json");
     const builtinPath = join(directory, "builtin.json");
     await writeFile(personalPath, JSON.stringify(catalog("custom", "known-model")));
-    await writeFile(builtinPath, JSON.stringify(catalog("account:zai-plan", "GLM-5.3", "builtinModelIds")));
+    await writeFile(builtinPath, JSON.stringify(catalog("builtin:fixture", "GLM-5.3", "builtinModelIds")));
     try {
-      expect(await invalidConfiguredPromptModel("account:zai-plan/GLM-5.3", {
+      expect(await invalidConfiguredPromptModel("builtin:fixture/GLM-5.3", {
         ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalPath,
         ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinPath
       })).toBeUndefined();
@@ -63,6 +63,26 @@ describe("explicit startup model validation", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  test.each(["account:zai-individual-coding-plan", "account:bigmodel-individual-coding-plan"])(
+    "defers account models absent from readable local catalogs to the runtime (%s)", async providerId => {
+      const directory = await mkdtemp(join(tmpdir(), "zcode-model-validation-"));
+      const personalPath = join(directory, "personal.json");
+      const builtinPath = join(directory, "builtin.json");
+      await writeFile(personalPath, JSON.stringify(catalog("custom", "known-model")));
+      await writeFile(builtinPath, JSON.stringify(catalog(providerId, "GLM-5.3", "builtinModelIds")));
+      try {
+        const env = {
+          ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalPath,
+          ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinPath
+        };
+        expect(await invalidConfiguredPromptModel(`${providerId}/GLM-5.4`, env)).toBeUndefined();
+        expect(await invalidConfiguredPromptModel("account:new-plan/GLM-5.4", env)).toBeUndefined();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  );
 
   test("defers validation if either local registry is unavailable", async () => {
     const directory = await mkdtemp(join(tmpdir(), "zcode-model-validation-"));

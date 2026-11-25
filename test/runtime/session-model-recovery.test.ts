@@ -99,22 +99,24 @@ test.each(["missing-model"] as SessionModelCase[])(
   }, 25_000
 );
 
-test("headless cold resume rejects an unavailable explicit model without falling back", async () => {
-  await using fixture = await createSessionModelFixture("valid");
-  const before = fixture.readSelection();
-  const child = Bun.spawn([...fixture.command, "--resume", fixture.sessionId, "--model", "zai/unavailable", "--prompt", "Do not fall back."], {
-    cwd: fixture.directory, env: fixture.env, stdin: "ignore", stdout: "pipe", stderr: "pipe"
-  });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
-  try {
-    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    expect(code).toBe(1);
-    expect(`${stdout}\n${stderr}`).toContain("zai/unavailable");
-    expect(fixture.requests).toEqual([]);
-    expect(fixture.readSelection()).toEqual(before);
-  } finally {
-    if (child.exitCode === null) child.kill("SIGKILL");
-    await child.exited;
-    clearTimeout(timeout);
-  }
-}, 30_000);
+test.each(["zai/unavailable", "account:zai-individual-coding-plan/unavailable"])(
+  "headless cold resume rejects an unavailable explicit model without falling back (%s)", async model => {
+    await using fixture = await createSessionModelFixture("valid");
+    const before = fixture.readSelection();
+    const child = Bun.spawn([...fixture.command, "--resume", fixture.sessionId, "--model", model, "--prompt", "Do not fall back."], {
+      cwd: fixture.directory, env: fixture.env, stdin: "ignore", stdout: "pipe", stderr: "pipe"
+    });
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+    try {
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(code).toBe(1);
+      expect(`${stdout}\n${stderr}`).toContain(model);
+      expect(fixture.requests).toEqual([]);
+      expect(fixture.readSelection()).toEqual(before);
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+      clearTimeout(timeout);
+    }
+  }, 30_000
+);
