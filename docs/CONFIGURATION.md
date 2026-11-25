@@ -705,6 +705,14 @@ export ZCODE_TUI_NOTIFICATION_CONDITION=always  # unfocused|always
 zcode
 ```
 
+## Plugin request timeout
+
+Launcher plugin requests time out after 60 seconds. Set
+`ZCODE_PLUGIN_REQUEST_TIMEOUT_MS` to a positive integer in milliseconds (up to
+2147483647) to allow longer downloads. Marketplace addition/update and plugin
+installation request runtime cleanup on timeout or cancellation before terminating
+an unresponsive app-server.
+
 ## Official MCP Availability
 
 Official HTTP MCP services that use ZCode's trusted-origin authentication

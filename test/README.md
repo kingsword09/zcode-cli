@@ -60,6 +60,7 @@ Counts describe this reset, not an assertion that future suites must have a fixe
 | File | Failure this must prevent |
 | --- | --- |
 | `launcher.test.ts` | Keyless prompts run, missing sessions leak diagnostics, repeated cancellation leaves the runtime alive, or a local plugin cannot be installed and discovered. |
+| `plugin-cancellation.test.ts` | A stalled marketplace add leaves its native storage lock after cancellation or timeout, blocking the next command. |
 | `app-server-auth.test.ts` | Real protocol turns use the wrong credential owner, fail to rotate keys, or fall back from missing credentials to host authentication. |
 | `settings-file.test.ts` | Runtime writes and trust changes escape a host-selected settings store or change native MCP precedence. |
 | `config-migration.test.ts` | Migration loses providers, overwrites conflicting/invalid configuration, or runs twice concurrently. |

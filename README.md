@@ -450,6 +450,12 @@ for intentional non-interactive execution, `--json` for structured output and
 `--scope user|workspace` to choose installation scope. Marketplace Git access
 behind a proxy uses `ZCODE_HTTP_PROXY`.
 
+Each launcher plugin request has a 60-second timeout. For slow marketplace or
+plugin downloads, set `ZCODE_PLUGIN_REQUEST_TIMEOUT_MS` to a larger duration in
+milliseconds. For marketplace addition/update and plugin installation,
+cancellation asks the runtime to stop the operation and release its storage lock
+before the launcher terminates an unresponsive app-server.
+
 Plugins with configuration can load options from a JSON file without exposing
 values in the process argument list:
 

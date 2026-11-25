@@ -595,6 +595,12 @@ export ZCODE_TUI_NOTIFICATION_CONDITION=always  # unfocused|always
 zcode
 ```
 
+## 插件请求超时
+
+启动器的插件请求默认在 60 秒后超时。下载较慢时，可将
+`ZCODE_PLUGIN_REQUEST_TIMEOUT_MS` 设置为更大的正整数毫秒值（最大 2147483647）。
+添加或更新市场、安装插件时，超时或取消会先请求 runtime 清理操作，再终止无响应的 app-server。
+
 ## 官方 MCP 可用性
 
 如果捆绑 runtime 没有官方 MCP 的可信来源 registry，官方 HTTP MCP 服务会显示为禁用，

@@ -432,6 +432,7 @@ export async function runPluginCommand(
         if (!command.yes && !await confirm(`Add marketplace from ${printable(value)}?`)) {
           throw new Error("Marketplace addition cancelled. Use --yes for non-interactive use.");
         }
+        if (!command.json) stdout.write("Adding marketplace...\n");
         const result = await call(pluginProtocolMethods.marketplaceAdd, { source: value });
         print(result, () => renderMutation(stdout, result, {
           failure: "Marketplace addition failed.",
