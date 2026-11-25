@@ -707,8 +707,9 @@ zcode
 
 ## Official MCP Availability
 
-When the bundled runtime has no official MCP trusted-origin registry, official
-HTTP MCP services are reported as disabled with an `official_auth_unavailable`
-diagnostic. Other plugin components remain available. This does not disable
-certificate, origin, or permission checks, and does not suppress services when
-the runtime provides the required registry. No user configuration is rewritten.
+Official HTTP MCP services that use ZCode's trusted-origin authentication
+require the runtime host to provide its trusted-origin registry and auth-header
+port. If those host capabilities are unavailable, the runtime fails that
+service connection and reports that the official MCP trusted-origin registry is
+unavailable. Other MCP services remain available. No user configuration is
+rewritten, and certificate, origin, and permission checks remain enabled.
