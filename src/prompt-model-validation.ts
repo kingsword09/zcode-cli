@@ -61,16 +61,20 @@ async function readCatalog(path: string, missingIsEmpty = false): Promise<Map<st
 }
 
 /**
- * Reject a CLI override before the interactive runtime starts when both local
+ * Reject a CLI override before the runtime starts when both local
  * registries are readable and conclusively show that the selection is absent.
- * If either registry is unavailable, defer to the runtime to avoid rejecting
- * models supplied by a remote or not-yet-materialized catalog.
+ * Account catalogs can add models and providers beyond the local registries,
+ * so the runtime owns their validation. Also defer if either registry is unavailable.
  */
 export async function invalidConfiguredPromptModel(
   model: string | undefined,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string | undefined> {
   if (!model) return undefined;
+  const separator = model.indexOf("/");
+  const providerId = model.slice(0, separator);
+  if (providerId.startsWith("account:")) return undefined;
+
   let personal: Map<string, Set<string>> | undefined;
   let builtin: Map<string, Set<string>> | undefined;
   try {
@@ -88,8 +92,6 @@ export async function invalidConfiguredPromptModel(
   }
   if (!personal || !builtin) return undefined;
 
-  const separator = model.indexOf("/");
-  const providerId = model.slice(0, separator);
   const modelId = model.slice(separator + 1);
   const personalModels = personal.get(providerId);
   const builtinModels = builtin.get(providerId);
