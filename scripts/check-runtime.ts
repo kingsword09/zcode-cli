@@ -15,7 +15,6 @@ import { runtimeTestEnv } from "./runtime-test-env.ts";
 import {
   extractRuntimeCapabilities,
   hasRuntimeAppServerStandaloneAuth,
-  hasRuntimeBigmodelOAuth,
   hasRuntimeBrowserUrlOpening,
   hasRuntimeConfigurationDiagnostics,
   hasRuntimeCliSettingsFile,
@@ -33,12 +32,10 @@ import {
   hasRuntimeStreamEofFinishGuard,
   hasRuntimeTrackedDetachedAgentLifecycle,
   patchRuntimeGoalFailurePause,
-  patchRuntimeHttpNoContent,
   patchRuntimeHeadlessLifecycle,
   patchRuntimeLoginModelDefaults,
   hasRuntimeNativePollingOAuth,
   patchRuntimeNetworkRetryClassification,
-  patchRuntimeOfficialMcpAvailability,
   patchRuntimeSqliteBusyTimeout,
   patchRuntimeSqliteWriteRecovery,
   patchRuntimeStreamEofFinishGuard,
@@ -99,9 +96,7 @@ if (!metadataCapabilities
   throw new Error("The extracted runtime capability manifest is missing or stale; run `bun run sync` again.");
 }
 if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
-  || (patchEnabled("official-mcp-availability") && patchRuntimeOfficialMcpAvailability(runtimeSource) !== runtimeSource)
   || (patchEnabled("goal-failure-pause") && patchRuntimeGoalFailurePause(runtimeSource) !== runtimeSource)
-  || patchRuntimeHttpNoContent(runtimeSource) !== runtimeSource
   || !hasRuntimeHttpNoContentGuard(runtimeSource)
   || patchRuntimeHeadlessLifecycle(runtimeSource) !== runtimeSource
   || !hasRuntimeHeadlessLifecycle(runtimeSource)
@@ -116,7 +111,6 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || !hasRuntimeStreamEofFinishGuard(runtimeSource)
   || (patchEnabled("cli-help-contract") && !hasRuntimeCliHelpContract(runtimeSource))
   || !hasRuntimeAppServerStandaloneAuth(runtimeSource)
-  || !hasRuntimeBigmodelOAuth(runtimeSource)
   || !hasRuntimeBrowserUrlOpening(runtimeSource)
   || !hasRuntimeConfigurationDiagnostics(runtimeSource)
   || !hasRuntimeRecursiveWorkspacePaths(runtimeSource)
@@ -165,8 +159,7 @@ if (patchRuntimeLoginModelDefaults(runtimeSource) !== runtimeSource
   || (patchEnabled("agent-auto-background")
     && !runtimeSource.includes("autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:"))
   || (patchEnabled("detached-agent-lifecycle")
-    && !hasRuntimeTrackedDetachedAgentLifecycle(runtimeSource)
-    && runtimeSource.split("Detached background agent lifecycle failed").length < 3)
+    && !hasRuntimeTrackedDetachedAgentLifecycle(runtimeSource))
   || !runtimeSource.includes('e?.waitForIdle===!0&&t.runtime?.getActiveForegroundExecutionId')
   || (patchEnabled("terminal-tool-projection")
     && !runtimeSource.includes('status:"idle",currentTurnId:void 0,activeToolCalls:[],totalTokenCount:'))

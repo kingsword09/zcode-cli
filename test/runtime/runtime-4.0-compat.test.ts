@@ -1,7 +1,38 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { parse } from "acorn";
-import { patchRuntimeBigmodelSessionReuse, patchRuntimePromptModel } from "../../scripts/sync-runtime.ts";
+import {
+  applyRuntimePatchPlan,
+  hasRuntimeHttpNoContentGuard,
+  hasRuntimeNativePollingOAuth,
+  hasRuntimeTrackedDetachedAgentLifecycle,
+  patchRuntimeBigmodelSessionReuse,
+  patchRuntimePromptModel,
+  runtimePatchPlan
+} from "../../scripts/sync-runtime.ts";
+
+test("4.0 native runtime features are verified without applying legacy compatibility rewrites", async () => {
+  const runtime = await readFile(new URL("../../vendor/zcode.cjs", import.meta.url), "utf8");
+  const nativePatches = new Map(runtimePatchPlan.map(patch => [patch.id, patch]));
+  expect(nativePatches.has("official-mcp-availability")).toBe(false);
+  expect(runtime).toContain("official MCP trusted origin registry is not available in this runtime");
+
+  for (const [id, check] of [
+    ["detached-agent-lifecycle", hasRuntimeTrackedDetachedAgentLifecycle],
+    ["http-no-content", hasRuntimeHttpNoContentGuard],
+    ["native-oauth-polling", hasRuntimeNativePollingOAuth]
+  ] as const) {
+    const patch = nativePatches.get(id);
+    expect(patch, `missing native runtime check ${id}`).toBeDefined();
+    expect(patch!.apply(runtime)).toBe(runtime);
+    expect(patch!.verify?.(runtime)).toBe(true);
+  }
+
+  for (const id of ["http-no-content", "native-oauth-polling"]) {
+    const patch = nativePatches.get(id)!;
+    expect(() => applyRuntimePatchPlan("", [patch])).toThrow(`Required runtime patch ${id} failed`);
+  }
+});
 
 test("4.0 TUI prompt overrides apply before the current app wrapper returns", async () => {
   const runtime = await readFile(new URL("../../vendor/zcode.cjs", import.meta.url), "utf8");

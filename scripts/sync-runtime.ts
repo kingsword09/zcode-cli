@@ -20,13 +20,12 @@ import { hasRuntimeKeychainRecovery, patchRuntimeKeychainRecovery } from "./runt
 export { hasRuntimeKeychainRecovery, patchRuntimeKeychainRecovery } from "./runtime-keychain-patches.ts";
 import { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
 export { hasRuntimeSessionLifecycle, patchRuntimeSessionLifecycle } from "./runtime-session-lifecycle-patches.ts";
-import { hasRuntimeBigmodelOAuth, hasRuntimeNativePollingOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
+import { hasRuntimeNativePollingOAuth } from "./runtime-oauth-polling.ts";
 import { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
 export { hasRuntimeSharedOAuth, patchRuntimeSharedOAuth } from "./runtime-shared-oauth-patches.ts";
 import { hasRuntimeStartPlan, patchRuntimeStartPlan } from "./runtime-start-plan-patches.ts";
 export { hasRuntimeStartPlan, patchRuntimeStartPlan } from "./runtime-start-plan-patches.ts";
-export { hasRuntimeBigmodelOAuth, patchRuntimeBigmodelOAuth } from "./runtime-bigmodel-oauth-patches.ts";
-export { hasRuntimeNativePollingOAuth } from "./runtime-bigmodel-oauth-patches.ts";
+export { hasRuntimeNativePollingOAuth } from "./runtime-oauth-polling.ts";
 import { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
 export { hasRuntimeBrowserUrlOpening, patchRuntimeBrowserUrlOpening } from "./runtime-browser-patches.ts";
 import { hasRuntimeAppServerStandaloneAuth, patchRuntimeAppServerStandaloneAuth } from "./runtime-app-server-patches.ts";
@@ -442,26 +441,6 @@ export function patchRuntimeCliHelpContract(runtime: string): string {
   return patched;
 }
 
-/** Report missing official authentication support without weakening origin checks. */
-export function patchRuntimeOfficialMcpAvailability(runtime: string): string {
-  const marker = "zcode_cli_official_mcp_unavailable";
-  if (runtime.includes(marker)) return runtime;
-  const anchor = /await this\.closeRecord\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)\.enabled===!1\)\{let ([A-Za-z_$][\w$]*)=this\.createStatus\(\2,"disabled"\);/gu;
-  let matches = 0;
-  const patched = runtime.replace(anchor, (_, name: string, config: string, status: string) => {
-    matches += 1;
-    const unavailable = `${config}.type==="http"&&${config}.auth?.type==="zcode_official"`
-      + `&&${config}.auth.provider==="jwt_token"&&${config}.official!==void 0`
-      + "&&!this.officialMcpAuth?.trustedOrigins";
-    return `await this.closeRecord(${name}),${config}.enabled===!1||(${unavailable})){`
-      + `let ${status}=this.createStatus(${config},"disabled",${config}.enabled===!1?void 0:`
-      + `{error:"Official MCP authentication is unavailable in this runtime (${marker}).",`
-      + 'failureKind:"official_auth_unavailable"});';
-  });
-  if (matches !== 1) throw new Error("ZCode runtime is incompatible with the official MCP availability patch.");
-  return patched;
-}
-
 /** Keep short Agent calls inline, but detach long-running agents from the foreground turn. */
 export function patchRuntimeAgentAutoBackground(runtime: string): string {
   const marker = "autoBackgroundMs:this.config.subagents?.autoBackgroundMs??1e3,outputRootDir:";
@@ -480,22 +459,6 @@ export function hasRuntimeTrackedDetachedAgentLifecycle(runtime: string): boolea
   const tracker = /\.then\(\(\)=>[A-Za-z_$][\w$]*\.delete\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*=>\{[A-Za-z_$][\w$]*\.delete\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*\.push\(/u
     .test(runtime);
   return detached && tracker;
-}
-
-/** Keep a detached Agent lifecycle failure from terminating the entire CLI process. */
-export function patchRuntimeDetachedAgentLifecycle(runtime: string): string {
-  const marker = 'Detached background agent lifecycle failed';
-  if (hasRuntimeTrackedDetachedAgentLifecycle(runtime)) return runtime;
-  const detachedRunnerPattern = /(onSessionStartFailed:([A-Za-z_$][\w$]*)\.reject\},[A-Za-z_$][\w$]*\.dispose)\);try\{await \2\.promise\}/gu;
-  const patched = runtime.replace(
-    detachedRunnerPattern,
-    '$1).catch(e=>{console.error("Detached background agent lifecycle failed",e??"unknown rejection")});try{await $2.promise}'
-  );
-  if (patched !== runtime) return patched;
-  if (!runtime.includes(marker)) {
-    throw new Error("ZCode runtime is incompatible with the detached Agent lifecycle patch.");
-  }
-  return runtime;
 }
 
 /** Clear tool projection entries when their owning turn reaches a terminal state. */
@@ -1222,19 +1185,6 @@ export function hasRuntimeHttpNoContentGuard(runtime: string): boolean {
     && runtime.includes('"readIncomingResponse"') && runtime.includes('"toWebResponse"');
 }
 
-export function patchRuntimeHttpNoContent(runtime: string): string {
-  const responsePattern = /new Response\(([A-Za-z_$][\w$]*)\.Readable\.toWeb\(([A-Za-z_$][\w$]*)\),\{headers:([A-Za-z_$][\w$]*),status:\2\.statusCode\?\?502,statusText:\2\.statusMessage\}\)/gu;
-  let changed = false;
-  const patched = runtime.replace(
-    responsePattern,
-    (_match, readableNamespace: string, response: string, headers: string) => {
-      changed = true;
-      return `new Response(${response}.statusCode===204||${response}.statusCode===205||${response}.statusCode===304?void 0:${readableNamespace}.Readable.toWeb(${response}),{headers:${headers},status:${response}.statusCode??502,statusText:${response}.statusMessage})`;
-    }
-  );
-  return changed ? patched : runtime;
-}
-
 function escapeRegExpName(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
@@ -1614,71 +1564,6 @@ export function patchRuntimeCliCredentials(runtime: string): string {
   return runtime.slice(0, insertion) + override + runtime.slice(insertion);
 }
 
-export function patchRuntimeZaiDesktopOAuth(runtime: string): string {
-  if (hasRuntimeNativePollingOAuth(runtime)) return runtime;
-  if (runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')) return runtime;
-
-  const credentialMarker = ".saveZaiLoginCredentials({accessToken:";
-  const markerIndex = runtime.indexOf(credentialMarker);
-  if (markerIndex < 0) {
-    throw new Error("ZCode runtime is incompatible with the Desktop OAuth patch (credential anchor missing).");
-  }
-  const functionStart = runtime.lastIndexOf("async function ", markerIndex);
-  const nextFunction = runtime.indexOf("async function ", markerIndex + credentialMarker.length);
-  if (functionStart < 0 || nextFunction < 0) {
-    throw new Error("ZCode runtime is incompatible with the Desktop OAuth patch (function anchor missing).");
-  }
-  const originalFunction = runtime.slice(functionStart, nextFunction);
-  const nativePolling = /[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,"loginZCodeCli"\)/u.test(runtime)
-    && originalFunction.includes('authSource:"oauth"');
-  const nativeSymbol = (label: string) => nativePolling
-    ? new RegExp(`[A-Za-z_$][\\w$]*\\(([A-Za-z_$][\\w$]*),"${label}"\\)`, "u").exec(runtime)?.[1]
-    : undefined;
-  const prefix = /^async function ([A-Za-z_$][\w$]*)\(e=\{\}\)\{/u.exec(originalFunction);
-  const abortHelper = nativeSymbol("throwIfAborted") ?? /;([A-Za-z_$][\w$]*)\(e\.abortSignal\);let/u.exec(originalFunction)?.[1];
-  const credentialStore = /e\.credentialStore\?\?([A-Za-z_$][\w$]*)\(\{env:[A-Za-z_$][\w$]*\}\)/u.exec(originalFunction)?.[1];
-  const loginError = /new ([A-Za-z_$][\w$]*)\("credential_write_failed"/u.exec(originalFunction)?.[1];
-  const apiKeyResolverMatch = /await ([A-Za-z_$][\w$]*)\(\{accessToken:[^,]+,env:[^,]+,httpClient:e\.httpClient,family:"zai"/u.exec(originalFunction);
-  const apiKeyResolver = nativeSymbol("resolveCodingPlanMaterial") ?? apiKeyResolverMatch?.[1];
-  const configWriter = (nativePolling
-    ? /await ([A-Za-z_$][\w$]*)\(\{accountIdentity:[^,]+,authSource:"oauth",credentialStore:[^,]+,env:[^,]+,personalProviderConfigPath:e\.personalProviderConfigPath,providerId:[^}]+\}\)/u
-    : /await ([A-Za-z_$][\w$]*)\(\{accountIdentity:[^,]+\.user\.user_id,apiKey:[^,]+,credentialStore:[^,]+,env:[^,]+,personalProviderConfigPath:e\.personalProviderConfigPath,providerId:"zai"\}\)/u).exec(originalFunction)?.[1];
-  const httpClientFactory = nativeSymbol("createDefaultHttpClient") ?? /e\.httpClient\?\?([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*=e\.state\?\?/u.exec(runtime)?.[1];
-  if (!prefix || !abortHelper || !credentialStore || !loginError
-    || !apiKeyResolver || !configWriter || !httpClientFactory) {
-    throw new Error("ZCode runtime is incompatible with the Desktop OAuth patch (dependency anchor missing).");
-  }
-
-  const branch = [
-    `if((e.env??process.env).ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"${nativePolling ? '&&(e.providerId??"zai")==="zai"' : ""}){`,
-    "let $zEnv=e.env??process.env;",
-    `${abortHelper}(e.abortSignal);`,
-    `let $zStore=e.credentialStore??${credentialStore}({env:$zEnv}),$zHttp=e.httpClient??${httpClientFactory}($zEnv),$zPayload;`,
-    `try{$zPayload=JSON.parse(require("node:fs").readFileSync(0,"utf8"))}catch($zError){throw new ${loginError}("invalid_callback","Unable to read the Z.AI OAuth callback.",{cause:$zError})}`,
-    `if(!$zPayload||typeof $zPayload.callbackUrl!=="string"||typeof $zPayload.state!=="string")throw new ${loginError}("invalid_callback","The Z.AI OAuth callback payload is invalid.");`,
-    "let $zUrl;",
-    `try{$zUrl=new URL($zPayload.callbackUrl)}catch($zError){throw new ${loginError}("invalid_callback","The Z.AI OAuth callback URL is invalid.",{cause:$zError})}`,
-    `if($zUrl.protocol!=="zcode:"||$zUrl.hostname!=="zai-auth"||$zUrl.pathname.replace(/\\/+$/u,"")!=="/callback")throw new ${loginError}("invalid_callback","The Z.AI OAuth callback target is invalid.");`,
-    "let $zCode=$zUrl.searchParams.get(\"code\")??$zUrl.searchParams.get(\"authCode\"),$zState=$zUrl.searchParams.get(\"state\");",
-    `if(!$zCode||!$zState||$zState!==$zPayload.state)throw new ${loginError}("invalid_callback","The Z.AI OAuth callback state is invalid or expired.");`,
-    "let $zResponse=await $zHttp.request({maxResponseBytes:65536,body:new TextEncoder().encode(JSON.stringify({provider:\"zai\",code:$zCode,redirect_uri:\"zcode://zai-auth/callback\",state:$zState})),headers:{\"Content-Type\":\"application/json\"},method:\"POST\",trace:e.trace,url:\"https://zcode.z.ai/api/v1/oauth/token\"},e.abortSignal),$zText=new TextDecoder().decode($zResponse.body),$zEnvelope;",
-    `try{$zEnvelope=JSON.parse($zText)}catch($zError){throw new ${loginError}("token_exchange_failed",$zResponse.status<200||$zResponse.status>=300?"OAuth HTTP error "+$zResponse.status+" (empty or non-JSON response)":"OAuth response is not valid JSON",{cause:$zError})}`,
-    "let $zMessage=typeof $zEnvelope?.msg===\"string\"&&$zEnvelope.msg.trim()?$zEnvelope.msg.trim():void 0;",
-    `if($zResponse.status<200||$zResponse.status>=300)throw new ${loginError}("token_exchange_failed",$zMessage??"OAuth HTTP error "+$zResponse.status);`,
-    `if($zEnvelope?.code!==0)throw new ${loginError}("token_exchange_failed",$zMessage??"Z.AI token exchange failed.");`,
-    "let $zData=$zEnvelope.data,$zAccessToken=$zData?.zai?.access_token,$zJwtToken=$zData?.token,$zUser=$zData?.user;",
-    `if(typeof $zAccessToken!=="string"||typeof $zJwtToken!=="string"||!$zUser||typeof $zUser!=="object")throw new ${loginError}("token_exchange_failed","Z.AI token response is missing credentials or user data.");`,
-    `${abortHelper}(e.abortSignal);`,
-    `try{await $zStore.saveZaiLoginCredentials({accessToken:$zAccessToken,jwtToken:$zJwtToken,user:$zUser})}catch($zError){throw new ${loginError}("credential_write_failed","Login succeeded but writing credentials failed.",{cause:$zError})}`,
-    `let $zApiKey=await ${apiKeyResolver}({accessToken:$zAccessToken,env:$zEnv,httpClient:$zHttp,family:"zai",resolver:e.apiKeyResolver${nativePolling ? ",signal:e.abortSignal" : ""}}),$zConfig;`,
-    `try{$zConfig=await ${configWriter}({accountIdentity:$zUser.user_id,${nativePolling ? 'authSource:"oauth"' : "apiKey:$zApiKey"},credentialStore:$zStore,env:$zEnv,personalProviderConfigPath:e.personalProviderConfigPath,providerId:"zai"})}catch($zError){throw new ${loginError}("config_update_failed","Login succeeded but updating ZCode config failed.",{cause:$zError})}`,
-    'return{configPath:$zConfig.path,credentialsPath:$zStore.filePath,model:$zConfig.mainModel,providerId:"zai",user:$zUser}',
-    "}"
-  ].join("");
-  const insertionPoint = functionStart + prefix[0].length;
-  return `${runtime.slice(0, insertionPoint)}${branch}${runtime.slice(insertionPoint)}`;
-}
-
 const bigmodelSessionReuseMarker = "ZCODE_CLI_BIGMODEL_REUSE_SESSION";
 
 /**
@@ -1915,11 +1800,6 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
     verify: hasRuntimeSessionLifecycle
   },
   {
-    id: "official-mcp-availability",
-    requirement: "optional",
-    apply: patchRuntimeOfficialMcpAvailability
-  },
-  {
     id: "resolved-context-window",
     requirement: "required",
     apply: patchRuntimeResolvedContextWindow,
@@ -1968,9 +1848,8 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
   {
     id: "detached-agent-lifecycle",
     requirement: "optional",
-    apply: patchRuntimeDetachedAgentLifecycle,
-    verify: (runtime) => runtime.includes("Detached background agent lifecycle failed")
-      || hasRuntimeTrackedDetachedAgentLifecycle(runtime)
+    apply: (runtime) => runtime,
+    verify: hasRuntimeTrackedDetachedAgentLifecycle
   },
   {
     id: "agent-auto-background",
@@ -1983,7 +1862,7 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
   {
     id: "http-no-content",
     requirement: "required",
-    apply: patchRuntimeHttpNoContent,
+    apply: (runtime) => runtime,
     verify: hasRuntimeHttpNoContentGuard
   },
   {
@@ -2038,23 +1917,16 @@ export const runtimePatchPlan: readonly RuntimePatchDefinition[] = [
       && restoredPromptModelSwitch.test(runtime)
   },
   {
-    id: "bigmodel-oauth",
+    id: "native-oauth-polling",
     requirement: "required",
-    apply: patchRuntimeBigmodelOAuth,
-    verify: hasRuntimeBigmodelOAuth
+    apply: (runtime) => runtime,
+    verify: hasRuntimeNativePollingOAuth
   },
   {
     id: "browser-url-opening",
     requirement: "required",
     apply: patchRuntimeBrowserUrlOpening,
     verify: hasRuntimeBrowserUrlOpening
-  },
-  {
-    id: "desktop-oauth",
-    requirement: "required",
-    apply: patchRuntimeZaiDesktopOAuth,
-    verify: (runtime) => hasRuntimeNativePollingOAuth(runtime)
-      || runtime.includes('ZCODE_CLI_OAUTH_CALLBACK_STDIN==="1"')
   },
   {
     id: "bigmodel-session-reuse",
