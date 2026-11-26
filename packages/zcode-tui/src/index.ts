@@ -163,6 +163,7 @@ import {
   explicitModelRequest,
   isEffortPickerRequest,
   isModePickerRequest,
+  isModelDefaultRequest,
   isModelPickerRequest,
   modePicker,
   modelPicker,
@@ -246,6 +247,10 @@ import {
 } from "./shortcuts.ts";
 import { createTheme, type ZCodeTheme } from "./theme.ts";
 import { StatusLine, type StatusLineField } from "./status-line.ts";
+import { readQuotaStatusline } from "./quota-statusline.ts";
+import { HelpSummaryView } from "./help-summary-view.ts";
+import { QuotaView } from "./quota-view.ts";
+import { loadCurrentQuotaOverview } from "../../../src/quota.ts";
 import { SystemEventView, type SystemEventData } from "./system-event-view.ts";
 import { sanitizeTerminalText, stripCaretHighlight } from "./terminal-text.ts";
 import { ThinkingView } from "./thinking-view.ts";
@@ -712,6 +717,7 @@ class ZCodeTui {
   private terminalFocus: TerminalFocusState = "unknown";
   private copyOnSelect = true;
   private toolCallStyle: ToolCallStyle = "regular";
+  private quotaStatusPercent: number | undefined = undefined;
   private thoughtLevel?: string;
   private showReasoning: boolean;
   private modelOptions: unknown[];
@@ -1533,6 +1539,7 @@ class ZCodeTui {
       { name: "sessions", description: "Browse and resume past sessions (desktop and CLI)" },
       { name: "context", description: "Inspect context usage and prompt composition" },
       { name: "status", description: "Inspect detailed runtime and session status" },
+      { name: "quota", description: "Inspect plan quota and balances for the signed-in account" },
       { name: "rename", description: "Rename the current session", argumentHint: "<title>" },
       { name: "config", description: "Configure ZCode TUI settings" },
       { name: "settings", description: "Configure ZCode TUI settings" },
@@ -1879,6 +1886,16 @@ class ZCodeTui {
       await this.showStatusDetails();
       return;
     }
+
+    if (input === "/help") {
+      await this.showHelpSummary();
+      return;
+    }
+
+    if (input === "/quota") {
+      await this.showQuotaDetails();
+      return;
+    }
     const renameRequest = sessionRenameRequest(input);
     if (renameRequest !== undefined) {
       await this.handleSessionRename(renameRequest);
@@ -1917,6 +1934,13 @@ class ZCodeTui {
       } else {
         await this.switchPlan(argument === "on" ? true : argument === "off" ? false : undefined);
       }
+      return;
+    }
+    // `/model default` opens the default-model picker: it persists the shared
+    // default (used by new sessions) via the runtime's saveConfiguredDefault.
+    if (isModelDefaultRequest(input)) {
+      this.addUserMessage(submission.displayInput);
+      await this.showModelProviderSettings();
       return;
     }
     // Explicit `/model <provider/model>` is also a session-only switch — the
@@ -4330,7 +4354,7 @@ class ZCodeTui {
       await this.handleResult(result, false);
       const status = !recovering && this.model === previousModel ? "already active" : "now";
       this.addNotice(
-        `Session model ${status}: ${this.model} · saved defaults unchanged.`,
+        `Session model ${status}: ${this.model} · saved defaults unchanged · /model default saves it for new sessions.`,
         "muted"
       );
     } catch (error) {
@@ -5347,6 +5371,50 @@ class ZCodeTui {
   }
 
   /**
+   * Bare `/help` renders the merged command list (runtime-provided + TUI-local).
+   * `/help <command>` still forwards to the runtime, which owns per-command details.
+   */
+  private async showHelpSummary(): Promise<void> {
+    const commands = this.autocompleteCommands().slice().sort((a, b) => a.name.localeCompare(b.name));
+    const lines = commands.map(command => {
+      const rawHint = command.argumentHint?.trim() ?? "";
+      const hint = rawHint ? ` ${rawHint.startsWith("[") ? rawHint : `[${rawHint}]`}` : "";
+      return `- /${command.name}${hint}: ${command.description}`;
+    });
+    await this.showChoice({
+      title: "Help",
+      prompt: "All slash commands — runtime-provided and TUI-local.",
+      content: new HelpSummaryView(this.theme, lines, "Use /help <command> for runtime command details. Custom plugin commands live under /plugins."),
+      items: [{ value: "close", label: "Close" }]
+    });
+  }
+
+  private async showQuotaDetails(): Promise<void> {
+    const result = await loadCurrentQuotaOverview();
+    if (!result.ok) {
+      if (result.reason === "no-oauth-session") {
+        this.addNotice("No shared OAuth session for quota — sign in with /login first.", "warning");
+      } else if (result.reason === "secure-storage-unavailable") {
+        this.addNotice("Could not read the existing sign-in from secure credential storage. Check that the system keychain is available; signing in again is not required.", "warning");
+      } else {
+        this.addNotice(`Quota request failed: ${result.detail ?? "unknown error"}`, "warning");
+      }
+      return;
+    }
+    const overview = result.overview;
+    if (overview.plans.length === 0 && overview.balances.length === 0) {
+      this.addNotice("No plan balances on this account for the signed-in session.", "warning");
+      return;
+    }
+    await this.showChoice({
+      title: "Quota",
+      prompt: "Live plan balances for the signed-in account. The compact statusline stays minimal.",
+      content: new QuotaView(this.theme, overview, new Date().toLocaleTimeString("en-US")),
+      items: [{ value: "close", label: "Close" }]
+    });
+  }
+
+  /**
    * `/rename <title>`: persists a user-owned session title through the
    * runtime's setCustomSessionTitle capability, so the runtime's own title
    * generator will not replace it later. Older runtimes without the bridge
@@ -5941,6 +6009,12 @@ class ZCodeTui {
     return this.sessionModelRecovery;
   }
 
+  /** Background quota refresh (ui.quotaStatusline) updates the statusline through this setter. */
+  setQuotaStatusPercent(percent: number | undefined): void {
+    this.quotaStatusPercent = percent;
+    this.updateMetadata();
+  }
+
   private updateMetadata(): void {
     this.editor.planEnabled = this.planEnabled;
     const fields: StatusLineField[] = [
@@ -6001,6 +6075,19 @@ class ZCodeTui {
         text: style(`cache ${cacheRate}% hit`),
         compactText: style(`cache ${cacheRate}%`),
         priority: 85
+      });
+    }
+    if (this.quotaStatusPercent !== undefined) {
+      const percent = Math.round(this.quotaStatusPercent);
+      const style = percent <= 0
+        ? this.theme.error
+        : percent <= 20
+          ? this.theme.warning
+          : this.theme.muted;
+      fields.push({
+        text: style(`quota ${percent}%`),
+        compactText: style(`quota ${percent}%`),
+        priority: 70
       });
     }
     if (this.sessionMetrics.totalTokens !== undefined) {
@@ -6508,8 +6595,53 @@ class ZCodeTui {
   }
 }
 
+async function startQuotaStatuslineLoop(tui: ZCodeTui): Promise<() => void> {
+  if (!(await readQuotaStatusline())) return () => {};
+  let stopped = false;
+  let refreshInFlight = false;
+  let requestController: AbortController | undefined;
+  const refresh = async (): Promise<void> => {
+    if (stopped || refreshInFlight) return;
+    refreshInFlight = true;
+    const controller = new AbortController();
+    requestController = controller;
+    try {
+      const result = await loadCurrentQuotaOverview({ signal: controller.signal });
+      if (stopped) return;
+      if (!result.ok) {
+        tui.setQuotaStatusPercent(undefined);
+        return;
+      }
+      const percents = result.overview.balances
+        .map(balance => balance.percentLeft)
+        .filter((percent): percent is number => percent !== undefined);
+      tui.setQuotaStatusPercent(percents.length ? Math.min(...percents) : undefined);
+    } catch {
+      // Background refresh must not surface into the statusline.
+    } finally {
+      refreshInFlight = false;
+      if (requestController === controller) requestController = undefined;
+    }
+  };
+  void refresh();
+  const timer = setInterval(() => { void refresh(); }, 300_000);
+  timer.unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    requestController?.abort();
+  };
+}
+
 export async function runTui(options: TuiOptions): Promise<void> {
   suppressTuiAiSdkWarnings();
   const readyOptions = await loadTuiStartupOptions(options);
-  if (readyOptions) await new ZCodeTui(readyOptions).run();
+  if (!readyOptions) return;
+  const tui = new ZCodeTui(readyOptions);
+  const stopQuotaStatuslineLoop = await startQuotaStatuslineLoop(tui);
+  try {
+    await tui.run();
+  } finally {
+    stopQuotaStatuslineLoop();
+  }
 }

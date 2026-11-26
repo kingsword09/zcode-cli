@@ -231,7 +231,7 @@ export class SessionWelcome implements Component {
       frameContent(this.theme.bold("Ask a task about this workspace"), frameWidth, this.theme),
       frameRule(
         "bottom",
-        this.theme.muted("/help commands · /status details"),
+        this.theme.muted("/help commands · /status details · /quota balances"),
         frameWidth,
         this.theme
       )

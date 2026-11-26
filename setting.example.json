@@ -56,6 +56,7 @@
     "theme": "auto",
     "tuiMode": "regular",
     "toolCallStyle": "regular",
+    "quotaStatusline": false,
     "copyOnSelect": true,
     "notifications": {
       "method": "auto",

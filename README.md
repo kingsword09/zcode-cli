@@ -145,6 +145,8 @@ workflow panels; status-bar-only Shift+Tab mode cycling
 cycling (Tab also cycles effort on an empty prompt); structured session-goal status in the right side of the turn footer;
 animated active-turn timer with a static `ZCODE_TUI_REDUCED_MOTION=1`
 fallback; responsive context-remaining and session-token metrics.
+optional plan-quota statusline segment (`ui.quotaStatusline`) and a
+`/quota` balance card for signed-in Coding Plan / Start Plan accounts.
 
 **Session discovery.** Bare `/resume` opens a directory-scoped picker;
 `/sessions` browses desktop and CLI sessions across directories, including forks
@@ -586,7 +588,8 @@ overrides leave Desktop's credentials and provider configuration untouched.
 Client headers and a local usage row do not independently prove server-side
 bonus accounting.
 
-`/settings` saves the default model; `/model` changes only the current session.
+`/settings` and `/model default` save the default model; `/model` changes only
+the current session.
 See [`provider.example.json`](./provider.example.json) for complete field examples
 and the [provider configuration reference](./docs/PROVIDER_CONFIG.md) for multimodal
 capabilities, native search, token limits, reasoning maps and automatic upstream

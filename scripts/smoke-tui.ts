@@ -237,7 +237,9 @@ try {
   await waitFor("BigModel session model", new RegExp(`Model\\s+${literal(bigmodelModel)}(?:\\s|$)`, "i"), statusStart);
   terminal.write("\r");
   await Bun.sleep(50);
-  await sendAndWait("/help\r", "help output", /Slash commands:|Usage:/i);
+  await sendAndWait("/help\r", "help output", /All slash commands.*runtime-provided and TUI-local/i);
+  terminal.write("\x1b");
+  await Bun.sleep(50);
   await sendAndWait("/plan on\r", "plan enabled", /Plan enabled · permission mode: build/i);
   await sendAndWait("/mode edit\r", "edit permission mode", /mode switched to edit/i);
   await sendAndWait("/plan off\r", "plan disabled with permissions preserved", /Plan disabled · permission mode: edit/i);
@@ -360,7 +362,7 @@ if (`${selected.providerId}/${selected.modelId}` !== bigmodelModel) {
 if (leakedFiles.length > 0) {
   throw new Error(`The API key leaked into a plaintext file: ${leakedFiles.join(", ")}`);
 }
-if (!/Slash commands:|Usage:/i.test(plain)) {
+if (!/All slash commands.*runtime-provided and TUI-local/i.test(plain)) {
   throw new Error(`The /help command did not render.\n${plain.slice(-4_000)}`);
 }
 if (!/Plan enabled · permission mode: build/i.test(plain)) {
