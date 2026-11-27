@@ -109,12 +109,13 @@ export interface RuntimeAdapter {
   readSessionUsage?: () => Promise<unknown>;
   readSessionResumeTarget?: () => Promise<string | undefined>;
   readSessionDatabasePath?: () => Promise<string | undefined>;
-  cancelBackgroundTask?: (taskId: string) => Promise<unknown>;
+  cancelBackgroundTask?: (taskId: string, executionId?: string) => Promise<unknown>;
   sendBackgroundTaskMessage?: (options: {
     taskId: string;
     message: string;
     summary: string;
     restart?: boolean;
+    executionId?: string;
   }) => Promise<unknown>;
   previewFileRewind?: (targetMessageIds: string[]) => Promise<unknown>;
   applyFileRewind?: (targetMessageIds: string[]) => Promise<unknown>;

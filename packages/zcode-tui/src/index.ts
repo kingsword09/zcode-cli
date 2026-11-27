@@ -2284,7 +2284,7 @@ class ZCodeTui {
       const failed: Array<{ detail: string; taskId: string }> = [];
       for (const job of active) {
         try {
-          const result = await cancelBackgroundTask(job.taskId);
+          const result = await cancelBackgroundTask(job.taskId, job.executionId);
           const failure = backgroundCancellationFailure(result);
           if (failure) {
             failed.push({ detail: failure, taskId: job.taskId });
@@ -5518,7 +5518,8 @@ class ZCodeTui {
         return "back";
       }
       const active = isActiveBackgroundJob(job);
-      const canMessage = job.taskKind === "local_agent" && Boolean(this.options.sendBackgroundTaskMessage);
+      const canMessage = job.taskKind === "local_agent" && job.status !== "running_elsewhere"
+        && job.status !== "owner_unknown" && Boolean(this.options.sendBackgroundTaskMessage);
       const canStop = active && job.cancellable !== false && Boolean(this.options.cancelBackgroundTask);
       const items: ChoiceItem[] = [
         ...(canMessage
@@ -5574,7 +5575,7 @@ class ZCodeTui {
       if (action.value === "close") return "close";
       if (action.value === "refresh") continue;
       if (action.value === "stop") {
-        await this.stopBackgroundTask(job.taskId);
+        await this.stopBackgroundTask(job.taskId, job);
         continue;
       }
       if (action.value === "resume" && !active) {
@@ -5724,6 +5725,10 @@ class ZCodeTui {
       this.addNotice(`${backgroundTaskKindLabel(job)} tasks cannot receive messages.`, "warning");
       return;
     }
+    if (job.status === "running_elsewhere" || job.status === "owner_unknown") {
+      this.addNotice(`Cannot message this agent: ${job.status.replaceAll("_", " ")}.`, "warning");
+      return;
+    }
     if (!this.options.sendBackgroundTaskMessage) {
       this.addNotice("Background agent messaging is unavailable in this runtime.", "warning");
       return;
@@ -5737,7 +5742,7 @@ class ZCodeTui {
         taskId: job.taskId,
         message,
         summary: message.replace(/\s+/gu, " ").trim().slice(0, 200),
-        restart
+        restart, executionId: job.executionId
       });
       const record = isRecord(result) ? result : undefined;
       const status = asString(record?.status);
@@ -5784,7 +5789,7 @@ class ZCodeTui {
     this.addNotice(detail, "warning");
   }
 
-  private async stopBackgroundTask(taskId: string): Promise<void> {
+  private async stopBackgroundTask(taskId: string, selected?: RuntimeBackgroundJob): Promise<void> {
     if (!taskId) {
       this.addNotice("Usage: /tasks stop <task-id>", "muted");
       return;
@@ -5793,7 +5798,7 @@ class ZCodeTui {
       this.addNotice("Background task cancellation is unavailable in this runtime.", "warning");
       return;
     }
-    const job = this.runtimeProjection?.backgroundJobs.find((candidate) => candidate.taskId === taskId);
+    const job = selected ?? this.runtimeProjection?.backgroundJobs.find((candidate) => candidate.taskId === taskId);
     if (job && !isActiveBackgroundJob(job)) {
       this.addNotice(`Background task ${taskId} is already ${job.status}.`, "muted");
       return;
@@ -5812,7 +5817,7 @@ class ZCodeTui {
       this.updateRuntimeActivity();
     }
     try {
-      await this.options.cancelBackgroundTask(taskId);
+      await this.options.cancelBackgroundTask(taskId, job?.executionId);
       await this.refreshRuntimeState();
     } catch (error) {
       this.addNotice(error instanceof Error ? error.message : String(error), "error");
