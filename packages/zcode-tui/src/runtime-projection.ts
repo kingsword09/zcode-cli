@@ -11,6 +11,8 @@ export type RuntimeBackgroundStatus =
   | "killed"
   | "stopped"
   | "spawn_error"
+  | "owner_unknown"
+  | "running_elsewhere"
   | "lost";
 export type RuntimeTaskKind = "local_agent" | "local_bash" | "local_workflow" | "monitor_mcp" | "unknown";
 
@@ -39,6 +41,7 @@ export interface RuntimeActiveToolCall {
 
 export interface RuntimeBackgroundJob {
   taskId: string;
+  executionId?: string;
   taskKind: RuntimeTaskKind;
   toolCallId?: string;
   toolName?: string;
@@ -136,7 +139,7 @@ const backgroundStatuses = new Set<RuntimeBackgroundStatus>([
   "killed",
   "stopped",
   "spawn_error",
-  "lost"
+  "lost", "owner_unknown", "running_elsewhere"
 ]);
 const todoStatuses = new Set<RuntimeTodo["status"]>(["pending", "in_progress", "completed"]);
 const todoPriorities = new Set<RuntimeTodo["priority"]>(["high", "medium", "low"]);
@@ -255,6 +258,7 @@ function backgroundJobFrom(value: unknown): RuntimeBackgroundJob | undefined {
   const rawError = isRecord(value.error) ? value.error : undefined;
   return {
     taskId,
+    executionId: stringField(value, "executionId"),
     taskKind,
     toolCallId: stringField(value, "toolCallId", "toolCallID"),
     toolName,

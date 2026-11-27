@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { historicalTasks } from "./runtime-background-restore.ts";
 
 const execFileAsync = promisify(execFile);
 const workspaceSnapshots = new WeakMap<object, {
@@ -19,45 +20,28 @@ export interface RuntimeTask extends Record<string, unknown> {
 
 export interface RuntimeTuiApp {
   sessionId?: string;
-  $zRestoredBackgroundTasksSession?: string;
-  $zRestoredBackgroundTasksLog?: unknown[];
+  readSubagents?(input: { endedCursor?: string; endedLimit: number }): Promise<{
+    running: RuntimeSubagent[]; ended: { items: RuntimeSubagent[]; nextCursor?: string };
+  }>;
+  cancelBackgroundTask?(id: string): Promise<unknown>;
   loadSessionTranscript?(): Promise<unknown[]>;
   readExecutionState(): Promise<unknown> | unknown;
   runtime?: {
-    sessionStore?: RuntimeSessionStore;
-    getSessionEventStore?(): RuntimeSessionEventStore;
+    transcriptAgentOutputFiles?: Map<string, string>;
+    stopBackgroundTask?(id: string, options: { strict: true; initiator: "user"; expectedExecutionId: string }):
+      Promise<{ ok: boolean; reason?: string }>;
     getProjection?(): Promise<Record<string, unknown> | undefined> | Record<string, unknown> | undefined;
     getSessionId?(): string;
     runtimeTaskRegistry?: {
       all?(): Record<string, RuntimeTask>;
       get?(taskId: string): RuntimeTask | undefined;
-      register?(task: RuntimeTask): unknown;
     };
-    messageHistory?: { addAttachment?(source: string, text: string): unknown };
     subagentPort?: {
       sendMessage?(input: Record<string, unknown>): Promise<unknown>;
-      stopTask?(taskId: string): Promise<unknown>;
     };
     workingDirectory?: string;
     rootTraceContext?: unknown;
   };
-}
-
-export interface RuntimeSessionInfo {
-  id: string;
-  parentID?: string;
-  taskType?: string;
-  title?: string;
-  time?: { created?: number; updated?: number };
-}
-
-export interface RuntimeSessionStore {
-  getSession(sessionId: string): Promise<RuntimeSessionInfo | null>;
-  messages(input: { sessionID: string }): Promise<unknown[]>;
-}
-
-export interface RuntimeSessionEventStore {
-  getEvents(sessionId: string): Promise<unknown[]>;
 }
 
 export interface RuntimeSubagent {
@@ -72,22 +56,6 @@ export interface RuntimeSubagent {
   summary?: string;
 }
 
-/** Implemented by the extracted runtime's native session query and reducer. */
-export interface RuntimeSubagentQueries {
-  collectChildSessionIds(session: RuntimeSessionInfo, messages: unknown[], events: unknown[]): string[];
-  projectChildEvents(events: unknown[]): unknown;
-  projectSubagents(input: {
-    revision: number;
-    parentSession: RuntimeSessionInfo;
-    messages: unknown[];
-    parentEvents: unknown[];
-    parentProjection?: Record<string, unknown>;
-    childSessionsById: Map<string, RuntimeSessionInfo>;
-    childMessagesById: Map<string, unknown[]>;
-    childProjectionsById: Map<string, unknown>;
-  }): { running: RuntimeSubagent[]; ended: RuntimeSubagent[] };
-}
-
 export interface RuntimeTuiBridge {
   $zRestorePersistedBackgroundTasks?(app: RuntimeTuiApp): Promise<void>;
 }
@@ -100,6 +68,7 @@ function taskDetail(task: RuntimeTask): Record<string, unknown> {
   const kind = task.taskType ?? task.type;
   return {
     taskId: task.taskId,
+    executionId: task.executionId,
     taskKind: kind,
     agentId: task.agentId,
     agentType: task.agentType,
@@ -118,7 +87,7 @@ function taskDetail(task: RuntimeTask): Record<string, unknown> {
     cancelRequestedAt: running ? null : task.cancelRequestedAt,
     blocked: running ? null : task.blocked,
     blockedReason: running ? null : task.blockedReason,
-    cancellable: kind === "local_agent" ? running : task.cancellable
+    cancellable: kind === "local_agent" ? running && typeof task.executionId === "string" : task.cancellable
   };
 }
 
@@ -152,10 +121,20 @@ export async function readTuiRuntimeProjection(
   await bridge.$zRestorePersistedBackgroundTasks?.(app);
   const projection = await app.runtime?.getProjection?.();
   if (!projection) return null;
-  const details = Object.values(app.runtime?.runtimeTaskRegistry?.all?.() ?? {})
-    .filter((task) => task.isBackgrounded === true).map(taskDetail);
+  const live = Object.values(app.runtime?.runtimeTaskRegistry?.all?.() ?? {})
+    .filter(task => task.isBackgrounded === true);
+  const history = historicalTasks(app).filter(task => !live.some(current =>
+    current.taskId === task.taskId && current.status === "running"));
+  const details = [...live, ...history].map(taskDetail);
   const tasks: Array<Record<string, unknown>> = Array.isArray(projection.backgroundTasks)
-    ? projection.backgroundTasks.slice() : [];
+    ? projection.backgroundTasks.map(task => {
+      const kind = task.taskKind ?? task.taskType ?? task.type;
+      if ((kind === "local_agent" || kind === "agent" || task.toolName === "Agent") && task.status === "running") {
+        // A projection can outlive its runner. Only a live detail below grants control.
+        return { ...task, status: "owner_unknown", cancellable: false, executionId: undefined };
+      }
+      return task;
+    }) : [];
   for (const detail of details) {
     const index = tasks.findIndex((existing) => existing.taskId === detail.taskId);
     if (index < 0) tasks.push(detail);
@@ -170,8 +149,7 @@ export async function readTuiRuntimeProjection(
     workspace: await readRuntimeWorkspace(app.runtime),
     backgroundTasks: tasks,
     backgroundTaskDetails: details,
-    restoredBackgroundTasks: Array.isArray(app.$zRestoredBackgroundTasksLog)
-      ? app.$zRestoredBackgroundTasksLog : []
+    restoredBackgroundTasks: history.filter(task => ["completed", "failed", "lost"].includes(task.status ?? "")).map(taskDetail)
   };
 }
 
@@ -180,6 +158,20 @@ export interface BackgroundTaskMessage {
   message: string;
   summary?: string;
   restart?: boolean;
+  executionId?: string;
+}
+
+export async function stopTuiBackgroundTask(app: RuntimeTuiApp, id: string, executionId?: string): Promise<unknown> {
+  const task = app.runtime?.runtimeTaskRegistry?.get?.(id);
+  if (!executionId && task?.type !== "local_agent" && !historicalTasks(app).some(row => row.taskId === id)) {
+    return app.cancelBackgroundTask?.(id);
+  }
+  if (!executionId || task?.executionId !== executionId || !app.runtime?.stopBackgroundTask) {
+    throw new Error("This agent execution is no longer available to stop.");
+  }
+  const result = await app.runtime.stopBackgroundTask(id, { expectedExecutionId: executionId, initiator: "user", strict: true });
+  if (!result.ok) throw new Error(`Agent stop rejected: ${result.reason}`);
+  return result;
 }
 
 export async function sendTuiBackgroundTaskMessage(
@@ -189,24 +181,15 @@ export async function sendTuiBackgroundTaskMessage(
 ): Promise<unknown> {
   await bridge.$zRestorePersistedBackgroundTasks?.(app);
   const runtime = app.runtime;
-  let task = runtime?.runtimeTaskRegistry?.get?.(input?.taskId);
-  if (!task && typeof app.sessionId === "string") {
-    app.$zRestoredBackgroundTasksSession = undefined;
-    await bridge.$zRestorePersistedBackgroundTasks?.(app);
-    task = runtime?.runtimeTaskRegistry?.get?.(input?.taskId);
-  }
+  const local = runtime?.runtimeTaskRegistry?.get?.(input?.taskId);
+  const task = local ?? historicalTasks(app).find(row => row.taskId === input?.taskId);
   if (!runtime?.subagentPort?.sendMessage) throw new Error("Background agent messaging is unavailable in this runtime.");
   if (!task || (task.type ?? task.taskType) !== "local_agent") throw new Error("The selected task is not a local agent.");
   if (typeof input?.message !== "string" || !input.message.trim()) throw new Error("Enter a message for the background agent.");
   const message = input.message.trim().slice(0, maximumTaskMessageLength);
   const summary = (typeof input.summary === "string" ? input.summary : message)
     .replace(/\s+/g, " ").trim().slice(0, maximumTaskSummaryLength);
-  if (input.restart === true && task.status === "running") {
-    if (!runtime.subagentPort.stopTask) throw new Error("Background agent restart is unavailable in this runtime.");
-    await runtime.subagentPort.stopTask(input.taskId);
-    task = runtime.runtimeTaskRegistry?.get?.(input.taskId);
-    if (!task) throw new Error("The background agent stopped but could not be restored.");
-  }
+  if (input.restart) await stopTuiBackgroundTask(app, input.taskId, input.executionId);
   return await runtime.subagentPort.sendMessage({
     sessionId: task.parentSessionId ?? runtime.getSessionId?.(),
     turnId: task.turnId ?? "tui-task-message",
